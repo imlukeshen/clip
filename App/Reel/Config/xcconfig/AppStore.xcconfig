@@ -1,0 +1,2 @@
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) APPSTORE_BUILD
+CODE_SIGN_ENTITLEMENTS = App/Reel/Config/Reel-AppStore.entitlements

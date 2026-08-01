@@ -12,6 +12,9 @@ Implemented milestones:
 - **M2 — Ingest:** inbox and pasteboard sources, stability polling,
   asynchronous media probing, sampled hashing/dedupe, thumbnails, audio peaks,
   and the App-layer ingest coordinator.
+- **M3 — Shell and workspaces:** a launchable SwiftUI app, shared design tokens
+  and components, type-routed drop zones, Inbox asset grid, and screenshot
+  shortcuts read from the user's preferences with a truthful unavailable state.
 
 ## Test
 
@@ -20,3 +23,9 @@ make test
 ```
 
 Requires macOS 14 or later and a Swift 6 toolchain.
+
+Generate and build the native app with:
+
+```bash
+make build
+```

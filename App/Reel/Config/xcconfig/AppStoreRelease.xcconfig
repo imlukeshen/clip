@@ -1,0 +1,5 @@
+#include "Base.xcconfig"
+#include "AppStore.xcconfig"
+
+SWIFT_OPTIMIZATION_LEVEL = -O
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym

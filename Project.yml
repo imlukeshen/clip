@@ -1,0 +1,67 @@
+name: Reel
+
+options:
+  minimumXcodeGenVersion: 2.45.0
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+  AppStoreDebug: debug
+  AppStoreRelease: release
+
+packages:
+  ReelAppCore:
+    path: App/Reel
+  DesignSystem:
+    path: Packages/DesignSystem
+  LibraryStore:
+    path: Packages/LibraryStore
+  CaptureKit:
+    path: Packages/CaptureKit
+
+targets:
+  Reel:
+    type: application
+    platform: macOS
+    sources:
+      - path: App/Reel/Sources/Reel
+    info:
+      path: App/Reel/Config/Info.plist
+    dependencies:
+      - package: ReelAppCore
+        product: ReelAppCore
+      - package: DesignSystem
+      - package: LibraryStore
+      - package: CaptureKit
+    configFiles:
+      Debug: App/Reel/Config/xcconfig/Debug.xcconfig
+      Release: App/Reel/Config/xcconfig/Release.xcconfig
+      AppStoreDebug: App/Reel/Config/xcconfig/AppStoreDebug.xcconfig
+      AppStoreRelease: App/Reel/Config/xcconfig/AppStoreRelease.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.reel.editor
+        PRODUCT_NAME: Reel
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+
+schemes:
+  Reel:
+    build:
+      targets:
+        Reel: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Reel-AppStore:
+    build:
+      targets:
+        Reel: all
+    run:
+      config: AppStoreDebug
+    archive:
+      config: AppStoreRelease

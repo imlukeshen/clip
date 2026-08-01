@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import LibraryStore
 import Testing
@@ -19,5 +20,26 @@ import Testing
     #expect(result.kind == .image)
     #expect(result.width == 1)
     #expect(result.height == 1)
+    #expect(result.duration == nil)
+}
+
+@Test func pdfProbeAcceptsAndHoldsDocumentMetadata() async throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "reel-probe-\(UUID().uuidString).pdf"
+    )
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+    let consumer = try #require(CGDataConsumer(url: url as CFURL))
+    let context = try #require(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
+    context.beginPDFPage(nil)
+    context.endPDFPage()
+    context.closePDF()
+
+    let result = try await AVFoundationMediaProbe().probe(url)
+
+    #expect(result.kind == .document)
+    #expect(result.width == 612)
+    #expect(result.height == 792)
     #expect(result.duration == nil)
 }

@@ -180,7 +180,7 @@ public actor IngestPipeline {
     private func ensureSupported(_ url: URL) throws {
         let supported: Set<String> = [
             "mov", "mp4", "m4v", "webm", "mkv", "png", "jpg", "jpeg", "heic", "tif",
-            "tiff", "wav", "m4a", "aac", "mp3", "flac",
+            "tiff", "wav", "m4a", "aac", "mp3", "flac", "pdf",
         ]
         let fileExtension = url.pathExtension.lowercased()
         guard supported.contains(fileExtension) else {

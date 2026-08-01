@@ -14,7 +14,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "CaptureKit", dependencies: ["CoreModel", "LibraryStore"]),
-        .testTarget(name: "CaptureKitTests", dependencies: ["CaptureKit", "LibraryStore"]),
+        .testTarget(
+            name: "CaptureKitTests",
+            dependencies: ["CaptureKit", "LibraryStore"],
+            resources: [.process("Fixtures")]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

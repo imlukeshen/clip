@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CoreModel
 import Foundation
@@ -14,7 +15,31 @@ public struct AVFoundationMediaProbe: MediaProbing {
         if ["png", "jpg", "jpeg", "heic", "tif", "tiff"].contains(fileExtension) {
             return try probeImage(url, fileExtension: fileExtension)
         }
+        if fileExtension == "pdf" {
+            return try probeDocument(url)
+        }
         return try await probeMedia(url, fileExtension: fileExtension)
+    }
+
+    private func probeDocument(_ url: URL) throws -> MediaProbeResult {
+        guard let document = CGPDFDocument(url as CFURL), document.numberOfPages > 0,
+            let firstPage = document.page(at: 1)
+        else {
+            throw IngestError.unreadable(url, underlying: "PDF metadata unavailable")
+        }
+        let mediaBox = firstPage.getBoxRect(.mediaBox)
+        return MediaProbeResult(
+            kind: .document,
+            container: "pdf",
+            codec: nil,
+            width: Int(mediaBox.width.rounded()),
+            height: Int(mediaBox.height.rounded()),
+            duration: nil,
+            nominalFPS: nil,
+            isVariableFPS: false,
+            hasAudio: false,
+            preferredTransform: nil
+        )
     }
 
     private func probeImage(_ url: URL, fileExtension: String) throws -> MediaProbeResult {
