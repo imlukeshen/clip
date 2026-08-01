@@ -3,9 +3,15 @@
 Reel is a local-first screen demo editor for macOS. This repository is being
 implemented milestone-by-milestone from the supplied design specification.
 
-The current implementation contains **M0 — Model foundation**: the
-Foundation-only `CoreModel` package, its canonical JSON format, and its
-transactional patch/undo engine.
+Implemented milestones:
+
+- **M0 — Model foundation:** deterministic `CoreModel`, canonical JSON, and the
+  transactional patch/undo engine.
+- **M1 — Library and index:** immutable assets, security-scoped bookmarks,
+  project packages, history, and a fully rebuildable SQLite cache.
+- **M2 — Ingest:** inbox and pasteboard sources, stability polling,
+  asynchronous media probing, sampled hashing/dedupe, thumbnails, audio peaks,
+  and the App-layer ingest coordinator.
 
 ## Test
 
