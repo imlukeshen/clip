@@ -13,6 +13,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var transform: Transform2D
     public var opacity: Double
     public var blendMode: BlendMode
+    public var videoFade: FadeEnvelope
+    public var audioFade: FadeEnvelope
 
     public init(
         id: ItemID,
@@ -24,7 +26,9 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         isEnabled: Bool = true,
         transform: Transform2D = .identity,
         opacity: Double = 1,
-        blendMode: BlendMode = .normal
+        blendMode: BlendMode = .normal,
+        videoFade: FadeEnvelope = .none,
+        audioFade: FadeEnvelope = .none
     ) {
         self.id = id
         self.assetID = assetID
@@ -36,6 +40,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         self.transform = transform
         self.opacity = opacity
         self.blendMode = blendMode
+        self.videoFade = videoFade
+        self.audioFade = audioFade
     }
 
     /// The duration occupied by this item in timeline time.
@@ -59,6 +65,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         case transform
         case opacity
         case blendMode
+        case videoFade
+        case audioFade
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,5 +82,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         transform = try container.decodeIfPresent(Transform2D.self, forKey: .transform) ?? .identity
         opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
         blendMode = try container.decodeIfPresent(BlendMode.self, forKey: .blendMode) ?? .normal
+        videoFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .videoFade) ?? .none
+        audioFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .audioFade) ?? .none
     }
 }

@@ -111,6 +111,11 @@ import Testing
             .addEffect(item.id, effect),
             .updateEffect(item.id, effect),
             .removeEffect(item.id, effect.id),
+            .setTrackItems(TrackID(rawValue: "v1"), [item]),
+            .setTrack(
+                Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
+            ),
+            .setMarkers([]),
             .setCaptions([]),
             .setCanvas(.fullHD),
             .rename("Renamed"),

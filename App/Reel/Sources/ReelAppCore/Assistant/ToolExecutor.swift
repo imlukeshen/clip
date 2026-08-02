@@ -80,7 +80,8 @@ public struct ToolExecutor: Sendable {
             patch = nil
             let names = commands.prefix(8).map { $0.id.rawValue }.joined(separator: ", ")
             let remainder = max(0, commands.count - 8)
-            message = "\(commands.count) commands: \(names)\(remainder > 0 ? ", +\(remainder) more" : "")"
+            message =
+                "\(commands.count) commands: \(names)\(remainder > 0 ? ", +\(remainder) more" : "")"
         case "runCommand":
             let arguments = try invocation.arguments.decode(RunCommandArguments.self)
             guard let target = CommandRegistry.command(id: CommandID(rawValue: arguments.id)),
@@ -106,11 +107,13 @@ public struct ToolExecutor: Sendable {
                 "\(context.document.timeline.video.count) clips, \(context.document.duration.seconds.formatted()) seconds."
         case "timeline.describe":
             patch = nil
-            message = "V1 has \(context.document.timeline.video.count) clips; audio has \(context.document.timeline.audio.count); duration \(context.document.duration.seconds.formatted())s."
+            message =
+                "V1 has \(context.document.timeline.video.count) clips; audio has \(context.document.timeline.audio.count); duration \(context.document.duration.seconds.formatted())s."
         case "view.getSelection":
             patch = nil
             let ids = context.selectedItemIDs.map(\.rawValue).sorted()
-            message = ids.isEmpty ? "Nothing is selected." : "Selected: \(ids.joined(separator: ", "))."
+            message =
+                ids.isEmpty ? "Nothing is selected." : "Selected: \(ids.joined(separator: ", "))."
         case "view.getPlayhead":
             patch = nil
             let under = context.document.item(at: context.playhead)?.item.id.rawValue ?? "none"
@@ -120,7 +123,8 @@ public struct ToolExecutor: Sendable {
             let audioCount = context.document.timeline.video.count { item in
                 context.assets[item.assetID]?.hasAudio == true
             }
-            message = "\(audioCount) of \(context.document.timeline.video.count) video clips contain audio; \(context.document.timeline.audio.count) audio-track clips."
+            message =
+                "\(audioCount) of \(context.document.timeline.video.count) video clips contain audio; \(context.document.timeline.audio.count) audio-track clips."
         case "describeClip":
             let arguments = try invocation.arguments.decode(ItemArgument.self)
             let item = try item(arguments.itemID, in: context.document)
@@ -156,6 +160,115 @@ public struct ToolExecutor: Sendable {
                 ops: arguments.order.enumerated().map { .moveItem($0.element, toIndex: $0.offset) },
                 label: "Assistant: Reorder Clips", origin: .assistant(turnID: turnID))
             message = "Reordered the clips."
+        case "timeline.rippleDelete":
+            let arguments = try invocation.arguments.decode(ItemArgument.self)
+            patch = assistant(
+                try TimelineEditPlanner.rippleDelete(
+                    in: context.document,
+                    itemID: arguments.itemID
+                ),
+                turnID: turnID
+            )
+            message = "Ripple deleted the clip."
+        case "timeline.roll":
+            let arguments = try invocation.arguments.decode(PrecisionEditArguments.self)
+            patch = assistant(
+                try TimelineEditPlanner.rollEdit(
+                    in: context.document,
+                    leftItemID: arguments.itemID,
+                    by: RationalTime(seconds: arguments.delta),
+                    assetDurations: context.assets.compactMapValues(\.duration)
+                ),
+                turnID: turnID
+            )
+            message = "Rolled the cut by \(arguments.delta.formatted()) seconds."
+        case "timeline.slip":
+            let arguments = try invocation.arguments.decode(PrecisionEditArguments.self)
+            let target = try item(arguments.itemID, in: context.document)
+            patch = assistant(
+                try TimelineEditPlanner.slipClip(
+                    in: context.document,
+                    itemID: arguments.itemID,
+                    by: RationalTime(seconds: arguments.delta),
+                    assetDuration: try duration(for: target, context: context)
+                ),
+                turnID: turnID
+            )
+            message = "Slipped the clip by \(arguments.delta.formatted()) seconds."
+        case "timeline.slide":
+            let arguments = try invocation.arguments.decode(PrecisionEditArguments.self)
+            patch = assistant(
+                try TimelineEditPlanner.slideClip(
+                    in: context.document,
+                    itemID: arguments.itemID,
+                    by: RationalTime(seconds: arguments.delta),
+                    assetDurations: context.assets.compactMapValues(\.duration)
+                ),
+                turnID: turnID
+            )
+            message = "Slid the clip by \(arguments.delta.formatted()) seconds."
+        case "timeline.addMarker":
+            let arguments = try invocation.arguments.decode(MarkerArguments.self)
+            let marker = Marker(
+                id: .generate(),
+                name: arguments.name ?? "Marker",
+                time: RationalTime(seconds: arguments.time ?? context.playhead.seconds)
+            )
+            patch = assistant(
+                TimelineEditPlanner.addMarker(to: context.document, marker: marker),
+                turnID: turnID
+            )
+            message = "Added a marker at \(marker.time.seconds.formatted()) seconds."
+        case "timeline.crossDissolve":
+            let arguments = try invocation.arguments.decode(TransitionArguments.self)
+            patch = assistant(
+                try TimelineEditPlanner.crossDissolve(
+                    in: context.document,
+                    leftItemID: arguments.itemID,
+                    duration: RationalTime(seconds: arguments.duration)
+                ),
+                turnID: turnID
+            )
+            message = "Applied a \(arguments.duration.formatted()) second dissolve."
+        case "timeline.audioFade":
+            let arguments = try invocation.arguments.decode(AudioFadeArguments.self)
+            patch = assistant(
+                try TimelineEditPlanner.setAudioFade(
+                    in: context.document,
+                    itemID: arguments.itemID,
+                    fadeIn: RationalTime(seconds: arguments.fadeIn),
+                    fadeOut: RationalTime(seconds: arguments.fadeOut)
+                ),
+                turnID: turnID
+            )
+            message = "Applied audio fades."
+        case "timeline.setTrackState":
+            let arguments = try invocation.arguments.decode(TrackStateArguments.self)
+            guard
+                var track =
+                    (context.document.timeline.videoTracks
+                    + context.document.timeline.audioTracks).first(where: {
+                        $0.id == arguments.trackID
+                    })
+            else {
+                throw ToolExecutorError.invalidArguments("Track not found")
+            }
+            switch arguments.property {
+            case "enabled": track.isEnabled = arguments.value
+            case "locked": track.isLocked = arguments.value
+            case "muted": track.isMuted = arguments.value
+            case "solo": track.isSolo = arguments.value
+            default:
+                throw ToolExecutorError.invalidArguments(
+                    "Track property must be enabled, locked, muted, or solo"
+                )
+            }
+            patch = GraphPatch(
+                ops: [.setTrack(track)],
+                label: "Assistant: Set Track State",
+                origin: .assistant(turnID: turnID)
+            )
+            message = "Updated \(track.name)."
         case "setSpeed":
             let arguments = try invocation.arguments.decode(SpeedArguments.self)
             _ = try item(arguments.itemID, in: context.document)
@@ -366,6 +479,28 @@ private struct SplitArguments: Codable {
     var at: Double
 }
 private struct ReorderArguments: Codable { var order: [ItemID] }
+private struct PrecisionEditArguments: Codable {
+    var itemID: ItemID
+    var delta: Double
+}
+private struct MarkerArguments: Codable {
+    var time: Double?
+    var name: String?
+}
+private struct TransitionArguments: Codable {
+    var itemID: ItemID
+    var duration: Double
+}
+private struct AudioFadeArguments: Codable {
+    var itemID: ItemID
+    var fadeIn: Double
+    var fadeOut: Double
+}
+private struct TrackStateArguments: Codable {
+    var trackID: TrackID
+    var property: String
+    var value: Bool
+}
 private struct SpeedArguments: Codable {
     var itemID: ItemID
     var speed: Double

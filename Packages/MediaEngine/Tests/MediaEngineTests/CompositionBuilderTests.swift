@@ -180,6 +180,51 @@ struct CompositionBuilderTests {
         #expect(abs(Int(inside.r) - Int(inside.b)) <= 2)
     }
 
+    @Test("Visual fade envelopes are evaluated in timeline time")
+    func visualFadeEnvelopeRenders() {
+        let bounds = CGRect(x: 0, y: 0, width: 20, height: 20)
+        let blue = CIImage(color: CIColor(red: 0, green: 0, blue: 1, alpha: 1))
+            .cropped(to: bounds)
+        let item = TimelineItem(
+            id: ItemID(rawValue: "fade"),
+            assetID: AssetID(rawValue: "blue"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 2)),
+            videoFade: FadeEnvelope(
+                fadeIn: RationalTime(seconds: 1),
+                fadeOut: .zero
+            )
+        )
+        let layer = ReelVideoLayer(
+            item: item,
+            preferredTransform: .identity,
+            sourceTrackID: 1
+        )
+        let background = CIImage(color: .black).cropped(to: bounds)
+        let start = VideoLayerRenderer.compose(
+            [(layer, blue)], at: .zero, bounds: bounds, background: background
+        )
+        let halfway = VideoLayerRenderer.compose(
+            [(layer, blue)],
+            at: RationalTime(seconds: 0.5),
+            bounds: bounds,
+            background: background
+        )
+        let full = VideoLayerRenderer.compose(
+            [(layer, blue)],
+            at: RationalTime(seconds: 1),
+            bounds: bounds,
+            background: background
+        )
+
+        #expect(pixel(in: renderBytes(start, bounds: bounds), width: 20, x: 10, y: 10).b < 5)
+        #expect(
+            (180...195).contains(
+                Int(pixel(in: renderBytes(halfway, bounds: bounds), width: 20, x: 10, y: 10).b)
+            )
+        )
+        #expect(pixel(in: renderBytes(full, bounds: bounds), width: 20, x: 10, y: 10).b > 245)
+    }
+
     @Test("Builder emits overlapping V1 and V2 source tracks and ignores disabled tracks")
     func builderCreatesV2Instructions() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(

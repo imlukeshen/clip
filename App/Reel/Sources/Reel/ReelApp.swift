@@ -54,29 +54,29 @@ struct ReelApp: App {
                 Button(commandTitle("edit.undo")) {
                     AppCommandRouter.run("edit.undo", in: model)
                 }
-                    .keyboardShortcut("z", modifiers: .command)
-                    .disabled(
-                        model.editor == nil && model.imageEditor == nil
-                            && !model.undoManager.canUndo
-                    )
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(
+                    model.editor == nil && model.imageEditor == nil
+                        && !model.undoManager.canUndo
+                )
                 Button(commandTitle("edit.redo")) {
                     AppCommandRouter.run("edit.redo", in: model)
                 }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(
-                        model.editor == nil && model.imageEditor == nil
-                            && !model.undoManager.canRedo
-                    )
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(
+                    model.editor == nil && model.imageEditor == nil
+                        && !model.undoManager.canRedo
+                )
             }
             CommandMenu("Assets") {
                 Button(commandTitle("asset.selectAll")) {
                     AppCommandRouter.run("asset.selectAll", in: model)
                 }
-                    .keyboardShortcut("a", modifiers: .command)
+                .keyboardShortcut("a", modifiers: .command)
                 Button(commandTitle("asset.deselectAll")) {
                     AppCommandRouter.run("asset.deselectAll", in: model)
                 }
-                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                .keyboardShortcut("a", modifiers: [.command, .shift])
                 Divider()
                 Button(commandTitle("asset.quickLook")) {
                     AppCommandRouter.run("asset.quickLook", in: model)
@@ -92,8 +92,83 @@ struct ReelApp: App {
                 Button(commandTitle("asset.delete")) {
                     AppCommandRouter.run("asset.delete", in: model)
                 }
-                    .keyboardShortcut(.delete, modifiers: .command)
-                    .disabled(model.selection.selected.isEmpty)
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(model.selection.selected.isEmpty)
+            }
+            CommandMenu("Timeline") {
+                Button(commandTitle("timeline.toggleSnapping")) {
+                    AppCommandRouter.run("timeline.toggleSnapping", in: model)
+                }
+                .keyboardShortcut("s", modifiers: [])
+                Button(commandTitle("timeline.razorTool")) {
+                    AppCommandRouter.run("timeline.razorTool", in: model)
+                }
+                .keyboardShortcut("c", modifiers: [])
+                Button(commandTitle("timeline.rippleDelete")) {
+                    AppCommandRouter.run("timeline.rippleDelete", in: model)
+                }
+                .keyboardShortcut(.delete, modifiers: .shift)
+                Divider()
+                Button(commandTitle("timeline.roll")) {
+                    AppCommandRouter.run("timeline.roll", in: model)
+                }
+                Button(commandTitle("timeline.slip")) {
+                    AppCommandRouter.run("timeline.slip", in: model)
+                }
+                Button(commandTitle("timeline.slide")) {
+                    AppCommandRouter.run("timeline.slide", in: model)
+                }
+                Button(commandTitle("timeline.crossDissolve")) {
+                    AppCommandRouter.run("timeline.crossDissolve", in: model)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                Button(commandTitle("timeline.audioFade")) {
+                    AppCommandRouter.run("timeline.audioFade", in: model)
+                }
+                Divider()
+                Button(commandTitle("timeline.shuttleBackward")) {
+                    AppCommandRouter.run("timeline.shuttleBackward", in: model)
+                }
+                .keyboardShortcut("j", modifiers: [])
+                Button(commandTitle("timeline.shuttlePause")) {
+                    AppCommandRouter.run("timeline.shuttlePause", in: model)
+                }
+                .keyboardShortcut("k", modifiers: [])
+                Button(commandTitle("timeline.shuttleForward")) {
+                    AppCommandRouter.run("timeline.shuttleForward", in: model)
+                }
+                .keyboardShortcut("l", modifiers: [])
+                Divider()
+                Button(commandTitle("timeline.setIn")) {
+                    AppCommandRouter.run("timeline.setIn", in: model)
+                }
+                .keyboardShortcut("i", modifiers: [])
+                Button(commandTitle("timeline.setOut")) {
+                    AppCommandRouter.run("timeline.setOut", in: model)
+                }
+                .keyboardShortcut("o", modifiers: [])
+                Button(commandTitle("timeline.addMarker")) {
+                    AppCommandRouter.run("timeline.addMarker", in: model)
+                }
+                .keyboardShortcut("m", modifiers: [])
+                Button(commandTitle("timeline.nextMarker")) {
+                    AppCommandRouter.run("timeline.nextMarker", in: model)
+                }
+                .keyboardShortcut("m", modifiers: .shift)
+                Divider()
+                Button(commandTitle("timeline.insert")) {
+                    AppCommandRouter.run("timeline.insert", in: model)
+                }
+                Button(commandTitle("timeline.overwrite")) {
+                    AppCommandRouter.run("timeline.overwrite", in: model)
+                }
+                Button(commandTitle("timeline.pasteAttributes")) {
+                    AppCommandRouter.run("timeline.pasteAttributes", in: model)
+                }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+                Button(commandTitle("timeline.targetTrack")) {
+                    AppCommandRouter.run("timeline.targetTrack", in: model)
+                }
             }
         }
 

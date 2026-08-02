@@ -76,11 +76,15 @@ public enum CommandRegistry {
         command(
             "app.commandPalette", "Command Palette", .app,
             shortcut: .init("k"), kind: .read, exposure: .never),
-        command("navigation.inbox", "Open Media Browser", .view, kind: .confirm, exposure: .onDemand),
-        command("navigation.video", "Open Video Editor", .view, kind: .confirm, exposure: .onDemand),
-        command("navigation.photo", "Open Photo Editor", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "navigation.inbox", "Open Media Browser", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "navigation.video", "Open Video Editor", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "navigation.photo", "Open Photo Editor", .view, kind: .confirm, exposure: .onDemand),
         command("navigation.pdf", "Open PDF Workspace", .view, kind: .confirm, exposure: .onDemand),
-        command("navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
@@ -112,6 +116,77 @@ public enum CommandRegistry {
         command(
             "reorderClips", "Reorder Clips", .timeline, exposure: .always,
             required: ["order"], properties: ["order": array(string)]),
+        command(
+            "timeline.toggleSnapping", "Toggle Snapping", .timeline,
+            shortcut: .init("s", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.rippleDelete", "Ripple Delete", .timeline,
+            shortcut: .init("delete", modifiers: ["shift"]), destructive: true,
+            exposure: .onDemand, required: ["itemID"], properties: ["itemID": string]),
+        command(
+            "timeline.roll", "Roll Edit", .timeline, exposure: .onDemand,
+            required: ["itemID", "delta"],
+            properties: ["itemID": string, "delta": number]),
+        command(
+            "timeline.slip", "Slip Clip", .timeline, exposure: .onDemand,
+            required: ["itemID", "delta"],
+            properties: ["itemID": string, "delta": number]),
+        command(
+            "timeline.slide", "Slide Clip", .timeline, exposure: .onDemand,
+            required: ["itemID", "delta"],
+            properties: ["itemID": string, "delta": number]),
+        command(
+            "timeline.razorTool", "Razor Tool", .timeline,
+            shortcut: .init("c", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.shuttleBackward", "Shuttle Backward", .timeline,
+            shortcut: .init("j", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.shuttlePause", "Pause Shuttle", .timeline,
+            shortcut: .init("k", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.shuttleForward", "Shuttle Forward", .timeline,
+            shortcut: .init("l", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.setIn", "Set In Point", .timeline,
+            shortcut: .init("i", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.setOut", "Set Out Point", .timeline,
+            shortcut: .init("o", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "timeline.addMarker", "Add Marker", .timeline,
+            shortcut: .init("m", modifiers: []), exposure: .onDemand,
+            properties: ["time": number, "name": string]),
+        command(
+            "timeline.nextMarker", "Go to Next Marker", .timeline,
+            shortcut: .init("m", modifiers: ["shift"]), kind: .confirm,
+            exposure: .onDemand),
+        command(
+            "timeline.insert", "Insert Source", .timeline, kind: .confirm,
+            exposure: .onDemand),
+        command(
+            "timeline.overwrite", "Overwrite from Source", .timeline, kind: .confirm,
+            exposure: .onDemand),
+        command(
+            "timeline.pasteAttributes", "Paste Attributes", .timeline,
+            shortcut: .init("v", modifiers: ["command", "option"]), kind: .confirm,
+            exposure: .onDemand),
+        command(
+            "timeline.targetTrack", "Cycle Target Track", .timeline, kind: .confirm,
+            exposure: .onDemand),
+        command(
+            "timeline.crossDissolve", "Apply Cross Dissolve", .timeline,
+            shortcut: .init("d"), exposure: .onDemand,
+            required: ["itemID", "duration"],
+            properties: ["itemID": string, "duration": number]),
+        command(
+            "timeline.audioFade", "Set Audio Fade", .audio, exposure: .onDemand,
+            required: ["itemID", "fadeIn", "fadeOut"],
+            properties: ["itemID": string, "fadeIn": number, "fadeOut": number]),
+        command(
+            "timeline.setTrackState", "Set Track State", .timeline, exposure: .onDemand,
+            required: ["trackID", "property", "value"],
+            properties: ["trackID": string, "property": string, "value": boolean]),
         command(
             "setSpeed", "Set Speed", .clip, exposure: .always,
             required: ["itemID", "speed"], properties: ["itemID": string, "speed": number]),
@@ -153,7 +228,9 @@ public enum CommandRegistry {
             required: ["key", "value"], properties: ["key": string, "value": object]),
         command("view.getSelection", "Get Selection", .view, kind: .read, exposure: .always),
         command("view.getPlayhead", "Get Playhead", .view, kind: .read, exposure: .always),
-        command("timeline.describe", "Describe Timeline Structure", .timeline, kind: .read, exposure: .onDemand),
+        command(
+            "timeline.describe", "Describe Timeline Structure", .timeline, kind: .read,
+            exposure: .onDemand),
         command("audio.describe", "Describe Audio", .audio, kind: .read, exposure: .onDemand),
         command(
             "view.getFrame", "Get Frame", .view, kind: .confirm, exposure: .onDemand,
@@ -205,16 +282,21 @@ public enum CommandRegistry {
         query: String? = nil
     ) -> [CommandDefinition] {
         all.filter { command in
-            command.agentExposure != .never
+            let matchesQuery =
+                query.map { value in
+                    value.isEmpty
+                        || command.title.localizedCaseInsensitiveContains(value)
+                        || command.id.rawValue.localizedCaseInsensitiveContains(value)
+                } ?? true
+            return command.agentExposure != .never
                 && (category == nil || command.category == category)
-                && (query?.isEmpty != false
-                    || command.title.localizedCaseInsensitiveContains(query!)
-                    || command.id.rawValue.localizedCaseInsensitiveContains(query!))
+                && matchesQuery
         }
     }
 
     private static let string: JSONValue = .object(["type": .string("string")])
     private static let number: JSONValue = .object(["type": .string("number")])
+    private static let boolean: JSONValue = .object(["type": .string("boolean")])
     private static let object: JSONValue = .object(["type": .string("object")])
     private static let point: JSONValue = typedObject(
         ["x": number, "y": number], required: ["x", "y"])

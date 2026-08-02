@@ -11,7 +11,11 @@ struct EditorTimeline: NSViewRepresentable {
     let selection: Set<ItemID>
     let playhead: RationalTime
     let duration: RationalTime
+    let inPoint: RationalTime?
+    let outPoint: RationalTime?
     let clickMarkers: [TimelineClickMarker]
+    let isSnappingEnabled: Bool
+    let activeTool: TimelineTool
     let accent: NSColor
     let accentDim: NSColor
     let surface: NSColor
@@ -28,6 +32,7 @@ struct EditorTimeline: NSViewRepresentable {
     let onScrubbing: (Bool) -> Void
     let onReorder: (ItemID, Int) -> Void
     let onTrim: (ItemID, TimeRange) -> Void
+    let onRazor: (ItemID, RationalTime) -> Void
 
     func makeNSView(context: Context) -> TimelineCanvas {
         TimelineCanvas()
@@ -41,7 +46,11 @@ struct EditorTimeline: NSViewRepresentable {
         view.selection = selection
         view.playhead = playhead
         view.duration = duration
+        view.inPoint = inPoint
+        view.outPoint = outPoint
         view.clickMarkers = clickMarkers
+        view.isSnappingEnabled = isSnappingEnabled
+        view.activeTool = activeTool
         view.accent = accent
         view.accentDim = accentDim
         view.surface = surface
@@ -58,6 +67,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.onScrubbing = onScrubbing
         view.onReorder = onReorder
         view.onTrim = onTrim
+        view.onRazor = onRazor
         view.needsDisplay = true
     }
 }
@@ -70,7 +80,11 @@ final class TimelineCanvas: NSView {
     var selection: Set<ItemID> = []
     var playhead = RationalTime.zero
     var duration = RationalTime.zero
+    var inPoint: RationalTime?
+    var outPoint: RationalTime?
     var clickMarkers: [TimelineClickMarker] = []
+    var isSnappingEnabled = true
+    var activeTool = TimelineTool.select
     var accent = NSColor.systemBlue
     var accentDim = NSColor.systemBlue.withAlphaComponent(0.2)
     var surface = NSColor.black
@@ -87,6 +101,7 @@ final class TimelineCanvas: NSView {
     var onScrubbing: ((Bool) -> Void)?
     var onReorder: ((ItemID, Int) -> Void)?
     var onTrim: ((ItemID, TimeRange) -> Void)?
+    var onRazor: ((ItemID, RationalTime) -> Void)?
 
     private let labelWidth: CGFloat = 46
     private let rulerHeight: CGFloat = 24
@@ -97,6 +112,7 @@ final class TimelineCanvas: NSView {
     private var gesture: Gesture?
     private var previewRange: (ItemID, TimeRange)?
     private var dropIndex: Int?
+    private var snapIndicator: RationalTime?
 
     private enum Gesture {
         case scrub
@@ -110,7 +126,7 @@ final class TimelineCanvas: NSView {
         )
     }
 
-    private enum Edge { case leading, trailing }
+    private enum Edge: Equatable { case leading, trailing }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -125,7 +141,10 @@ final class TimelineCanvas: NSView {
         drawAudio()
         drawClicks()
         drawCaptions()
+        drawProjectMarkers()
+        drawInOutPoints()
         drawDropMarker()
+        drawSnapGuide()
         drawPlayhead()
     }
 
@@ -135,6 +154,10 @@ final class TimelineCanvas: NSView {
         if let hit = clip(at: point) {
             onSelect?(hit.item.id, event.modifierFlags.contains(.shift))
             onSeek?(time(at: point.x), true)
+            if activeTool == .razor {
+                onRazor?(hit.item.id, time(at: point.x))
+                return
+            }
             if abs(point.x - hit.rect.minX) <= 7 {
                 gesture = .trim(
                     itemID: hit.item.id,
@@ -151,7 +174,7 @@ final class TimelineCanvas: NSView {
                     speed: hit.item.speed,
                     originX: point.x
                 )
-            } else {
+            } else if hit.trackIndex == 0 {
                 gesture = .move(itemID: hit.item.id, originalIndex: hit.index)
                 dropIndex = hit.index
             }
@@ -172,13 +195,41 @@ final class TimelineCanvas: NSView {
             dropIndex = insertionIndex(at: point.x)
             needsDisplay = true
         case .trim(let itemID, let edge, let original, let speed, let originX):
-            let sourceDelta = RationalTime(
+            var sourceDelta = RationalTime(
                 seconds: (point.x - originX) / pointsPerSecond * speed
             )
             let minimum = RationalTime(seconds: 0.1)
-            guard let item = timeline.video.first(where: { $0.id == itemID }),
+            guard
+                let item = timeline.videoTracks.lazy.flatMap(\.items).first(where: {
+                    $0.id == itemID
+                }),
                 let assetDuration = assetDurations[item.assetID]
             else { return }
+            if isSnappingEnabled {
+                let timelineDelta = sourceDelta.scaled(by: 1 / speed)
+                let proposed =
+                    edge == .leading
+                    ? item.timelineStart + timelineDelta
+                    : item.timelineEnd + timelineDelta
+                let ownEdge =
+                    edge == .leading
+                    ? "\(item.id.rawValue)-start" : "\(item.id.rawValue)-end"
+                let result = SnapEngine.snap(
+                    proposed,
+                    to: SnapEngine.points(
+                        in: timeline,
+                        playhead: playhead,
+                        clickTimes: clickMarkers.map(\.timelineTime)
+                    ),
+                    threshold: RationalTime(seconds: Double(8 / pointsPerSecond)),
+                    excludingIDs: [ownEdge]
+                )
+                snapIndicator = result.point?.time
+                let base = edge == .leading ? item.timelineStart : item.timelineEnd
+                sourceDelta = (result.time - base).scaled(by: speed)
+            } else {
+                snapIndicator = nil
+            }
             switch edge {
             case .leading:
                 let delta = min(
@@ -209,6 +260,7 @@ final class TimelineCanvas: NSView {
             gesture = nil
             previewRange = nil
             dropIndex = nil
+            snapIndicator = nil
             needsDisplay = true
         }
         guard let gesture else { return }
@@ -232,35 +284,68 @@ final class TimelineCanvas: NSView {
         max((bounds.width - labelWidth) / max(CGFloat(duration.seconds), 0.01), 1)
     }
 
-    private var videoY: CGFloat { rulerHeight + 4 }
-    private var audioY: CGFloat { videoY + videoHeight + laneGap }
+    private var videoTrackCount: Int { max(timeline.videoTracks.count, 1) }
+    private func videoY(for trackIndex: Int) -> CGFloat {
+        let displayRow = videoTrackCount - 1 - trackIndex
+        return rulerHeight + 4 + CGFloat(displayRow) * (videoHeight + laneGap)
+    }
+    private var audioY: CGFloat {
+        rulerHeight + 4 + CGFloat(videoTrackCount) * (videoHeight + laneGap)
+    }
     private var clickY: CGFloat { audioY + audioHeight + laneGap }
     private var captionY: CGFloat { clickY + eventHeight + laneGap }
 
-    private func displayItems() -> [TimelineItem] {
-        timeline.video.map { item in
+    private func displayItems(in track: Track, trackIndex: Int) -> [TimelineItem] {
+        var items = track.items.map { item in
             guard let previewRange, previewRange.0 == item.id else { return item }
             var copy = item
             copy.sourceRange = previewRange.1
             return copy
         }
+        if trackIndex == 0, let previewRange,
+            let previewIndex = items.firstIndex(where: { $0.id == previewRange.0 })
+        {
+            let original = track.items[previewIndex]
+            let delta = items[previewIndex].timelineDuration - original.timelineDuration
+            if previewIndex + 1 < items.count {
+                for index in (previewIndex + 1)..<items.count {
+                    items[index].timelineStart = items[index].timelineStart + delta
+                }
+            }
+        }
+        return items
     }
 
-    private func clipRects() -> [(item: TimelineItem, index: Int, rect: NSRect)] {
-        var x = labelWidth
-        return displayItems().enumerated().map { index, item in
-            let width = max(CGFloat(item.timelineDuration.seconds) * pointsPerSecond, 2)
-            defer { x += width }
-            return (item, index, NSRect(x: x, y: videoY, width: width, height: videoHeight))
+    private func clipRects() -> [(
+        item: TimelineItem, index: Int, trackIndex: Int, rect: NSRect
+    )] {
+        timeline.videoTracks.enumerated().flatMap { trackIndex, track in
+            displayItems(in: track, trackIndex: trackIndex).enumerated().map { index, item in
+                let width = max(CGFloat(item.timelineDuration.seconds) * pointsPerSecond, 2)
+                let x = labelWidth + CGFloat(item.timelineStart.seconds) * pointsPerSecond
+                return (
+                    item,
+                    index,
+                    trackIndex,
+                    NSRect(
+                        x: x,
+                        y: videoY(for: trackIndex),
+                        width: width,
+                        height: videoHeight
+                    )
+                )
+            }
         }
     }
 
-    private func clip(at point: NSPoint) -> (item: TimelineItem, index: Int, rect: NSRect)? {
+    private func clip(at point: NSPoint) -> (
+        item: TimelineItem, index: Int, trackIndex: Int, rect: NSRect
+    )? {
         clipRects().first { $0.rect.insetBy(dx: 0, dy: -2).contains(point) }
     }
 
     private func insertionIndex(at x: CGFloat) -> Int {
-        for clip in clipRects() where x < clip.rect.midX {
+        for clip in clipRects().filter({ $0.trackIndex == 0 }) where x < clip.rect.midX {
             return clip.index
         }
         return max(timeline.video.count - 1, 0)
@@ -295,7 +380,14 @@ final class TimelineCanvas: NSView {
     }
 
     private func drawLaneLabels() {
-        drawText("V", at: NSPoint(x: 18, y: videoY + 9), color: textTertiary)
+        for (index, track) in timeline.videoTracks.enumerated() {
+            let state = track.isLocked ? "🔒" : track.isEnabled ? "" : "–"
+            drawText(
+                "\(track.name)\(state)",
+                at: NSPoint(x: 7, y: videoY(for: index) + 9),
+                color: textTertiary
+            )
+        }
         drawText("A", at: NSPoint(x: 18, y: audioY + 1), color: textTertiary)
         drawText("●", at: NSPoint(x: 17, y: clickY - 2), color: clickColor)
         drawText("CC", at: NSPoint(x: 13, y: captionY - 2), color: textTertiary)
@@ -434,16 +526,56 @@ final class TimelineCanvas: NSView {
         }
     }
 
+    private func drawProjectMarkers() {
+        for projectMarker in timeline.markers {
+            let x = labelWidth + CGFloat(projectMarker.time.seconds) * pointsPerSecond
+            NSColor(
+                calibratedRed: CGFloat(projectMarker.color.r),
+                green: CGFloat(projectMarker.color.g),
+                blue: CGFloat(projectMarker.color.b),
+                alpha: CGFloat(projectMarker.color.a)
+            ).setFill()
+            let marker = NSBezierPath()
+            marker.move(to: NSPoint(x: x - 4, y: rulerHeight - 8))
+            marker.line(to: NSPoint(x: x + 4, y: rulerHeight - 8))
+            marker.line(to: NSPoint(x: x, y: rulerHeight - 1))
+            marker.close()
+            marker.fill()
+        }
+    }
+
+    private func drawInOutPoints() {
+        for (point, color) in [(inPoint, audioColor), (outPoint, playheadColor)] {
+            guard let point else { continue }
+            let x = labelWidth + CGFloat(point.seconds) * pointsPerSecond
+            color.withAlphaComponent(0.8).setFill()
+            NSRect(x: x - 0.5, y: rulerHeight, width: 1, height: bounds.maxY - rulerHeight)
+                .fill()
+        }
+    }
+
+    private func drawSnapGuide() {
+        guard let snapIndicator else { return }
+        let x = labelWidth + CGFloat(snapIndicator.seconds) * pointsPerSecond
+        accent.withAlphaComponent(0.9).setFill()
+        NSRect(x: x - 0.5, y: rulerHeight, width: 1, height: bounds.maxY - rulerHeight).fill()
+    }
+
     private func drawDropMarker() {
         guard case .move(_, let originalIndex) = gesture,
             let dropIndex,
             !clipRects().isEmpty
         else { return }
-        let clips = clipRects()
+        let clips = clipRects().filter { $0.trackIndex == 0 }
         let target = clips[min(dropIndex, clips.count - 1)].rect
         let x = dropIndex > originalIndex ? target.maxX : target.minX
         accent.setFill()
-        NSRect(x: x - 1, y: videoY - 3, width: 2, height: videoHeight + 6).fill()
+        NSRect(
+            x: x - 1,
+            y: videoY(for: 0) - 3,
+            width: 2,
+            height: videoHeight + 6
+        ).fill()
     }
 
     private func drawPlayhead() {

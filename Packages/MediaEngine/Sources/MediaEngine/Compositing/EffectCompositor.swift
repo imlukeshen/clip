@@ -105,7 +105,8 @@ enum VideoLayerRenderer {
                 )
             )
 
-            let sourceLocal = (projectTime - layer.item.timelineStart).scaled(
+            let timelineLocal = projectTime - layer.item.timelineStart
+            let sourceLocal = timelineLocal.scaled(
                 by: layer.item.speed
             )
             let effectBackground: CIImage
@@ -133,7 +134,11 @@ enum VideoLayerRenderer {
                 by: layer.item.transform,
                 in: bounds
             )
-            image = applyingOpacity(layer.item.opacity, to: image)
+            let transitionOpacity = layer.item.videoFade.value(
+                at: timelineLocal,
+                duration: layer.item.timelineDuration
+            )
+            image = applyingOpacity(layer.item.opacity * transitionOpacity, to: image)
             composed = blend(image, over: composed, mode: layer.item.blendMode)
         }
         return composed.cropped(to: bounds)

@@ -13,6 +13,12 @@ public enum AppCommandRouter {
         "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
         "navigation.pdf", "navigation.convert", "edit.undo", "edit.redo", "asset.selectAll",
         "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete",
+        "timeline.toggleSnapping", "timeline.rippleDelete", "timeline.roll", "timeline.slip",
+        "timeline.slide", "timeline.razorTool", "timeline.shuttleBackward",
+        "timeline.shuttlePause", "timeline.shuttleForward", "timeline.setIn",
+        "timeline.setOut", "timeline.addMarker", "timeline.nextMarker", "timeline.insert",
+        "timeline.overwrite", "timeline.pasteAttributes", "timeline.targetTrack",
+        "timeline.crossDissolve", "timeline.audioFade",
     ]
 
     public static func availability(
@@ -37,6 +43,19 @@ public enum AppCommandRouter {
         case "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete":
             return model.selection.selected.isEmpty
                 ? .unavailable(reason: "No assets are selected.") : .available
+        case "timeline.toggleSnapping", "timeline.razorTool", "timeline.shuttleBackward",
+            "timeline.shuttlePause", "timeline.shuttleForward", "timeline.setIn",
+            "timeline.setOut", "timeline.addMarker", "timeline.nextMarker",
+            "timeline.targetTrack":
+            return model.editor == nil
+                ? .unavailable(reason: "No video project is open.") : .available
+        case "timeline.rippleDelete", "timeline.roll", "timeline.slip", "timeline.slide",
+            "timeline.insert", "timeline.overwrite", "timeline.pasteAttributes":
+            return model.editor?.selectedItem == nil
+                ? .unavailable(reason: "No timeline clip is selected.") : .available
+        case "timeline.crossDissolve", "timeline.audioFade":
+            return model.editor?.selectedItem == nil
+                ? .unavailable(reason: "No timeline clip is selected.") : .available
         default:
             return .unavailable(reason: "This command is not available in the current view.")
         }
@@ -100,8 +119,28 @@ public enum AppCommandRouter {
         case "asset.reveal":
             model.revealSelectionInFinder()
             return .completed
+        case "timeline.toggleSnapping": model.editor?.toggleSnapping()
+        case "timeline.rippleDelete": model.editor?.rippleDeleteSelected()
+        case "timeline.roll": model.editor?.rollSelected()
+        case "timeline.slip": model.editor?.slipSelected()
+        case "timeline.slide": model.editor?.slideSelected()
+        case "timeline.razorTool": model.editor?.selectTool(.razor)
+        case "timeline.shuttleBackward": model.editor?.shuttleBackward()
+        case "timeline.shuttlePause": model.editor?.shuttlePause()
+        case "timeline.shuttleForward": model.editor?.shuttleForward()
+        case "timeline.setIn": model.editor?.setInPoint()
+        case "timeline.setOut": model.editor?.setOutPoint()
+        case "timeline.addMarker": model.editor?.addMarkerAtPlayhead()
+        case "timeline.nextMarker": model.editor?.goToNextMarker()
+        case "timeline.insert": model.editor?.insertSelectedSource(overwrite: false)
+        case "timeline.overwrite": model.editor?.insertSelectedSource(overwrite: true)
+        case "timeline.pasteAttributes": model.editor?.pasteAttributesToSelection()
+        case "timeline.targetTrack": model.editor?.cycleTargetVideoTrack()
+        case "timeline.crossDissolve": model.editor?.addCrossDissolve()
+        case "timeline.audioFade": model.editor?.addAudioFade()
         default:
             return .completed
         }
+        return .completed
     }
 }

@@ -95,6 +95,15 @@ extension ProjectDocument {
         guard item.opacity.isFinite, (0...1).contains(item.opacity) else {
             throw ModelError.invalidOpacity(item.id, item.opacity)
         }
+        for fade in [item.videoFade, item.audioFade] {
+            guard fade.fadeIn >= .zero,
+                fade.fadeOut >= .zero,
+                fade.fadeIn <= item.timelineDuration,
+                fade.fadeOut <= item.timelineDuration
+            else {
+                throw ModelError.invalidFade(item.id)
+            }
+        }
         let transform = item.transform
         guard transform.translationX.isFinite,
             transform.translationY.isFinite,

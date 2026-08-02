@@ -26,4 +26,7 @@ public enum ModelError: Error, Sendable, Equatable {
     case invalidTransform(ItemID)
     case invalidMarkerTime(MarkerID, RationalTime)
     case trackLocked(TrackID)
+    case trackNotFound(TrackID)
+    case invalidEdit(String)
+    case invalidFade(ItemID)
 }

@@ -92,6 +92,14 @@ struct EditorView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
 
+            Button {
+                editor.cycleTargetVideoTrack()
+            } label: {
+                Label(targetedTrackName, systemImage: "scope")
+            }
+            .buttonStyle(.plain)
+            .help("Cycle targeted video track")
+
             if editor.isExporting {
                 ProgressView(value: editor.exportProgress)
                     .progressViewStyle(.linear)
@@ -135,11 +143,41 @@ struct EditorView: View {
 
     private var toolRail: some View {
         VStack(spacing: 5) {
-            ToolButton(systemName: "arrow.up.left", help: "Select", isActive: true) {}
-            ToolButton(systemName: "scissors", help: "Split at playhead") {
+            ToolButton(
+                systemName: "arrow.up.left",
+                help: "Select (V)",
+                isActive: editor.activeTool == .select
+            ) {
+                editor.selectTool(.select)
+            }
+            ToolButton(
+                systemName: "scissors",
+                help: "Razor (C)",
+                isActive: editor.activeTool == .razor
+            ) {
+                editor.selectTool(.razor)
+            }
+            .keyboardShortcut("c", modifiers: [])
+            ToolButton(
+                systemName: "magnet",
+                help: "Toggle snapping (S)",
+                isActive: editor.isSnappingEnabled
+            ) {
+                editor.toggleSnapping()
+            }
+            .keyboardShortcut("s", modifiers: [])
+            ToolButton(systemName: "scissors.badge.ellipsis", help: "Split at playhead") {
                 editor.splitAtPlayhead()
             }
-            .keyboardShortcut("k", modifiers: .command)
+            .keyboardShortcut("k", modifiers: [.command, .shift])
+            ToolButton(systemName: "delete.forward", help: "Ripple delete (⇧⌫)") {
+                editor.rippleDeleteSelected()
+            }
+            .keyboardShortcut(.delete, modifiers: .shift)
+            ToolButton(systemName: "mappin", help: "Add marker (M)") {
+                editor.addMarkerAtPlayhead()
+            }
+            .keyboardShortcut("m", modifiers: [])
             ToolButton(systemName: "magnifyingglass", help: "Add zoom effect") {
                 guard let itemID = editor.selectedItem?.id else { return }
                 editor.addZoom(to: itemID)
@@ -176,25 +214,42 @@ struct EditorView: View {
                     .frame(width: 78, alignment: .leading)
                 Spacer()
                 Button {
-                    editor.seek(to: .zero)
-                } label: {
-                    Image(systemName: "backward.end.fill")
-                }
-                .buttonStyle(.plain)
-                Button {
                     editor.togglePlayback()
                 } label: {
-                    Image(systemName: editor.isPlaying ? "pause.fill" : "play.fill")
-                        .frame(width: 18)
+                    Image(systemName: editor.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.space, modifiers: [])
                 Button {
-                    editor.seek(to: editor.duration)
+                    editor.shuttleBackward()
                 } label: {
-                    Image(systemName: "forward.end.fill")
+                    Image(systemName: "backward.fill")
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut("j", modifiers: [])
+                Button {
+                    editor.shuttlePause()
+                } label: {
+                    Image(systemName: "pause.fill")
+                        .frame(width: 18)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("k", modifiers: [])
+                Button {
+                    editor.shuttleForward()
+                } label: {
+                    Image(systemName: "forward.fill")
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("l", modifiers: [])
+                Button("I") { editor.setInPoint() }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("i", modifiers: [])
+                    .help("Set In point")
+                Button("O") { editor.setOutPoint() }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("o", modifiers: [])
+                    .help("Set Out point")
                 Spacer()
                 Text(timecode(editor.duration))
                     .frame(width: 78, alignment: .trailing)
@@ -216,7 +271,11 @@ struct EditorView: View {
             selection: editor.selection,
             playhead: editor.playhead,
             duration: editor.duration,
+            inPoint: editor.inPoint,
+            outPoint: editor.outPoint,
             clickMarkers: editor.timelineClickMarkers,
+            isSnappingEnabled: editor.isSnappingEnabled,
+            activeTool: editor.activeTool,
             accent: NSColor(theme.palette.accent),
             accentDim: NSColor(theme.palette.accentDim),
             surface: NSColor(Theme.dark.palette.surfaceSunken),
@@ -232,9 +291,16 @@ struct EditorView: View {
             onSeek: editor.seek,
             onScrubbing: editor.setScrubbing,
             onReorder: editor.reorder,
-            onTrim: editor.trim
+            onTrim: editor.trim,
+            onRazor: editor.split
         )
         .accessibilityLabel("Project timeline")
+    }
+
+    private var targetedTrackName: String {
+        editor.document.timeline.videoTracks.first {
+            $0.id == editor.targetedVideoTrackID
+        }?.name ?? "V1"
     }
 
     private func timecode(_ time: RationalTime) -> String {
@@ -255,10 +321,11 @@ private struct ExportDestinationSheet: View {
     @Bindable var model: AppModel
     @Bindable var editor: EditorViewModel
     @Binding var completionAction: CompletionAction
-    @State private var baseFolder = FileManager.default.urls(
-        for: .downloadsDirectory,
-        in: .userDomainMask
-    ).first ?? FileManager.default.homeDirectoryForCurrentUser
+    @State private var baseFolder =
+        FileManager.default.urls(
+            for: .downloadsDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
     @State private var destination = ExportDestination(bookmarkKey: "default")
     @State private var codec = ExportPreset.Codec.h264
 
@@ -294,7 +361,9 @@ private struct ExportDestinationSheet: View {
             SectionLabel("Resolved path")
             Text(resolvedURL?.path ?? validationMessage)
                 .font(theme.type.numeric.font)
-                .foregroundStyle(resolvedURL == nil ? theme.palette.danger : theme.palette.textPrimary)
+                .foregroundStyle(
+                    resolvedURL == nil ? theme.palette.danger : theme.palette.textPrimary
+                )
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             HStack {
@@ -533,6 +602,24 @@ struct EditorInspector: View {
     @ViewBuilder private var inspector: some View {
         if let item = editor.selectedItem {
             VStack(alignment: .leading, spacing: 14) {
+                if let track = editor.targetedVideoTrack {
+                    SectionLabel("Target track · \(track.name)")
+                    HStack(spacing: 6) {
+                        EffectButton(track.isEnabled ? "Disable" : "Enable") {
+                            editor.toggleTargetTrackEnabled()
+                        }
+                        EffectButton(track.isLocked ? "Unlock" : "Lock") {
+                            editor.toggleTargetTrackLocked()
+                        }
+                        EffectButton(track.isMuted ? "Unmute" : "Mute") {
+                            editor.toggleTargetTrackMuted()
+                        }
+                        EffectButton(track.isSolo ? "Unsolo" : "Solo") {
+                            editor.toggleTargetTrackSolo()
+                        }
+                    }
+                    Divider().overlay(theme.palette.line)
+                }
                 SectionLabel("Selected clip")
                 Text(editor.assetNames[item.assetID] ?? "Video clip")
                     .font(theme.type.body.font)
@@ -580,6 +667,26 @@ struct EditorInspector: View {
                     Text("1.5×").tag(1.5)
                     Text("2×").tag(2.0)
                     Text("4×").tag(4.0)
+                }
+
+                Divider().overlay(theme.palette.line)
+                SectionLabel("Precision edit")
+                HStack(spacing: 6) {
+                    EffectButton("Roll +1f") { editor.rollSelected() }
+                    EffectButton("Slip +1f") { editor.slipSelected() }
+                    EffectButton("Slide +1f") { editor.slideSelected() }
+                }
+                HStack(spacing: 6) {
+                    EffectButton("Dissolve") { editor.addCrossDissolve() }
+                    EffectButton("Audio fade") { editor.addAudioFade() }
+                }
+                HStack(spacing: 6) {
+                    EffectButton("Copy attrs") { editor.copySelectedAttributes() }
+                    EffectButton("Paste attrs") { editor.pasteAttributesToSelection() }
+                }
+                HStack(spacing: 6) {
+                    EffectButton("Insert") { editor.insertSelectedSource(overwrite: false) }
+                    EffectButton("Overwrite") { editor.insertSelectedSource(overwrite: true) }
                 }
 
                 Divider().overlay(theme.palette.line)

@@ -12,6 +12,11 @@ public enum GraphOp: Codable, Sendable, Equatable {
     case addEffect(ItemID, Effect, index: Int? = nil)
     case removeEffect(ItemID, EffectID)
     case updateEffect(ItemID, Effect)
+    /// Atomically replaces one track's item array. Compound precision edits use
+    /// this operation so adjacent changes validate and undo as one unit.
+    case setTrackItems(TrackID, [TimelineItem])
+    case setTrack(Track)
+    case setMarkers([Marker])
     case setCaptions([CaptionSegment])
     case setCanvas(CanvasSpec)
     case rename(String)

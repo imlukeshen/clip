@@ -6,6 +6,11 @@ import LibraryStore
 import MediaEngine
 import Observation
 
+public enum TimelineTool: String, Sendable, CaseIterable {
+    case select
+    case razor
+}
+
 @MainActor
 @Observable
 public final class EditorViewModel {
@@ -13,6 +18,7 @@ public final class EditorViewModel {
     public private(set) var selection: Set<ItemID> = []
     public private(set) var playhead = RationalTime.zero
     public private(set) var isPlaying = false
+    public private(set) var playbackRate: Float = 1
     public private(set) var isScrubbing = false
     public private(set) var isBuilding = false
     public private(set) var isExporting = false
@@ -21,6 +27,11 @@ public final class EditorViewModel {
     public private(set) var notice: String?
     public private(set) var eventTracks: [AssetID: EventTrack]
     public private(set) var clickTrackingState: ClickTrackingState
+    public private(set) var isSnappingEnabled: Bool
+    public private(set) var activeTool: TimelineTool = .select
+    public private(set) var inPoint: RationalTime?
+    public private(set) var outPoint: RationalTime?
+    public private(set) var targetedVideoTrackID: TrackID?
     public let undoManager = UndoManager()
     public let player = AVPlayer()
 
@@ -34,6 +45,7 @@ public final class EditorViewModel {
     private var persistenceTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
     private var resumeAfterScrub = false
+    private var copiedAttributeSourceID: ItemID?
 
     public init(
         document: ProjectDocument,
@@ -53,6 +65,9 @@ public final class EditorViewModel {
         self.buildsPlayback = buildsPlayback
         self.resolver = resolving
         self.persistence = persisting
+        self.isSnappingEnabled =
+            UserDefaults.standard.object(forKey: "reel.timeline.snapping") as? Bool ?? true
+        self.targetedVideoTrackID = document.timeline.videoTracks.first?.id
         self.undoManager.groupsByEvent = false
     }
 
@@ -60,6 +75,10 @@ public final class EditorViewModel {
 
     public var selectedItem: TimelineItem? {
         selection.compactMap { document.item($0) }.first
+    }
+
+    public var targetedVideoTrack: Track? {
+        document.timeline.videoTracks.first { $0.id == targetedVideoTrackID }
     }
 
     public var assetNames: [AssetID: String] {
@@ -124,27 +143,30 @@ public final class EditorViewModel {
     }
 
     public var timelineClickMarkers: [TimelineClickMarker] {
-        var timelineStart = RationalTime.zero
         var markers: [TimelineClickMarker] = []
-        for item in document.timeline.video {
-            if let track = eventTracks[item.assetID] {
-                for (index, click) in track.clicks.enumerated()
-                where click.time >= item.sourceRange.start && click.time < item.sourceRange.end {
-                    let localTime = (click.time - item.sourceRange.start).scaled(by: 1 / item.speed)
-                    markers.append(
-                        TimelineClickMarker(
-                            id: "\(item.id.rawValue)-\(index)-\(click.time.value)",
-                            itemID: item.id,
-                            timelineTime: timelineStart + localTime,
-                            sourceTime: click.time,
-                            point: click.point,
-                            button: click.button,
-                            clickCount: click.clickCount
+        for videoTrack in document.timeline.videoTracks {
+            for item in videoTrack.items {
+                if let track = eventTracks[item.assetID] {
+                    for (index, click) in track.clicks.enumerated()
+                    where click.time >= item.sourceRange.start && click.time < item.sourceRange.end
+                    {
+                        let localTime = (click.time - item.sourceRange.start).scaled(
+                            by: 1 / item.speed
                         )
-                    )
+                        markers.append(
+                            TimelineClickMarker(
+                                id: "\(item.id.rawValue)-\(index)-\(click.time.value)",
+                                itemID: item.id,
+                                timelineTime: item.timelineStart + localTime,
+                                sourceTime: click.time,
+                                point: click.point,
+                                button: click.button,
+                                clickCount: click.clickCount
+                            )
+                        )
+                    }
                 }
             }
-            timelineStart = timelineStart + item.timelineDuration
         }
         return markers
     }
@@ -260,21 +282,279 @@ public final class EditorViewModel {
         isPlaying ? pause() : play()
     }
 
+    public func selectTool(_ tool: TimelineTool) {
+        activeTool = tool
+    }
+
+    public func toggleSnapping() {
+        isSnappingEnabled.toggle()
+        UserDefaults.standard.set(isSnappingEnabled, forKey: "reel.timeline.snapping")
+        notice = isSnappingEnabled ? "Snapping on." : "Snapping off."
+    }
+
+    public func shuttleBackward() {
+        let next: Float
+        switch playbackRate {
+        case ...(-2): next = -4
+        case ..<0: next = playbackRate * 2
+        default: next = -1
+        }
+        startPlayback(rate: next)
+    }
+
+    public func shuttlePause() {
+        pause()
+        playbackRate = 0
+    }
+
+    public func shuttleForward() {
+        let next: Float
+        switch playbackRate {
+        case 2...: next = 4
+        case 1...: next = playbackRate * 2
+        default: next = 1
+        }
+        startPlayback(rate: next)
+    }
+
+    public func setInPoint() {
+        inPoint = playhead
+        if let outPoint, outPoint < playhead { self.outPoint = nil }
+        notice = "In point set at \(playhead.seconds.formatted())s."
+    }
+
+    public func setOutPoint() {
+        outPoint = playhead
+        if let inPoint, inPoint > playhead { self.inPoint = nil }
+        notice = "Out point set at \(playhead.seconds.formatted())s."
+    }
+
+    public func addMarkerAtPlayhead() {
+        let marker = Marker(
+            id: .generate(),
+            name: "Marker \(document.timeline.markers.count + 1)",
+            time: playhead
+        )
+        do {
+            try perform(TimelineEditPlanner.addMarker(to: document, marker: marker))
+        } catch {
+            notice = "The marker could not be added."
+        }
+    }
+
+    public func goToNextMarker() {
+        let markers = document.timeline.markers.sorted { $0.time < $1.time }
+        guard !markers.isEmpty else {
+            notice = "This project has no markers."
+            return
+        }
+        seek(to: markers.first(where: { $0.time > playhead })?.time ?? markers[0].time)
+    }
+
+    public func rippleDeleteSelected() {
+        guard let itemID = selectedItem?.id else {
+            notice = "Select a V1 clip to ripple delete."
+            return
+        }
+        do {
+            try perform(TimelineEditPlanner.rippleDelete(in: document, itemID: itemID))
+            selection.remove(itemID)
+        } catch {
+            notice = "The clip could not be ripple deleted."
+        }
+    }
+
+    public func rollSelected(by delta: RationalTime? = nil) {
+        guard let selectedItem else { return }
+        let amount = delta ?? document.canvas.frameRate.frameDuration
+        do {
+            try perform(
+                TimelineEditPlanner.rollEdit(
+                    in: document,
+                    leftItemID: selectedItem.id,
+                    by: amount,
+                    assetDurations: assetDurations
+                )
+            )
+        } catch {
+            notice = "Select the clip left of a valid cut to roll it."
+        }
+    }
+
+    public func slipSelected(by delta: RationalTime? = nil) {
+        guard let selectedItem, let duration = assetDurations[selectedItem.assetID] else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.slipClip(
+                    in: document,
+                    itemID: selectedItem.id,
+                    by: delta ?? document.canvas.frameRate.frameDuration,
+                    assetDuration: duration
+                )
+            )
+        } catch {
+            notice = "The source has no more media in that direction."
+        }
+    }
+
+    public func slideSelected(by delta: RationalTime? = nil) {
+        guard let selectedItem else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.slideClip(
+                    in: document,
+                    itemID: selectedItem.id,
+                    by: delta ?? document.canvas.frameRate.frameDuration,
+                    assetDurations: assetDurations
+                )
+            )
+        } catch {
+            notice = "Slide requires editable clips on both sides."
+        }
+    }
+
+    public func addCrossDissolve() {
+        guard let selectedItem else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.crossDissolve(
+                    in: document,
+                    leftItemID: selectedItem.id,
+                    duration: RationalTime(seconds: 0.35)
+                )
+            )
+        } catch {
+            notice = "Select the clip left of a cut with enough media."
+        }
+    }
+
+    public func addAudioFade() {
+        guard let selectedItem else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.setAudioFade(
+                    in: document,
+                    itemID: selectedItem.id,
+                    fadeIn: RationalTime(seconds: min(0.25, selectedItem.timelineDuration.seconds)),
+                    fadeOut: RationalTime(seconds: min(0.25, selectedItem.timelineDuration.seconds))
+                )
+            )
+        } catch {
+            notice = "The audio fade could not be applied."
+        }
+    }
+
+    public func copySelectedAttributes() {
+        copiedAttributeSourceID = selectedItem?.id
+        notice =
+            copiedAttributeSourceID == nil ? "Select a source clip first." : "Attributes copied."
+    }
+
+    public func pasteAttributesToSelection() {
+        guard let sourceID = copiedAttributeSourceID, !selection.isEmpty else {
+            notice = "Copy attributes, then select destination clips."
+            return
+        }
+        do {
+            try perform(
+                TimelineEditPlanner.pasteAttributes(
+                    from: sourceID,
+                    to: Array(selection),
+                    in: document
+                )
+            )
+        } catch {
+            notice = "The attributes could not be pasted."
+        }
+    }
+
+    public func cycleTargetVideoTrack() {
+        let tracks = document.timeline.videoTracks
+        guard !tracks.isEmpty else { return }
+        let current = tracks.firstIndex { $0.id == targetedVideoTrackID } ?? -1
+        targetedVideoTrackID = tracks[(current + 1) % tracks.count].id
+        notice = "Targeting \(tracks[(current + 1) % tracks.count].name)."
+    }
+
+    public func toggleTargetTrackEnabled() {
+        updateTargetTrack { $0.isEnabled.toggle() }
+    }
+
+    public func toggleTargetTrackLocked() {
+        updateTargetTrack { $0.isLocked.toggle() }
+    }
+
+    public func toggleTargetTrackMuted() {
+        updateTargetTrack { $0.isMuted.toggle() }
+    }
+
+    public func toggleTargetTrackSolo() {
+        updateTargetTrack { $0.isSolo.toggle() }
+    }
+
+    public func insertSelectedSource(overwrite: Bool) {
+        guard let source = selectedItem,
+            let trackID = targetedVideoTrackID ?? document.timeline.videoTracks.first?.id
+        else {
+            notice = "Select a source clip first."
+            return
+        }
+        var inserted = source
+        inserted.id = .generate()
+        inserted.effects = []
+        inserted.timelineStart = playhead
+        if let inPoint, let outPoint, outPoint > inPoint {
+            inserted.sourceRange.duration = min(
+                inserted.sourceRange.duration,
+                outPoint - inPoint
+            )
+        }
+        do {
+            let patch =
+                overwrite
+                ? try TimelineEditPlanner.overwrite(
+                    in: document,
+                    item: inserted,
+                    on: trackID,
+                    at: playhead,
+                    splitRightItemID: .generate()
+                )
+                : try TimelineEditPlanner.rippleInsert(
+                    in: document,
+                    item: inserted,
+                    on: trackID,
+                    at: playhead
+                )
+            try perform(patch)
+            selection = [inserted.id]
+        } catch {
+            notice =
+                overwrite
+                ? "The overwrite edit could not be applied."
+                : "Snap the playhead to an edge before inserting."
+        }
+    }
+
     public func splitAtPlayhead() {
         guard let itemID = selectedItem?.id ?? document.item(at: playhead)?.item.id else {
             notice = "Move the playhead over a clip before splitting."
             return
         }
+        split(itemID, at: playhead)
+    }
+
+    public func split(_ itemID: ItemID, at time: RationalTime) {
         do {
             try perform(
                 TimelineEditPlanner.splitClip(
                     in: document,
                     itemID: itemID,
-                    at: playhead,
+                    at: time,
                     rightItemID: .generate()
                 )
             )
-            if let right = document.item(at: playhead)?.item.id {
+            seek(to: time)
+            if let right = document.item(at: time)?.item.id {
                 selection = [right]
             }
         } catch ModelError.splitTooCloseToBoundary {
@@ -529,6 +809,22 @@ public final class EditorViewModel {
         }
     }
 
+    private func updateTargetTrack(_ mutation: (inout Track) -> Void) {
+        guard var track = targetedVideoTrack else { return }
+        mutation(&track)
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.setTrack(track)],
+                    label: "Change Track State",
+                    origin: .user
+                )
+            )
+        } catch {
+            notice = "The track state could not be changed."
+        }
+    }
+
     private func apply(_ patch: GraphPatch, registeringUndo: Bool) throws {
         var candidate = document
         let inverse = try candidate.apply(patch)
@@ -596,7 +892,7 @@ public final class EditorViewModel {
                 item.audioMix = built.audioMix
                 player.replaceCurrentItem(with: item)
                 seek(to: playhead)
-                if isPlaying { player.play() }
+                if isPlaying { player.playImmediately(atRate: playbackRate) }
                 isBuilding = false
             } catch is CancellationError {
                 // A newer document build superseded this one.
@@ -609,9 +905,15 @@ public final class EditorViewModel {
     }
 
     private func play() {
+        startPlayback(rate: 1)
+    }
+
+    private func startPlayback(rate: Float) {
         guard duration > .zero else { return }
-        if playhead >= duration { seek(to: .zero) }
-        player.play()
+        if rate > 0, playhead >= duration { seek(to: .zero) }
+        if rate < 0, playhead <= .zero { seek(to: duration) }
+        playbackRate = rate
+        player.playImmediately(atRate: rate)
         isPlaying = true
         playbackTask?.cancel()
         playbackTask = Task { [weak self] in
@@ -619,7 +921,7 @@ public final class EditorViewModel {
                 try? await Task.sleep(for: .milliseconds(16))
                 guard let self, isPlaying else { return }
                 playhead = min(player.currentTime().rational, duration)
-                if playhead >= duration {
+                if playhead >= duration || playhead <= .zero && playbackRate < 0 {
                     pause()
                     return
                 }

@@ -141,6 +141,43 @@ extension ProjectDocument {
             mutateItem(at: location) { $0.effects[effectIndex] = effect }
             return .updateEffect(itemID, previous)
 
+        case .setTrackItems(let trackID, let items):
+            if let index = timeline.videoTracks.firstIndex(where: { $0.id == trackID }) {
+                guard !timeline.videoTracks[index].isLocked else {
+                    throw ModelError.trackLocked(trackID)
+                }
+                let previous = timeline.videoTracks[index].items
+                timeline.videoTracks[index].items = items
+                return .setTrackItems(trackID, previous)
+            }
+            if let index = timeline.audioTracks.firstIndex(where: { $0.id == trackID }) {
+                guard !timeline.audioTracks[index].isLocked else {
+                    throw ModelError.trackLocked(trackID)
+                }
+                let previous = timeline.audioTracks[index].items
+                timeline.audioTracks[index].items = items
+                return .setTrackItems(trackID, previous)
+            }
+            throw ModelError.trackNotFound(trackID)
+
+        case .setTrack(let track):
+            if let index = timeline.videoTracks.firstIndex(where: { $0.id == track.id }) {
+                let previous = timeline.videoTracks[index]
+                timeline.videoTracks[index] = track
+                return .setTrack(previous)
+            }
+            if let index = timeline.audioTracks.firstIndex(where: { $0.id == track.id }) {
+                let previous = timeline.audioTracks[index]
+                timeline.audioTracks[index] = track
+                return .setTrack(previous)
+            }
+            throw ModelError.trackNotFound(track.id)
+
+        case .setMarkers(let markers):
+            let previous = timeline.markers
+            timeline.markers = markers
+            return .setMarkers(previous)
+
         case .setCaptions(let captions):
             let previous = timeline.captions
             timeline.captions = captions

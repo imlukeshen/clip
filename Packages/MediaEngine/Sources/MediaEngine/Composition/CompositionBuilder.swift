@@ -205,6 +205,31 @@ public struct CompositionBuilder: Sendable {
             let audible = !modelTrack.isMuted && (!anySolo || modelTrack.isSolo)
             let linearGain = audible ? pow(10, modelTrack.gain / 20) : 0
             input.setVolume(Float(linearGain), at: .zero)
+            if audible {
+                for item in modelTrack.items where item.isEnabled {
+                    let fade = item.audioFade
+                    if fade.fadeIn > .zero {
+                        input.setVolumeRamp(
+                            fromStartVolume: 0,
+                            toEndVolume: Float(linearGain),
+                            timeRange: CMTimeRange(
+                                start: item.timelineStart.cmTime,
+                                duration: fade.fadeIn.cmTime
+                            )
+                        )
+                    }
+                    if fade.fadeOut > .zero {
+                        input.setVolumeRamp(
+                            fromStartVolume: Float(linearGain),
+                            toEndVolume: 0,
+                            timeRange: CMTimeRange(
+                                start: (item.timelineEnd - fade.fadeOut).cmTime,
+                                duration: fade.fadeOut.cmTime
+                            )
+                        )
+                    }
+                }
+            }
             parameters.append(input)
         }
 
