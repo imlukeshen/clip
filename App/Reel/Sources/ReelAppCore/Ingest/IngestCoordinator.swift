@@ -1,21 +1,25 @@
 import CaptureKit
 import Foundation
+import LibraryStore
 
 /// Connects capture-source streams to the single ingest pipeline.
 public actor IngestCoordinator {
     private let pipeline: IngestPipeline
     private let inbox: InboxWatcher
     private let pasteboard: PasteboardWatcher
+    private let didIngest: @Sendable (AssetRecord, URL?) async -> Void
     private var tasks: [Task<Void, Never>] = []
 
     public init(
         pipeline: IngestPipeline,
         inbox: InboxWatcher,
-        pasteboard: PasteboardWatcher
+        pasteboard: PasteboardWatcher,
+        didIngest: @escaping @Sendable (AssetRecord, URL?) async -> Void = { _, _ in }
     ) {
         self.pipeline = pipeline
         self.inbox = inbox
         self.pasteboard = pasteboard
+        self.didIngest = didIngest
     }
 
     deinit {
@@ -32,11 +36,13 @@ public actor IngestCoordinator {
         let pipeline = self.pipeline
         let inboxEvents = inbox.events
         let pasteboardImages = pasteboard.images
+        let didIngest = didIngest
         tasks = [
             Task {
                 for await url in inboxEvents {
                     do {
-                        _ = try await pipeline.ingest(url, source: .inbox)
+                        let record = try await pipeline.ingest(url, source: .inbox)
+                        await didIngest(record, url)
                     } catch {
                         // IngestPipeline emits the typed failure event.
                     }
@@ -45,7 +51,8 @@ public actor IngestCoordinator {
             Task {
                 for await data in pasteboardImages {
                     do {
-                        _ = try await pipeline.ingestImageData(data, source: .pasteboard)
+                        let record = try await pipeline.ingestImageData(data, source: .pasteboard)
+                        await didIngest(record, nil)
                     } catch {
                         // IngestPipeline emits the typed failure event.
                     }

@@ -1,5 +1,6 @@
 import AppKit
 import CoreModel
+import ReelAppCore
 import SwiftUI
 
 struct EditorTimeline: NSViewRepresentable {
@@ -9,6 +10,7 @@ struct EditorTimeline: NSViewRepresentable {
     let selection: Set<ItemID>
     let playhead: RationalTime
     let duration: RationalTime
+    let clickMarkers: [TimelineClickMarker]
     let accent: NSColor
     let accentDim: NSColor
     let surface: NSColor
@@ -37,6 +39,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.selection = selection
         view.playhead = playhead
         view.duration = duration
+        view.clickMarkers = clickMarkers
         view.accent = accent
         view.accentDim = accentDim
         view.surface = surface
@@ -64,6 +67,7 @@ final class TimelineCanvas: NSView {
     var selection: Set<ItemID> = []
     var playhead = RationalTime.zero
     var duration = RationalTime.zero
+    var clickMarkers: [TimelineClickMarker] = []
     var accent = NSColor.systemBlue
     var accentDim = NSColor.systemBlue.withAlphaComponent(0.2)
     var surface = NSColor.black
@@ -364,15 +368,34 @@ final class TimelineCanvas: NSView {
     }
 
     private func drawClicks() {
-        for clip in clipRects() {
-            for effect in clip.item.effects where effect.kind == .zoom {
-                let x =
-                    clip.rect.minX + CGFloat(effect.range.start.seconds / clip.item.speed)
-                    * pointsPerSecond
-                clickColor.setFill()
-                NSRect(x: x, y: clickY, width: 2, height: eventHeight).fill()
-            }
+        clickColor.setFill()
+        for marker in clickMarkers {
+            let x = labelWidth + CGFloat(marker.timelineTime.seconds) * pointsPerSecond
+            NSRect(x: x - 1, y: clickY, width: 2, height: eventHeight).fill()
         }
+        refreshClickAccessibility()
+    }
+
+    private func refreshClickAccessibility() {
+        let children = clickMarkers.map { marker -> NSAccessibilityElement in
+            let element = NSAccessibilityElement()
+            element.setAccessibilityParent(self)
+            element.setAccessibilityRole(.staticText)
+            element.setAccessibilityLabel("Recorded click")
+            element.setAccessibilityValue(formatClickTime(marker.timelineTime.seconds))
+            element.setAccessibilityIdentifier(marker.id)
+            return element
+        }
+        setAccessibilityChildren(children)
+    }
+
+    private func formatClickTime(_ seconds: Double) -> String {
+        String(
+            format: "%02d:%02d.%03d",
+            Int(seconds) / 60,
+            Int(seconds) % 60,
+            Int(seconds * 1_000) % 1_000
+        )
     }
 
     private func drawCaptions() {

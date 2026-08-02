@@ -25,6 +25,9 @@ Implemented milestones:
 - **M6 — Effects and export:** crop, background framing, rounded corners,
   shadows, regional blur, and zoom rendering, plus atomic H.264, HEVC, and
   ProRes exports with live progress and codec-aware presets.
+- **M7 — Event track:** opt-in, listen-only click capture, system capture-window
+  detection, exact/estimated sidecar alignment, an accessible click lane, and
+  deterministic click-cluster auto-zoom applied as one undoable patch.
 
 ## Test
 

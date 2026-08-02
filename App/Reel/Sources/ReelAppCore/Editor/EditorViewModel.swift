@@ -18,6 +18,8 @@ public final class EditorViewModel {
     public private(set) var exportProgress = 0.0
     public private(set) var lastExportURL: URL?
     public private(set) var notice: String?
+    public private(set) var eventTracks: [AssetID: EventTrack]
+    public private(set) var clickTrackingState: ClickTrackingState
     public let undoManager = UndoManager()
     public let player = AVPlayer()
 
@@ -35,12 +37,18 @@ public final class EditorViewModel {
     public init(
         document: ProjectDocument,
         assets: [AssetID: AssetRecord],
+        eventTracks: [AssetID: EventTrack] = [:],
+        clickTrackingState: ClickTrackingState = .disabled(
+            reason: "Accessibility access is off. Auto-zoom is unavailable."
+        ),
         buildsPlayback: Bool = true,
         resolving: @escaping @Sendable (AssetID) async throws -> URL,
         persisting: @escaping @Sendable (ProjectDocument, GraphPatch?) async throws -> Void
     ) {
         self.document = document
         self.assets = assets
+        self.eventTracks = eventTracks
+        self.clickTrackingState = clickTrackingState
         self.buildsPlayback = buildsPlayback
         self.resolver = resolving
         self.persistence = persisting
@@ -65,6 +73,65 @@ public final class EditorViewModel {
             .sorted { $0.importedAt < $1.importedAt }
     }
 
+    public var timelineClickMarkers: [TimelineClickMarker] {
+        var timelineStart = RationalTime.zero
+        var markers: [TimelineClickMarker] = []
+        for item in document.timeline.video {
+            if let track = eventTracks[item.assetID] {
+                for (index, click) in track.clicks.enumerated()
+                where click.time >= item.sourceRange.start && click.time < item.sourceRange.end {
+                    let localTime = (click.time - item.sourceRange.start).scaled(by: 1 / item.speed)
+                    markers.append(
+                        TimelineClickMarker(
+                            id: "\(item.id.rawValue)-\(index)-\(click.time.value)",
+                            itemID: item.id,
+                            timelineTime: timelineStart + localTime,
+                            sourceTime: click.time,
+                            point: click.point,
+                            button: click.button,
+                            clickCount: click.clickCount
+                        )
+                    )
+                }
+            }
+            timelineStart = timelineStart + item.timelineDuration
+        }
+        return markers
+    }
+
+    public var selectedClickCount: Int {
+        guard let item = selectedItem else { return 0 }
+        return eventTracks[item.assetID]?.clicks.count {
+            $0.time >= item.sourceRange.start && $0.time < item.sourceRange.end
+        } ?? 0
+    }
+
+    public var selectedAlignmentDescription: String {
+        guard let item = selectedItem, let track = eventTracks[item.assetID] else {
+            return "None"
+        }
+        switch track.alignment {
+        case .exact: return "Exact"
+        case .estimated(_, let confidence):
+            return "Estimated \(Int((confidence * 100).rounded()))%"
+        case .unavailable: return "Unavailable"
+        }
+    }
+
+    public var autoZoomUnavailableReason: String? {
+        guard let item = selectedItem else { return "Select a clip first." }
+        guard clickTrackingState.isEnabled else {
+            if case .disabled(let reason) = clickTrackingState { return reason }
+            return "Click tracking is still starting."
+        }
+        guard let track = eventTracks[item.assetID] else {
+            return "This clip has no click track."
+        }
+        if case .unavailable(let reason) = track.alignment { return reason }
+        guard selectedClickCount > 0 else { return "This clip has no recorded clicks." }
+        return nil
+    }
+
     public func start() {
         rebuild(quality: .full)
     }
@@ -75,6 +142,14 @@ public final class EditorViewModel {
         rebuildTask = nil
         exportTask?.cancel()
         exportTask = nil
+    }
+
+    public func setEventTracks(_ tracks: [AssetID: EventTrack]) {
+        eventTracks = tracks
+    }
+
+    public func setClickTrackingState(_ state: ClickTrackingState) {
+        clickTrackingState = state
     }
 
     public func perform(_ patch: GraphPatch) throws {
@@ -207,6 +282,40 @@ public final class EditorViewModel {
             ),
             to: itemID
         )
+    }
+
+    public func autoZoomSelectedClip() {
+        guard let item = selectedItem,
+            autoZoomUnavailableReason == nil,
+            let track = eventTracks[item.assetID]
+        else {
+            notice = autoZoomUnavailableReason ?? "Auto-zoom is unavailable."
+            return
+        }
+        let generated = AutoZoomGenerator().zooms(for: track, item: item)
+        guard !generated.isEmpty else {
+            notice = "No click clusters were found in the selected range."
+            return
+        }
+        let removals = item.effects.reversed().compactMap { effect -> GraphOp? in
+            guard case .zoom(let zoom) = effect, zoom.source == .derivedFromClicks else {
+                return nil
+            }
+            return .removeEffect(item.id, zoom.id)
+        }
+        let additions = generated.map { GraphOp.addEffect(item.id, .zoom($0)) }
+        do {
+            try perform(
+                GraphPatch(
+                    ops: removals + additions,
+                    label: "Zoom on Clicks",
+                    origin: .user
+                )
+            )
+            notice = "Added \(generated.count) click zoom\(generated.count == 1 ? "" : "s")."
+        } catch {
+            notice = "Click zooms could not be applied."
+        }
     }
 
     public func addBackground(to itemID: ItemID) {

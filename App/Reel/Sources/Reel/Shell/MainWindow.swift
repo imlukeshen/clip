@@ -19,7 +19,7 @@ struct MainWindow: View {
             .onReceive(
                 NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             ) {
-                _ in model.refreshShortcuts()
+                _ in model.refreshSystemAccess()
             }
     }
 }

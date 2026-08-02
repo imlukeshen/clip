@@ -1,4 +1,3 @@
-import AppKit
 import DesignSystem
 import ReelAppCore
 import SwiftUI
@@ -39,22 +38,25 @@ private struct WatcherStatusStrip: View {
                 state: model.isWatching ? .ok : .pending
             )
             StatusItem("Clipboard", state: model.isWatching ? .ok : .pending)
+            clickTrackingStatus
+        }
+    }
+
+    @ViewBuilder private var clickTrackingStatus: some View {
+        switch model.clickTrackingState {
+        case .checking:
+            StatusItem("Checking click track", state: .pending)
+        case .enabled(let seconds):
+            StatusItem("Click track", detail: "\(seconds)s buffer", state: .ok)
+        case .disabled(let reason):
             StatusItem(
                 "Click track off",
+                detail: reason,
                 state: .pending,
                 actionTitle: "Grant access",
-                action: openAccessibilitySettings
+                action: model.requestClickTrackingAccess
             )
         }
     }
 
-    private func openAccessibilitySettings() {
-        guard
-            let url = URL(
-                string:
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            )
-        else { return }
-        NSWorkspace.shared.open(url)
-    }
 }

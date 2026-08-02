@@ -129,6 +129,13 @@ struct EditorView: View {
                 guard let itemID = editor.selectedItem?.id else { return }
                 editor.addZoom(to: itemID)
             }
+            ToolButton(
+                systemName: "cursorarrow.click.2",
+                help: editor.autoZoomUnavailableReason ?? "Zoom on recorded clicks",
+                isDisabled: editor.autoZoomUnavailableReason != nil
+            ) {
+                editor.autoZoomSelectedClip()
+            }
             Spacer()
         }
         .padding(.vertical, 9)
@@ -193,6 +200,7 @@ struct EditorView: View {
             selection: editor.selection,
             playhead: editor.playhead,
             duration: editor.duration,
+            clickMarkers: editor.timelineClickMarkers,
             accent: NSColor(theme.palette.accent),
             accentDim: NSColor(theme.palette.accentDim),
             surface: NSColor(Theme.dark.palette.surfaceSunken),
@@ -257,6 +265,7 @@ private struct ToolButton: View {
     let systemName: String
     let help: String
     var isActive = false
+    var isDisabled = false
     let action: () -> Void
 
     var body: some View {
@@ -268,6 +277,7 @@ private struct ToolButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(isActive ? theme.palette.accent : theme.palette.textSecondary)
+        .disabled(isDisabled)
         .help(help)
     }
 }
@@ -343,6 +353,28 @@ private struct EditorInspector: View {
                         "\(item.sourceRange.start.seconds, specifier: "%.2f")–\(item.sourceRange.end.seconds, specifier: "%.2f")s"
                     )
                     .font(theme.type.numeric.font)
+                }
+
+                LabeledContent("Clicks") {
+                    Text("\(editor.selectedClickCount)")
+                        .font(theme.type.numeric.font)
+                }
+                LabeledContent("Alignment") {
+                    Text(editor.selectedAlignmentDescription)
+                        .font(theme.type.caption.font)
+                }
+
+                Button("Zoom on clicks") {
+                    editor.autoZoomSelectedClip()
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.autoZoomUnavailableReason != nil)
+
+                if let reason = editor.autoZoomUnavailableReason {
+                    Text(reason)
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Picker(

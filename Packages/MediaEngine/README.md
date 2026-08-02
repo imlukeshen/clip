@@ -4,3 +4,5 @@
 assembly, Core Image frame compositing, pure effect evaluation, and atomic
 hardware-backed export. It depends only on `CoreModel` and Apple media
 frameworks; it must never import app UI, storage, conversion, or AI packages.
+Click-aligned event tracks feed a deterministic auto-zoom generator with
+clustering, density limits, clip-local ranges, and stable regenerated IDs.

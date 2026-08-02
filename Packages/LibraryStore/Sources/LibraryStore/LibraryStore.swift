@@ -143,6 +143,73 @@ public actor LibraryStore {
         return try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
     }
 
+    /// Atomically stores an event sidecar and updates its indexed asset summary.
+    @discardableResult
+    public func storeEventTrack(_ track: EventTrack) async throws -> AssetRecord {
+        guard var asset = try await asset(id: track.assetID) else {
+            throw LibraryError.assetNotFound(track.assetID)
+        }
+        let mediaURL = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
+        let eventRelativePath = asset.relativePath.deletingPathExtension + ".events.json"
+        let eventURL = try resolvedURL(forRelativePath: eventRelativePath, under: assetsURL)
+        asset.eventTrackPath = eventRelativePath
+        asset.eventAlignment = track.alignment.libraryKind
+        let alignmentRawValue = asset.eventAlignment?.rawValue
+
+        do {
+            try MetadataCodec.encode(track).write(to: eventURL, options: .atomic)
+            try MetadataCodec.encode(asset).write(
+                to: metadataURL(for: mediaURL),
+                options: .atomic
+            )
+        } catch {
+            throw LibraryError.fileOperationFailed("persist event track")
+        }
+        do {
+            try await database.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE asset
+                        SET event_track_path = ?, event_alignment = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [
+                        eventRelativePath,
+                        alignmentRawValue,
+                        track.assetID.rawValue,
+                    ]
+                )
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("update event track")
+        }
+        changeContinuation.yield(.assetUpdated(track.assetID))
+        return asset
+    }
+
+    /// Loads the asset-owned event sidecar, when one has been associated.
+    public func eventTrack(for id: AssetID) async throws -> EventTrack? {
+        guard let asset = try await asset(id: id) else {
+            throw LibraryError.assetNotFound(id)
+        }
+        guard let path = asset.eventTrackPath else { return nil }
+        let url = try resolvedURL(forRelativePath: path, under: assetsURL)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw LibraryError.assetFileMissing(path)
+        }
+        do {
+            let track = try MetadataCodec.decode(EventTrack.self, from: Data(contentsOf: url))
+            guard track.assetID == id else {
+                throw LibraryError.corruptMetadata(path)
+            }
+            return track
+        } catch let error as LibraryError {
+            throw error
+        } catch {
+            throw LibraryError.corruptMetadata(path)
+        }
+    }
+
     /// Removes an asset and its durable sidecars from the library.
     public func delete(asset id: AssetID, moveToTrash: Bool) async throws {
         guard let record = try await asset(id: id) else {
@@ -349,6 +416,22 @@ public actor LibraryStore {
             }
         } catch {
             throw LibraryError.databaseOperationFailed("vacuum index")
+        }
+    }
+}
+
+extension String {
+    fileprivate var deletingPathExtension: String {
+        (self as NSString).deletingPathExtension
+    }
+}
+
+extension Alignment {
+    fileprivate var libraryKind: EventAlignmentKind {
+        switch self {
+        case .exact: .exact
+        case .estimated: .estimated
+        case .unavailable: .unavailable
         }
     }
 }

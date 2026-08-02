@@ -18,6 +18,7 @@ public final class AppModel {
     public private(set) var conversionQueue: [ConversionQueueItem] = []
     public private(set) var editor: EditorViewModel?
     public private(set) var lastMessage: String?
+    public private(set) var clickTrackingState: ClickTrackingState = .checking
     public var selectedAssetID: String?
 
     private let shortcutReader: ShortcutReader
@@ -74,6 +75,7 @@ public final class AppModel {
             }
             try await runtime.start()
             isWatching = true
+            clickTrackingState = await runtime.clickTrackingState()
             await refreshAssets()
         } catch {
             isWatching = false
@@ -83,6 +85,20 @@ public final class AppModel {
 
     public func refreshShortcuts() {
         shortcutRow = ShortcutRowModel(result: shortcutReader.read())
+    }
+
+    public func refreshSystemAccess() {
+        refreshShortcuts()
+        guard let runtime else { return }
+        Task {
+            clickTrackingState = await runtime.startClickTracking()
+            editor?.setClickTrackingState(clickTrackingState)
+        }
+    }
+
+    public func requestClickTrackingAccess() {
+        EventTapRecorder.requestAuthorization()
+        refreshSystemAccess()
     }
 
     public func accept(_ urls: [URL], source: IngestSource) {
@@ -277,6 +293,7 @@ public final class AppModel {
             let editor = EditorViewModel(
                 document: document,
                 assets: assetMap,
+                clickTrackingState: clickTrackingState,
                 resolving: { id in try await runtime.url(for: id) },
                 persisting: { document, inverse in
                     try await runtime.saveProject(document)
@@ -290,6 +307,8 @@ public final class AppModel {
             Task {
                 do {
                     try await runtime.saveProject(document)
+                    let tracks = await runtime.eventTracks(for: Array(assetMap.keys))
+                    editor.setEventTracks(tracks)
                     editor.start()
                 } catch {
                     lastMessage = "The project could not be created."
