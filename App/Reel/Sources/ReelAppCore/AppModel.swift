@@ -26,6 +26,7 @@ public final class AppModel {
     public private(set) var ingestCount = 0
     public private(set) var conversionQueue: [ConversionQueueItem] = []
     public private(set) var editor: EditorViewModel?
+    public private(set) var imageEditor: ImageEditorViewModel?
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
     public let selection = SelectionModel()
@@ -688,7 +689,7 @@ public final class AppModel {
     }
 
     public func openEditor(for assetID: AssetID) {
-        guard editor == nil,
+        guard editor == nil, imageEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .video }),
             let duration = asset.duration,
             let runtime
@@ -742,6 +743,47 @@ public final class AppModel {
     public func closeEditor() {
         editor?.stop()
         editor = nil
+    }
+
+    public func openImageEditor(
+        for assetID: AssetID,
+        initialTool: ImageEditorTool = .select
+    ) {
+        guard imageEditor == nil, editor == nil,
+            let asset = assets.first(where: { $0.id == assetID && $0.kind == .image }),
+            let runtime
+        else { return }
+        Task {
+            do {
+                let sourceURL = try await runtime.url(for: assetID)
+                let width = max(asset.width ?? 1_920, 1)
+                let height = max(asset.height ?? 1_080, 1)
+                let document = try await runtime.imageDocument(for: assetID)
+                    ?? ImageDocument(
+                        sourceAssetID: assetID,
+                        canvas: ImageCanvas(width: width, height: height)
+                    )
+                let imageEditor = ImageEditorViewModel(
+                    document: document,
+                    sourceURL: sourceURL,
+                    persisting: { document in
+                        try await runtime.saveImageDocument(document)
+                    }
+                )
+                self.imageEditor = imageEditor
+                selectedWorkspace = .photo
+                try await runtime.saveImageDocument(document)
+                imageEditor.start()
+                imageEditor.activate(initialTool)
+            } catch {
+                lastMessage = "The selected image could not be opened."
+            }
+        }
+    }
+
+    public func closeImageEditor() {
+        imageEditor?.stop()
+        imageEditor = nil
     }
 
     private func refreshAssets() async {

@@ -651,6 +651,7 @@ extension LibraryStore {
             LibraryLayout.metadata(in: root),
             LibraryLayout.thumbnails(in: root),
             LibraryLayout.peaks(in: root),
+            LibraryLayout.imageDocuments(in: root),
         ] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }

@@ -101,6 +101,8 @@ struct Titlebar: View {
                     Text("Recent")
                 }
             }
+        } else if let editor = model.imageEditor {
+            Text("Images  ›  \(editor.sourceURL.lastPathComponent)")
         } else if let editor = model.editor {
             Text("Projects  ›  \(editor.document.name)")
         } else {

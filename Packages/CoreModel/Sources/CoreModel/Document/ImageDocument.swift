@@ -343,6 +343,30 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
         case .step(let layer): "Step \(layer.number)"
         }
     }
+
+    public func settingVisibility(_ isVisible: Bool) -> Layer {
+        switch self {
+        case .annotation(var layer): layer.isVisible = isVisible; return .annotation(layer)
+        case .text(var layer): layer.isVisible = isVisible; return .text(layer)
+        case .highlight(var layer): layer.isVisible = isVisible; return .highlight(layer)
+        case .redaction(var layer): layer.isVisible = isVisible; return .redaction(layer)
+        case .blur(var layer): layer.isVisible = isVisible; return .blur(layer)
+        case .padding(var layer): layer.isVisible = isVisible; return .padding(layer)
+        case .step(var layer): layer.isVisible = isVisible; return .step(layer)
+        }
+    }
+
+    public func settingLocked(_ isLocked: Bool) -> Layer {
+        switch self {
+        case .annotation(var layer): layer.isLocked = isLocked; return .annotation(layer)
+        case .text(var layer): layer.isLocked = isLocked; return .text(layer)
+        case .highlight(var layer): layer.isLocked = isLocked; return .highlight(layer)
+        case .redaction(var layer): layer.isLocked = isLocked; return .redaction(layer)
+        case .blur(var layer): layer.isLocked = isLocked; return .blur(layer)
+        case .padding(var layer): layer.isLocked = isLocked; return .padding(layer)
+        case .step(var layer): layer.isLocked = isLocked; return .step(layer)
+        }
+    }
 }
 
 public enum ImagePatch: DocumentPatch {

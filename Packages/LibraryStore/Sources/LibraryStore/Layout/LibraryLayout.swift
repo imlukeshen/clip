@@ -30,4 +30,8 @@ public enum LibraryLayout {
     public static func peaks(in root: URL) -> URL {
         internalDirectory(in: root).appendingPathComponent("peaks", isDirectory: true)
     }
+
+    public static func imageDocuments(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("images", isDirectory: true)
+    }
 }

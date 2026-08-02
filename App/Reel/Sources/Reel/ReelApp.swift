@@ -55,12 +55,18 @@ struct ReelApp: App {
                     AppCommandRouter.run("edit.undo", in: model)
                 }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(model.editor == nil && !model.undoManager.canUndo)
+                    .disabled(
+                        model.editor == nil && model.imageEditor == nil
+                            && !model.undoManager.canUndo
+                    )
                 Button(commandTitle("edit.redo")) {
                     AppCommandRouter.run("edit.redo", in: model)
                 }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(model.editor == nil && !model.undoManager.canRedo)
+                    .disabled(
+                        model.editor == nil && model.imageEditor == nil
+                            && !model.undoManager.canRedo
+                    )
             }
             CommandMenu("Assets") {
                 Button(commandTitle("asset.selectAll")) {

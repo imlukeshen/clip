@@ -117,7 +117,9 @@ private struct ThemedMainWindow: View {
                 HStack(spacing: 0) {
                     LibrarySidebar(model: model)
                     Divider().overlay(theme.palette.line)
-                    if model.selectedWorkspace == .video, model.editor != nil {
+                    if (model.selectedWorkspace == .video && model.editor != nil)
+                        || (model.selectedWorkspace == .photo && model.imageEditor != nil)
+                    {
                         WorkspaceContent(model: model)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {

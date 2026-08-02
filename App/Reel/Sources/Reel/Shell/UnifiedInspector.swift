@@ -1,4 +1,5 @@
 import AppKit
+import CoreModel
 import DesignSystem
 import LibraryStore
 import ReelAppCore
@@ -10,7 +11,9 @@ struct UnifiedInspector: View {
 
     var body: some View {
         Group {
-            if let editor = model.editor {
+            if let editor = model.imageEditor {
+                ImageLayerInspector(editor: editor)
+            } else if let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
             } else {
                 libraryInspector
@@ -75,6 +78,90 @@ struct UnifiedInspector: View {
             Spacer()
         }
         .padding(14)
+    }
+}
+
+private struct ImageLayerInspector: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: ImageEditorViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Layers").font(theme.type.label.font)
+                Spacer()
+                Text("\(editor.document.layers.count)")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            if editor.document.layers.isEmpty {
+                EmptyState(
+                    headline: "No layers yet",
+                    body: "Choose a tool, then drag on the image."
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(Array(editor.document.layers.reversed())) { layer in
+                            layerRow(layer)
+                        }
+                    }
+                }
+            }
+            Divider().overlay(theme.palette.line)
+            if let id = editor.selectedLayerID,
+                let layer = editor.document.layers.first(where: { $0.id == id })
+            {
+                Text(layer.kindName).font(theme.type.label.font)
+                HStack {
+                    Button("Down") { editor.moveLayer(id, by: -1) }
+                    Button("Up") { editor.moveLayer(id, by: 1) }
+                    Spacer()
+                    Button("Delete", role: .destructive) { editor.removeLayer(id) }
+                }
+                .buttonStyle(.borderless)
+                Text("All image edits are non-destructive. The source asset remains unchanged.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            Spacer()
+        }
+        .padding(14)
+    }
+
+    private func layerRow(_ layer: Layer) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                editor.toggleVisibility(layer.id)
+            } label: {
+                Image(systemName: layer.isVisible ? "eye" : "eye.slash")
+                    .frame(width: 18)
+            }
+            .buttonStyle(.plain)
+            Button {
+                editor.selectLayer(layer.id)
+            } label: {
+                Text(layer.kindName)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button {
+                editor.toggleLock(layer.id)
+            } label: {
+                Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
+                    .frame(width: 18)
+            }
+            .buttonStyle(.plain)
+        }
+        .font(theme.type.caption.font)
+        .padding(.horizontal, 7)
+        .frame(height: 34)
+        .background(
+            editor.selectedLayerID == layer.id ? theme.palette.accentDim : Color.clear
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 }
 

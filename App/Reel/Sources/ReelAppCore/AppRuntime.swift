@@ -189,10 +189,30 @@ public actor AppRuntime {
         try await library.appendHistory(inverse, project: project)
     }
 
+    public func imageDocument(for assetID: AssetID) throws -> ImageDocument? {
+        let url = imageDocumentURL(for: assetID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(ImageDocument.self, from: Data(contentsOf: url))
+    }
+
+    public func saveImageDocument(_ document: ImageDocument) throws {
+        let directory = LibraryLayout.imageDocuments(in: libraryRoot)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(document)
+        data.append(0x0A)
+        try data.write(to: imageDocumentURL(for: document.sourceAssetID), options: .atomic)
+    }
+
     public func changes() -> AsyncStream<LibraryChange> {
         library.changes
     }
 
+    private func imageDocumentURL(for assetID: AssetID) -> URL {
+        LibraryLayout.imageDocuments(in: libraryRoot)
+            .appendingPathComponent("\(assetID.rawValue).reelimage")
+    }
 }
 
 public enum AppRuntimeError: Error, Sendable {

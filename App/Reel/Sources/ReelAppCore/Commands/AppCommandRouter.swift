@@ -24,10 +24,12 @@ public enum AppCommandRouter {
             "navigation.pdf", "navigation.convert":
             return .available
         case "edit.undo":
-            return model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
+            return model.imageEditor?.undoManager.canUndo == true
+                || model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
                 ? .available : .unavailable(reason: "There is nothing to undo.")
         case "edit.redo":
-            return model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
+            return model.imageEditor?.undoManager.canRedo == true
+                || model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
                 ? .available : .unavailable(reason: "There is nothing to redo.")
         case "asset.selectAll":
             return model.visibleAssets.isEmpty
@@ -66,10 +68,22 @@ public enum AppCommandRouter {
             model.selectedWorkspace = .convert
             return .completed
         case "edit.undo":
-            if let editor = model.editor { editor.undo() } else { model.undoLibraryAction() }
+            if let editor = model.imageEditor {
+                editor.undo()
+            } else if let editor = model.editor {
+                editor.undo()
+            } else {
+                model.undoLibraryAction()
+            }
             return .completed
         case "edit.redo":
-            if let editor = model.editor { editor.redo() } else { model.redoLibraryAction() }
+            if let editor = model.imageEditor {
+                editor.redo()
+            } else if let editor = model.editor {
+                editor.redo()
+            } else {
+                model.redoLibraryAction()
+            }
             return .completed
         case "asset.selectAll":
             model.selection.selectAll()
