@@ -17,4 +17,5 @@ public enum ModelError: Error, Sendable, Equatable {
     case duplicateItem(ItemID)
     case duplicateEffect(ItemID, EffectID)
     case effectRangeExceedsItem(ItemID, EffectID)
+    case splitTooCloseToBoundary(ItemID, minimumDistance: RationalTime)
 }

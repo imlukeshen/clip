@@ -18,6 +18,10 @@ Implemented milestones:
 - **M4 — Conversion:** a pure conversion planner, remux, VideoToolbox, ImageIO,
   and linked LGPL FFmpeg backends, plus a live-planned conversion queue with
   backend badges and bounded batch execution.
+- **M5 — Composition and playback:** one-track, gapless AVFoundation
+  compositions, proxy/full playback rebuilding, a shared-context effect
+  compositor, and an AppKit timeline with trim, split, reorder, speed, and exact
+  undo/redo.
 
 ## Test
 

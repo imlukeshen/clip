@@ -14,6 +14,7 @@ let package = Package(
         .package(path: "../../Packages/LibraryStore"),
         .package(path: "../../Packages/CaptureKit"),
         .package(path: "../../Packages/ConvertKit"),
+        .package(path: "../../Packages/MediaEngine"),
         .package(path: "../../Packages/DesignSystem"),
     ],
     targets: [
@@ -24,6 +25,7 @@ let package = Package(
                 "LibraryStore",
                 "CaptureKit",
                 "ConvertKit",
+                "MediaEngine",
                 "DesignSystem",
             ]
         ),
@@ -35,11 +37,14 @@ let package = Package(
                 "LibraryStore",
                 "CaptureKit",
                 "ConvertKit",
+                "MediaEngine",
             ]
         ),
         .testTarget(
             name: "ReelAppCoreTests",
-            dependencies: ["ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit"]
+            dependencies: [
+                "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine",
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]

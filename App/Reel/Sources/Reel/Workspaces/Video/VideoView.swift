@@ -1,3 +1,4 @@
+import CoreModel
 import DesignSystem
 import LibraryStore
 import ReelAppCore
@@ -8,6 +9,14 @@ struct VideoView: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        if let editor = model.editor {
+            EditorView(model: model, editor: editor)
+        } else {
+            library
+        }
+    }
+
+    private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceHeader(
                 title: "Video",
@@ -16,10 +25,20 @@ struct VideoView: View {
             )
             WorkspaceDropZone(model: model, workspace: .video)
             HStack(spacing: theme.metrics.spacing.sm) {
-                Chip("Trim silence") { selectionNeeded() }
-                Chip("Zoom on clicks") { selectionNeeded() }
-                Chip("Add captions") { selectionNeeded() }
-                Chip("Background padding") { selectionNeeded() }
+                Button("Open editor") {
+                    guard let selectedAssetID = model.selectedAssetID else { return }
+                    model.openEditor(for: AssetID(rawValue: selectedAssetID))
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(selectedVideo == nil)
+                Chip("Trim silence") {}
+                    .disabled(true)
+                Chip("Zoom on clicks") {}
+                    .disabled(true)
+                Chip("Add captions") {}
+                    .disabled(true)
+                Chip("Background padding") {}
+                    .disabled(true)
             }
             .padding(.top, 18)
             SectionLabel("Projects")
@@ -32,7 +51,10 @@ struct VideoView: View {
         }
     }
 
-    private func selectionNeeded() {
-        // Editor actions arrive in M5; the visible disabled context is intentional in M3.
+    private var selectedVideo: AssetRecord? {
+        guard let selectedAssetID = model.selectedAssetID else { return nil }
+        return model.assets.first {
+            $0.id.rawValue == selectedAssetID && $0.kind == .video
+        }
     }
 }

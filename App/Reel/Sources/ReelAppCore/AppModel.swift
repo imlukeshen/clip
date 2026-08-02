@@ -1,5 +1,6 @@
 import CaptureKit
 import ConvertKit
+import CoreModel
 import Foundation
 import LibraryStore
 import Observation
@@ -15,6 +16,7 @@ public final class AppModel {
     public private(set) var isWatching = false
     public private(set) var ingestCount = 0
     public private(set) var conversionQueue: [ConversionQueueItem] = []
+    public private(set) var editor: EditorViewModel?
     public private(set) var lastMessage: String?
     public var selectedAssetID: String?
 
@@ -248,6 +250,60 @@ public final class AppModel {
 
     public func clearMessage() {
         lastMessage = nil
+    }
+
+    public func openEditor(for assetID: AssetID) {
+        guard editor == nil,
+            let asset = assets.first(where: { $0.id == assetID && $0.kind == .video }),
+            let duration = asset.duration,
+            let runtime
+        else { return }
+        let now = Date()
+        let item = TimelineItem(
+            id: .generate(),
+            assetID: asset.id,
+            sourceRange: TimeRange(start: .zero, duration: duration)
+        )
+        do {
+            let document = try ProjectDocument(
+                id: .generate(),
+                name: URL(fileURLWithPath: asset.displayName)
+                    .deletingPathExtension().lastPathComponent,
+                timeline: Timeline(video: [item]),
+                createdAt: now,
+                modifiedAt: now
+            )
+            let assetMap = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+            let editor = EditorViewModel(
+                document: document,
+                assets: assetMap,
+                resolving: { id in try await runtime.url(for: id) },
+                persisting: { document, inverse in
+                    try await runtime.saveProject(document)
+                    if let inverse {
+                        try await runtime.appendHistory(inverse, project: document.id)
+                    }
+                }
+            )
+            self.editor = editor
+            selectedWorkspace = .video
+            Task {
+                do {
+                    try await runtime.saveProject(document)
+                    editor.start()
+                } catch {
+                    lastMessage = "The project could not be created."
+                    self.editor = nil
+                }
+            }
+        } catch {
+            lastMessage = "The selected clip could not be opened."
+        }
+    }
+
+    public func closeEditor() {
+        editor?.stop()
+        editor = nil
     }
 
     private func refreshAssets() async {

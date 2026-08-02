@@ -17,6 +17,7 @@ test-packages:
 	swift test --package-path Packages/LibraryStore
 	swift test --package-path Packages/CaptureKit
 	swift test --package-path Packages/ConvertKit
+	swift test --package-path Packages/MediaEngine
 	swift test --package-path Packages/DesignSystem
 	swift test --package-path App/Reel
 
@@ -27,10 +28,10 @@ licence-audit:
 	Scripts/check-ffmpeg-license.sh
 
 lint:
-	xcrun swift-format lint --strict --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
+	xcrun swift-format lint --strict --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
 
 format:
-	xcrun swift-format format --in-place --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
+	xcrun swift-format format --in-place --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
 
 ffmpeg:
 	Scripts/build-ffmpeg.sh

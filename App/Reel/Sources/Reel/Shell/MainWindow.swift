@@ -34,15 +34,20 @@ private struct ThemedMainWindow: View {
                 Titlebar(model: model)
                 WorkspaceTabs(model: model)
                 Divider().overlay(theme.palette.line)
-                ScrollView {
+                if model.selectedWorkspace == .video, model.editor != nil {
                     WorkspaceContent(model: model)
-                        .frame(maxWidth: 900, alignment: .leading)
-                        .padding(.horizontal, theme.metrics.spacing.xxl)
-                        .padding(.top, 24)
-                        .padding(.bottom, 32)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        WorkspaceContent(model: model)
+                            .frame(maxWidth: 900, alignment: .leading)
+                            .padding(.horizontal, theme.metrics.spacing.xxl)
+                            .padding(.top, 24)
+                            .padding(.bottom, 32)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .scrollIndicators(.visible)
                 }
-                .scrollIndicators(.visible)
                 StatusBar(model: model)
             }
             if let message = model.lastMessage {

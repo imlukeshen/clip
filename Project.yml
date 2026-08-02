@@ -23,6 +23,8 @@ packages:
     path: Packages/CaptureKit
   ConvertKit:
     path: Packages/ConvertKit
+  MediaEngine:
+    path: Packages/MediaEngine
 
 targets:
   Reel:
@@ -39,6 +41,7 @@ targets:
       - package: LibraryStore
       - package: CaptureKit
       - package: ConvertKit
+      - package: MediaEngine
     configFiles:
       Debug: App/Reel/Config/xcconfig/Debug.xcconfig
       Release: App/Reel/Config/xcconfig/Release.xcconfig

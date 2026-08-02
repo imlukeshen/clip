@@ -63,6 +63,14 @@ public actor AppRuntime {
         await converter.convert(jobs, concurrency: concurrency)
     }
 
+    public func saveProject(_ document: ProjectDocument) async throws {
+        try await library.saveProject(document)
+    }
+
+    public func appendHistory(_ inverse: GraphPatch, project: ProjectID) async throws {
+        try await library.appendHistory(inverse, project: project)
+    }
+
     public func changes() -> AsyncStream<LibraryChange> {
         library.changes
     }
