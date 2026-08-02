@@ -19,12 +19,18 @@ public enum ImageExportFormat: Sendable, Equatable {
         }
     }
 
-    fileprivate var properties: CFDictionary? {
+    fileprivate var properties: CFDictionary {
+        var properties: [CFString: Any] = [
+            kCGImageDestinationEmbedThumbnail: false,
+            kCGImageMetadataShouldExcludeGPS: true,
+            kCGImageMetadataShouldExcludeXMP: true,
+        ]
         switch self {
-        case .png: nil
+        case .png: break
         case .jpeg(let quality), .heic(let quality):
-            [kCGImageDestinationLossyCompressionQuality: min(max(quality, 0), 1)] as CFDictionary
+            properties[kCGImageDestinationLossyCompressionQuality] = min(max(quality, 0), 1)
         }
+        return properties as CFDictionary
     }
 
     fileprivate var isLowQualityLossy: Bool {
@@ -101,10 +107,11 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             1,
             nil
         ) else { throw ImageRenderError.exportFailed }
-        CGImageDestinationAddImage(destination, image, format.properties)
+        CGImageDestinationAddImageAndMetadata(destination, image, nil, format.properties)
         guard CGImageDestinationFinalize(destination) else {
             throw ImageRenderError.exportFailed
         }
+        try stripSensitiveMetadata(at: destinationURL, format: format)
     }
 
     public func exportWarning(
@@ -357,6 +364,7 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
     private func meanPixelate(_ image: CIImage, region: CGRect, blockSize: Int) -> CIImage {
         var result = image
         let block = CGFloat(max(blockSize, 1))
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         var y = region.minY
         while y < region.maxY {
             var x = region.minX
@@ -367,20 +375,32 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
                     width: min(block, region.maxX - x),
                     height: min(block, region.maxY - y)
                 )
-                let average = image.cropped(to: rect).applyingFilter(
-                    "CIAreaAverage",
-                    parameters: [kCIInputExtentKey: CIVector(cgRect: rect)]
-                )
-                let filled = average.transformed(
-                    by: CGAffineTransform(
-                        a: rect.width,
-                        b: 0,
-                        c: 0,
-                        d: rect.height,
-                        tx: rect.minX,
-                        ty: rect.minY
+                let width = max(Int(rect.width.rounded()), 1)
+                let height = max(Int(rect.height.rounded()), 1)
+                var pixels = [UInt8](repeating: 0, count: width * height * 4)
+                pixels.withUnsafeMutableBytes { buffer in
+                    guard let address = buffer.baseAddress else { return }
+                    context.render(
+                        image,
+                        toBitmap: address,
+                        rowBytes: width * 4,
+                        bounds: rect,
+                        format: .RGBA8,
+                        colorSpace: colorSpace
                     )
-                ).cropped(to: rect)
+                }
+                var sums = [UInt64](repeating: 0, count: 4)
+                for index in stride(from: 0, to: pixels.count, by: 4) {
+                    for channel in 0..<4 { sums[channel] += UInt64(pixels[index + channel]) }
+                }
+                let count = Double(width * height) * 255
+                let color = CIColor(
+                    red: Double(sums[0]) / count,
+                    green: Double(sums[1]) / count,
+                    blue: Double(sums[2]) / count,
+                    alpha: Double(sums[3]) / count
+                )
+                let filled = CIImage(color: color).cropped(to: rect)
                 result = filled.composited(over: result)
                 x += block
             }
@@ -488,6 +508,74 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             )
         )
         context.strokePath()
+    }
+
+    private func stripSensitiveMetadata(at url: URL, format: ImageExportFormat) throws {
+        let data = try Data(contentsOf: url)
+        let sanitized: Data
+        switch format {
+        case .png:
+            sanitized = stripPNGMetadata(data)
+        case .jpeg:
+            sanitized = stripJPEGMetadata(data)
+        case .heic:
+            // ImageIO receives nil metadata with GPS/XMP exclusion and thumbnail embedding off.
+            sanitized = data
+        }
+        try sanitized.write(to: url, options: .atomic)
+    }
+
+    private func stripPNGMetadata(_ data: Data) -> Data {
+        let signatureCount = 8
+        guard data.count >= signatureCount else { return data }
+        let strippedTypes: Set<String> = ["eXIf", "tEXt", "zTXt", "iTXt"]
+        var result = Data(data.prefix(signatureCount))
+        var index = signatureCount
+        while index + 12 <= data.count {
+            let length = Int(bigEndianUInt32(in: data, at: index))
+            let end = index + 12 + length
+            guard end <= data.count else { return data }
+            let typeRange = (index + 4)..<(index + 8)
+            let type = String(data: data[typeRange], encoding: .ascii) ?? ""
+            if !strippedTypes.contains(type) {
+                result.append(data[index..<end])
+            }
+            index = end
+            if type == "IEND" { break }
+        }
+        return result
+    }
+
+    private func stripJPEGMetadata(_ data: Data) -> Data {
+        guard data.count >= 4, data[0] == 0xFF, data[1] == 0xD8 else { return data }
+        var result = Data(data.prefix(2))
+        var index = 2
+        while index + 4 <= data.count {
+            guard data[index] == 0xFF else { return data }
+            let marker = data[index + 1]
+            if marker == 0xDA {
+                result.append(data[index...])
+                return result
+            }
+            if marker == 0xD9 {
+                result.append(data[index...])
+                return result
+            }
+            let length = Int(data[index + 2]) << 8 | Int(data[index + 3])
+            let end = index + 2 + length
+            guard length >= 2, end <= data.count else { return data }
+            let isMetadata = (0xE0...0xEF).contains(marker) || marker == 0xFE
+            if !isMetadata { result.append(data[index..<end]) }
+            index = end
+        }
+        return result
+    }
+
+    private func bigEndianUInt32(in data: Data, at index: Int) -> UInt32 {
+        UInt32(data[index]) << 24
+            | UInt32(data[index + 1]) << 16
+            | UInt32(data[index + 2]) << 8
+            | UInt32(data[index + 3])
     }
 }
 
