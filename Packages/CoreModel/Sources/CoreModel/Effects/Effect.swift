@@ -56,6 +56,9 @@ public enum Effect: Codable, Sendable, Equatable, Identifiable {
         case rampOut
         case easing
         case source
+        case scaleAnimation
+        case centerAnimation
+        case preservesLegacyTiming
         case rect
         case padding
         case cornerRadius
@@ -64,6 +67,7 @@ public enum Effect: Codable, Sendable, Equatable, Identifiable {
         case regions
         case mode
         case isDestructiveOnExport
+        case intensityAnimation
         case opacity
         case text
         case position
@@ -98,6 +102,9 @@ public enum Effect: Codable, Sendable, Equatable, Identifiable {
             try container.encode(value.rampOut, forKey: .rampOut)
             try container.encode(value.easing, forKey: .easing)
             try container.encode(value.source, forKey: .source)
+            try container.encode(value.scaleAnimation, forKey: .scaleAnimation)
+            try container.encode(value.centerAnimation, forKey: .centerAnimation)
+            try container.encode(value.preservesLegacyTiming, forKey: .preservesLegacyTiming)
         case .crop(let value):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("crop", forKey: .type)
@@ -121,6 +128,10 @@ public enum Effect: Codable, Sendable, Equatable, Identifiable {
             try container.encode(value.regions, forKey: .regions)
             try container.encode(value.mode, forKey: .mode)
             try container.encode(value.isDestructiveOnExport, forKey: .isDestructiveOnExport)
+            try container.encodeIfPresent(
+                value.intensityAnimation,
+                forKey: .intensityAnimation
+            )
         case .cursor(let value):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("cursor", forKey: .type)

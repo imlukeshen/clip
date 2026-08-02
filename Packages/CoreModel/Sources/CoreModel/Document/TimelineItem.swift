@@ -10,8 +10,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var speed: Double
     public var effects: [Effect]
     public var isEnabled: Bool
-    public var transform: Transform2D
-    public var opacity: Double
+    public var transform: Animatable<Transform2D>
+    public var opacity: Animatable<Double>
     public var blendMode: BlendMode
     public var videoFade: FadeEnvelope
     public var audioFade: FadeEnvelope
@@ -26,6 +26,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         isEnabled: Bool = true,
         transform: Transform2D = .identity,
         opacity: Double = 1,
+        transformAnimation: Animatable<Transform2D>? = nil,
+        opacityAnimation: Animatable<Double>? = nil,
         blendMode: BlendMode = .normal,
         videoFade: FadeEnvelope = .none,
         audioFade: FadeEnvelope = .none
@@ -37,8 +39,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         self.speed = speed
         self.effects = effects
         self.isEnabled = isEnabled
-        self.transform = transform
-        self.opacity = opacity
+        self.transform = transformAnimation ?? Animatable(constant: transform)
+        self.opacity = opacityAnimation ?? Animatable(constant: opacity)
         self.blendMode = blendMode
         self.videoFade = videoFade
         self.audioFade = audioFade
@@ -79,8 +81,12 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         speed = try container.decodeIfPresent(Double.self, forKey: .speed) ?? 1
         effects = try container.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
-        transform = try container.decodeIfPresent(Transform2D.self, forKey: .transform) ?? .identity
-        opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        transform =
+            try container.decodeIfPresent(Animatable<Transform2D>.self, forKey: .transform)
+            ?? Animatable(constant: .identity)
+        opacity =
+            try container.decodeIfPresent(Animatable<Double>.self, forKey: .opacity)
+            ?? Animatable(constant: 1)
         blendMode = try container.decodeIfPresent(BlendMode.self, forKey: .blendMode) ?? .normal
         videoFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .videoFade) ?? .none
         audioFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .audioFade) ?? .none

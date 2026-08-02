@@ -56,8 +56,9 @@ extension ProjectDocument {
             guard trackIDs.insert(track.id).inserted else {
                 throw ModelError.duplicateTrack(track.id)
             }
-            guard track.gain.isFinite else {
-                throw ModelError.invalidTrackGain(track.id, track.gain)
+            let gainValues = [track.gain.constant] + track.gain.keyframes.map(\.value)
+            guard gainValues.allSatisfy(\.isFinite), validKeyframeTimes(track.gain.keyframes) else {
+                throw ModelError.invalidTrackGain(track.id, track.gain.constant)
             }
             var previousEnd: RationalTime?
             for item in track.items {
@@ -92,8 +93,12 @@ extension ProjectDocument {
         guard item.timelineStart >= .zero else {
             throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
         }
-        guard item.opacity.isFinite, (0...1).contains(item.opacity) else {
-            throw ModelError.invalidOpacity(item.id, item.opacity)
+        let opacityValues = [item.opacity.constant] + item.opacity.keyframes.map(\.value)
+        guard opacityValues.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+            validKeyframeTimes(item.opacity.keyframes),
+            item.opacity.keyframes.allSatisfy({ $0.time <= item.timelineDuration })
+        else {
+            throw ModelError.invalidOpacity(item.id, item.opacity.constant)
         }
         for fade in [item.videoFade, item.audioFade] {
             guard fade.fadeIn >= .zero,
@@ -104,14 +109,18 @@ extension ProjectDocument {
                 throw ModelError.invalidFade(item.id)
             }
         }
-        let transform = item.transform
-        guard transform.translationX.isFinite,
-            transform.translationY.isFinite,
-            transform.scaleX.isFinite,
-            transform.scaleY.isFinite,
-            transform.rotationDegrees.isFinite,
-            transform.scaleX != 0,
-            transform.scaleY != 0
+        let transforms = [item.transform.constant] + item.transform.keyframes.map(\.value)
+        guard validKeyframeTimes(item.transform.keyframes),
+            item.transform.keyframes.allSatisfy({ $0.time <= item.timelineDuration }),
+            transforms.allSatisfy({ transform in
+                transform.translationX.isFinite
+                    && transform.translationY.isFinite
+                    && transform.scaleX.isFinite
+                    && transform.scaleY.isFinite
+                    && transform.rotationDegrees.isFinite
+                    && transform.scaleX != 0
+                    && transform.scaleY != 0
+            })
         else {
             throw ModelError.invalidTransform(item.id)
         }
@@ -128,6 +137,29 @@ extension ProjectDocument {
             else {
                 throw ModelError.effectRangeExceedsItem(item.id, effect.id)
             }
+            switch effect {
+            case .blur(let blur):
+                if let animation = blur.intensityAnimation {
+                    guard validKeyframeTimes(animation.keyframes),
+                        ([animation.constant] + animation.keyframes.map(\.value)).allSatisfy({
+                            $0.isFinite && $0 >= 0
+                        })
+                    else { throw ModelError.invalidEdit("Invalid blur keyframes.") }
+                }
+            case .zoom(let zoom):
+                guard validKeyframeTimes(zoom.scaleAnimation.keyframes),
+                    validKeyframeTimes(zoom.centerAnimation.keyframes)
+                else { throw ModelError.invalidEdit("Invalid zoom keyframes.") }
+            default:
+                break
+            }
         }
+    }
+
+    private func validKeyframeTimes<Value: AnimatableValue>(
+        _ keyframes: [Keyframe<Value>]
+    ) -> Bool {
+        var seen = Set<RationalTime>()
+        return keyframes.allSatisfy { $0.time >= .zero && seen.insert($0.time).inserted }
     }
 }

@@ -106,11 +106,12 @@ enum VideoLayerRenderer {
             )
 
             let timelineLocal = projectTime - layer.item.timelineStart
+            let itemTransform = layer.item.transform.value(at: timelineLocal)
             let sourceLocal = timelineLocal.scaled(
                 by: layer.item.speed
             )
             let effectBackground: CIImage
-            if index == 0, layer.item.transform == .identity {
+            if index == 0, itemTransform == .identity {
                 // This is deliberately the v1 path: identical source, effect,
                 // and canvas-background inputs preserve migrated rendering.
                 effectBackground = FrameEffectRenderer.background(
@@ -131,14 +132,17 @@ enum VideoLayerRenderer {
             )
             image = transformed(
                 image,
-                by: layer.item.transform,
+                by: itemTransform,
                 in: bounds
             )
             let transitionOpacity = layer.item.videoFade.value(
                 at: timelineLocal,
                 duration: layer.item.timelineDuration
             )
-            image = applyingOpacity(layer.item.opacity * transitionOpacity, to: image)
+            image = applyingOpacity(
+                layer.item.opacity.value(at: timelineLocal) * transitionOpacity,
+                to: image
+            )
             composed = blend(image, over: composed, mode: layer.item.blendMode)
         }
         return composed.cropped(to: bounds)

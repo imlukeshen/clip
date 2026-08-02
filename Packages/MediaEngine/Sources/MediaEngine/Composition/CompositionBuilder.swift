@@ -203,15 +203,37 @@ public struct CompositionBuilder: Sendable {
             }
             let input = AVMutableAudioMixInputParameters(track: compositionTrack)
             let audible = !modelTrack.isMuted && (!anySolo || modelTrack.isSolo)
-            let linearGain = audible ? pow(10, modelTrack.gain / 20) : 0
-            input.setVolume(Float(linearGain), at: .zero)
+            let initialGain = linearGain(
+                decibels: modelTrack.gain.value(at: .zero),
+                audible: audible
+            )
+            input.setVolume(initialGain, at: .zero)
             if audible {
+                var previousTime = RationalTime.zero
+                var previousGain = initialGain
+                for keyframe in modelTrack.gain.keyframes where keyframe.time > .zero {
+                    let nextGain = linearGain(decibels: keyframe.value, audible: true)
+                    input.setVolumeRamp(
+                        fromStartVolume: previousGain,
+                        toEndVolume: nextGain,
+                        timeRange: CMTimeRange(
+                            start: previousTime.cmTime,
+                            duration: (keyframe.time - previousTime).cmTime
+                        )
+                    )
+                    previousTime = keyframe.time
+                    previousGain = nextGain
+                }
                 for item in modelTrack.items where item.isEnabled {
                     let fade = item.audioFade
                     if fade.fadeIn > .zero {
+                        let itemGain = linearGain(
+                            decibels: modelTrack.gain.value(at: item.timelineStart),
+                            audible: true
+                        )
                         input.setVolumeRamp(
                             fromStartVolume: 0,
-                            toEndVolume: Float(linearGain),
+                            toEndVolume: itemGain,
                             timeRange: CMTimeRange(
                                 start: item.timelineStart.cmTime,
                                 duration: fade.fadeIn.cmTime
@@ -219,11 +241,16 @@ public struct CompositionBuilder: Sendable {
                         )
                     }
                     if fade.fadeOut > .zero {
+                        let fadeStart = item.timelineEnd - fade.fadeOut
+                        let itemGain = linearGain(
+                            decibels: modelTrack.gain.value(at: fadeStart),
+                            audible: true
+                        )
                         input.setVolumeRamp(
-                            fromStartVolume: Float(linearGain),
+                            fromStartVolume: itemGain,
                             toEndVolume: 0,
                             timeRange: CMTimeRange(
-                                start: (item.timelineEnd - fade.fadeOut).cmTime,
+                                start: fadeStart.cmTime,
                                 duration: fade.fadeOut.cmTime
                             )
                         )
@@ -236,6 +263,10 @@ public struct CompositionBuilder: Sendable {
         let mix = AVMutableAudioMix()
         mix.inputParameters = parameters
         return mix
+    }
+
+    private func linearGain(decibels: Double, audible: Bool) -> Float {
+        audible ? Float(pow(10, decibels / 20)) : 0
     }
 
     private func validateSourceRange(_ item: TimelineItem, in asset: AVURLAsset) async throws {

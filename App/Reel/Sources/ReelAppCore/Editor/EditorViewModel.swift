@@ -81,6 +81,35 @@ public final class EditorViewModel {
         document.timeline.videoTracks.first { $0.id == targetedVideoTrackID }
     }
 
+    public var selectedLocalTime: RationalTime {
+        guard let selectedItem else { return .zero }
+        return min(max(playhead - selectedItem.timelineStart, .zero), selectedItem.timelineDuration)
+    }
+
+    public var selectedOpacity: Double {
+        selectedItem?.opacity.value(at: selectedLocalTime) ?? 1
+    }
+
+    public var selectedTransform: Transform2D {
+        selectedItem?.transform.value(at: selectedLocalTime) ?? .identity
+    }
+
+    public var targetedGain: Double {
+        targetedVideoTrack?.gain.value(at: playhead) ?? 0
+    }
+
+    public var hasOpacityKeyframeAtPlayhead: Bool {
+        selectedItem?.opacity.keyframes.contains { $0.time == selectedLocalTime } == true
+    }
+
+    public var hasTransformKeyframeAtPlayhead: Bool {
+        selectedItem?.transform.keyframes.contains { $0.time == selectedLocalTime } == true
+    }
+
+    public var hasGainKeyframeAtPlayhead: Bool {
+        targetedVideoTrack?.gain.keyframes.contains { $0.time == playhead } == true
+    }
+
     public var assetNames: [AssetID: String] {
         assets.mapValues(\.displayName)
     }
@@ -492,6 +521,123 @@ public final class EditorViewModel {
         updateTargetTrack { $0.isSolo.toggle() }
     }
 
+    public func setSelectedOpacity(_ value: Double) {
+        guard let selectedItem else { return }
+        if selectedItem.opacity.keyframes.isEmpty {
+            updateItem(selectedItem.id, label: "Set Opacity") {
+                $0.opacity.constant = value
+            }
+        } else {
+            setOpacityKeyframe(value)
+        }
+    }
+
+    public func setOpacityKeyframe(_ value: Double? = nil) {
+        guard let selectedItem else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.setOpacityKeyframe(
+                    in: document,
+                    itemID: selectedItem.id,
+                    at: selectedLocalTime,
+                    value: value ?? selectedOpacity
+                )
+            )
+        } catch {
+            notice = "The opacity keyframe could not be set."
+        }
+    }
+
+    public func setSelectedScale(_ scale: Double) {
+        guard let selectedItem else { return }
+        var transform = selectedTransform
+        transform.scaleX = scale
+        transform.scaleY = scale
+        if selectedItem.transform.keyframes.isEmpty {
+            updateItem(selectedItem.id, label: "Set Scale") {
+                $0.transform.constant = transform
+            }
+        } else {
+            setTransformKeyframe(transform)
+        }
+    }
+
+    public func setTransformKeyframe(_ value: Transform2D? = nil) {
+        guard let selectedItem else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.setTransformKeyframe(
+                    in: document,
+                    itemID: selectedItem.id,
+                    at: selectedLocalTime,
+                    value: value ?? selectedTransform
+                )
+            )
+        } catch {
+            notice = "The transform keyframe could not be set."
+        }
+    }
+
+    public func setTargetedGain(_ decibels: Double) {
+        guard let track = targetedVideoTrack else { return }
+        if track.gain.keyframes.isEmpty {
+            updateTargetTrack { $0.gain.constant = decibels }
+        } else {
+            setGainKeyframe(decibels)
+        }
+    }
+
+    public func setGainKeyframe(_ decibels: Double? = nil) {
+        guard let track = targetedVideoTrack else { return }
+        do {
+            try perform(
+                TimelineEditPlanner.setGainKeyframe(
+                    in: document,
+                    trackID: track.id,
+                    at: playhead,
+                    decibels: decibels ?? targetedGain
+                )
+            )
+        } catch {
+            notice = "The gain keyframe could not be set."
+        }
+    }
+
+    public func setEffectKeyframe(_ effect: Effect) {
+        guard let selectedItem else { return }
+        do {
+            let patch: GraphPatch
+            switch effect {
+            case .blur(let blur):
+                patch = try TimelineEditPlanner.setBlurIntensityKeyframe(
+                    in: document,
+                    itemID: selectedItem.id,
+                    effectID: blur.id,
+                    at: selectedLocalTime.scaled(by: selectedItem.speed),
+                    value: blur.intensity(
+                        at: selectedLocalTime.scaled(by: selectedItem.speed)
+                    )
+                )
+            case .zoom(let zoom):
+                patch = try TimelineEditPlanner.setZoomScaleKeyframe(
+                    in: document,
+                    itemID: selectedItem.id,
+                    effectID: zoom.id,
+                    at: selectedLocalTime.scaled(by: selectedItem.speed),
+                    value: zoom.scaleAnimation.value(
+                        at: selectedLocalTime.scaled(by: selectedItem.speed)
+                    )
+                )
+            default:
+                notice = "This effect has no numeric keyframe control."
+                return
+            }
+            try perform(patch)
+        } catch {
+            notice = "The effect keyframe could not be set."
+        }
+    }
+
     public func insertSelectedSource(overwrite: Bool) {
         guard let source = selectedItem,
             let trackID = targetedVideoTrackID ?? document.timeline.videoTracks.first?.id
@@ -822,6 +968,30 @@ public final class EditorViewModel {
             )
         } catch {
             notice = "The track state could not be changed."
+        }
+    }
+
+    private func updateItem(
+        _ id: ItemID,
+        label: String,
+        mutation: (inout TimelineItem) -> Void
+    ) {
+        for track in document.timeline.videoTracks + document.timeline.audioTracks {
+            guard let index = track.items.firstIndex(where: { $0.id == id }) else { continue }
+            var items = track.items
+            mutation(&items[index])
+            do {
+                try perform(
+                    GraphPatch(
+                        ops: [.setTrackItems(track.id, items)],
+                        label: label,
+                        origin: .user
+                    )
+                )
+            } catch {
+                notice = "The keyframe value could not be changed."
+            }
+            return
         }
     }
 

@@ -11,7 +11,7 @@ public struct Track: Codable, Sendable, Equatable, Identifiable {
     public var isMuted: Bool
     public var isSolo: Bool
     /// Track gain in decibels. It is meaningful for audio tracks only.
-    public var gain: Double
+    public var gain: Animatable<Double>
 
     public init(
         id: TrackID,
@@ -21,7 +21,8 @@ public struct Track: Codable, Sendable, Equatable, Identifiable {
         isLocked: Bool = false,
         isMuted: Bool = false,
         isSolo: Bool = false,
-        gain: Double = 0
+        gain: Double = 0,
+        gainAnimation: Animatable<Double>? = nil
     ) {
         self.id = id
         self.name = name
@@ -30,7 +31,7 @@ public struct Track: Codable, Sendable, Equatable, Identifiable {
         self.isLocked = isLocked
         self.isMuted = isMuted
         self.isSolo = isSolo
-        self.gain = gain
+        self.gain = gainAnimation ?? Animatable(constant: gain)
     }
 }
 

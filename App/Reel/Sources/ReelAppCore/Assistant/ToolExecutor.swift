@@ -276,6 +276,89 @@ public struct ToolExecutor: Sendable {
                 TimelineEditPlanner.setSpeed(of: arguments.itemID, to: arguments.speed),
                 turnID: turnID)
             message = "Changed the clip speed."
+        case "setKeyframe":
+            let arguments = try invocation.arguments.decode(KeyframeArguments.self)
+            let easing = Easing(rawValue: arguments.easing ?? "smoothstep") ?? .smoothstep
+            let planned: GraphPatch
+            switch arguments.property {
+            case "opacity":
+                guard let itemID = arguments.itemID, let value = arguments.value.number else {
+                    throw ToolExecutorError.invalidArguments("Opacity needs itemID and a number")
+                }
+                planned = try TimelineEditPlanner.setOpacityKeyframe(
+                    in: context.document,
+                    itemID: itemID,
+                    at: RationalTime(seconds: arguments.time),
+                    value: value,
+                    easing: easing
+                )
+            case "gain":
+                guard let trackID = arguments.trackID, let value = arguments.value.number else {
+                    throw ToolExecutorError.invalidArguments("Gain needs trackID and decibels")
+                }
+                planned = try TimelineEditPlanner.setGainKeyframe(
+                    in: context.document,
+                    trackID: trackID,
+                    at: RationalTime(seconds: arguments.time),
+                    decibels: value,
+                    easing: easing
+                )
+            case "blurRadius":
+                guard let itemID = arguments.itemID,
+                    let effectID = arguments.effectID,
+                    let value = arguments.value.number
+                else {
+                    throw ToolExecutorError.invalidArguments(
+                        "Blur radius needs itemID, effectID, and a number"
+                    )
+                }
+                planned = try TimelineEditPlanner.setBlurIntensityKeyframe(
+                    in: context.document,
+                    itemID: itemID,
+                    effectID: effectID,
+                    at: RationalTime(seconds: arguments.time),
+                    value: value,
+                    easing: easing
+                )
+            case "zoomScale":
+                guard let itemID = arguments.itemID,
+                    let effectID = arguments.effectID,
+                    let value = arguments.value.number
+                else {
+                    throw ToolExecutorError.invalidArguments(
+                        "Zoom scale needs itemID, effectID, and a number"
+                    )
+                }
+                planned = try TimelineEditPlanner.setZoomScaleKeyframe(
+                    in: context.document,
+                    itemID: itemID,
+                    effectID: effectID,
+                    at: RationalTime(seconds: arguments.time),
+                    value: value,
+                    easing: easing
+                )
+            case "transform":
+                guard let itemID = arguments.itemID,
+                    case .object(let fields) = arguments.value
+                else {
+                    throw ToolExecutorError.invalidArguments(
+                        "Transform needs itemID and transform fields"
+                    )
+                }
+                planned = try TimelineEditPlanner.setTransformKeyframe(
+                    in: context.document,
+                    itemID: itemID,
+                    at: RationalTime(seconds: arguments.time),
+                    value: try transform(from: fields),
+                    easing: easing
+                )
+            default:
+                throw ToolExecutorError.invalidArguments(
+                    "Property must be opacity, gain, transform, blurRadius, or zoomScale"
+                )
+            }
+            patch = assistant(planned, turnID: turnID)
+            message = "Set the \(arguments.property) keyframe."
         case "addZoom":
             let arguments = try invocation.arguments.decode(ZoomArguments.self)
             let target = try item(arguments.itemID, in: context.document)
@@ -505,6 +588,15 @@ private struct SpeedArguments: Codable {
     var itemID: ItemID
     var speed: Double
 }
+private struct KeyframeArguments: Codable {
+    var property: String
+    var time: Double
+    var value: JSONValue
+    var itemID: ItemID?
+    var trackID: TrackID?
+    var effectID: EffectID?
+    var easing: String?
+}
 private struct ZoomArguments: Codable {
     struct RangeValue: Codable {
         var start: Double
@@ -614,6 +706,24 @@ private func backgroundStyle(_ value: JSONValue) throws -> BackgroundStyle {
         }
     }
     throw ToolExecutorError.invalidArguments("Background style needs RGBA channels or assetID")
+}
+
+private func transform(from fields: [String: JSONValue]) throws -> Transform2D {
+    guard let translationX = fields["translationX"]?.number,
+        let translationY = fields["translationY"]?.number,
+        let scaleX = fields["scaleX"]?.number,
+        let scaleY = fields["scaleY"]?.number,
+        let rotation = fields["rotationDegrees"]?.number
+    else {
+        throw ToolExecutorError.invalidArguments("Transform is missing numeric fields")
+    }
+    return Transform2D(
+        translationX: translationX,
+        translationY: translationY,
+        scaleX: scaleX,
+        scaleY: scaleY,
+        rotationDegrees: rotation
+    )
 }
 
 extension JSONValue {

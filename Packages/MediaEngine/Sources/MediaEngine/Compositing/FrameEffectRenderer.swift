@@ -201,16 +201,16 @@ enum FrameEffectRenderer {
             else { continue }
             let blurred: CIImage
             switch value.mode {
-            case .gaussian(let radius):
+            case .gaussian:
                 blurred = result.clampedToExtent().applyingFilter(
                     "CIGaussianBlur",
-                    parameters: [kCIInputRadiusKey: max(radius, 0)]
+                    parameters: [kCIInputRadiusKey: max(value.intensity(at: time), 0)]
                 ).cropped(to: bounds)
-            case .pixelate(let size):
+            case .pixelate:
                 blurred = result.applyingFilter(
                     "CIPixellate",
                     parameters: [
-                        kCIInputScaleKey: max(size, 1),
+                        kCIInputScaleKey: max(value.intensity(at: time), 1),
                         kCIInputCenterKey: CIVector(x: bounds.midX, y: bounds.midY),
                     ]
                 ).cropped(to: bounds)

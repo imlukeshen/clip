@@ -225,6 +225,44 @@ struct CompositionBuilderTests {
         #expect(pixel(in: renderBytes(full, bounds: bounds), width: 20, x: 10, y: 10).b > 245)
     }
 
+    @Test("Opacity keyframes animate through the shared compositor")
+    func opacityKeyframesRender() {
+        let bounds = CGRect(x: 0, y: 0, width: 20, height: 20)
+        let source = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: 1))
+            .cropped(to: bounds)
+        let animation = Animatable(
+            constant: 0.0,
+            keyframes: [
+                Keyframe(time: .zero, value: 0),
+                Keyframe(time: RationalTime(seconds: 1), value: 1),
+            ]
+        )
+        let item = TimelineItem(
+            id: ItemID(rawValue: "opacity"),
+            assetID: AssetID(rawValue: "white"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 2)),
+            opacityAnimation: animation
+        )
+        let layer = ReelVideoLayer(
+            item: item,
+            preferredTransform: .identity,
+            sourceTrackID: 1
+        )
+        let output = VideoLayerRenderer.compose(
+            [(layer, source)],
+            at: RationalTime(seconds: 0.5),
+            bounds: bounds,
+            background: CIImage(color: .black).cropped(to: bounds)
+        )
+        let value = pixel(
+            in: renderBytes(output, bounds: bounds),
+            width: 20,
+            x: 10,
+            y: 10
+        ).r
+        #expect((180...195).contains(Int(value)))
+    }
+
     @Test("Builder emits overlapping V1 and V2 source tracks and ignores disabled tracks")
     func builderCreatesV2Instructions() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -317,7 +355,14 @@ struct CompositionBuilderTests {
                         name: "A2",
                         items: [item("audio-2")],
                         isSolo: true,
-                        gain: -6
+                        gain: -6,
+                        gainAnimation: Animatable(
+                            constant: -6,
+                            keyframes: [
+                                Keyframe(time: .zero, value: -6),
+                                Keyframe(time: RationalTime(seconds: 0.2), value: 0),
+                            ]
+                        )
                     ),
                     Track(
                         id: TrackID(rawValue: "a3"),
@@ -343,6 +388,12 @@ struct CompositionBuilderTests {
         #expect(volumes[0] == 0)
         #expect(abs(volumes[1] - 0.501_187) < 0.001)
         #expect(volumes[2] == 0)
+        let gainRamp = volumeRamp(
+            built.audioMix.inputParameters[1],
+            at: RationalTime(seconds: 0.1).cmTime
+        )
+        #expect(abs(gainRamp.start - 0.501_187) < 0.001)
+        #expect(abs(gainRamp.end - 1) < 0.001)
     }
 
     private func renderBytes(_ image: CIImage, bounds: CGRect) -> [UInt8] {
@@ -383,6 +434,26 @@ struct CompositionBuilderTests {
             return -1
         }
         return start
+    }
+
+    private func volumeRamp(
+        _ parameters: AVAudioMixInputParameters,
+        at time: CMTime
+    ) -> (start: Float, end: Float) {
+        var start: Float = -1
+        var end: Float = -1
+        var range = CMTimeRange.invalid
+        guard
+            parameters.getVolumeRamp(
+                for: time,
+                startVolume: &start,
+                endVolume: &end,
+                timeRange: &range
+            )
+        else {
+            return (-1, -1)
+        }
+        return (start, end)
     }
 
     private func makeMovie(at url: URL, shade: UInt8) async throws {

@@ -17,6 +17,13 @@ struct ToolExecutorTests {
             call("splitClip", ["itemID": .string("one"), "at": .number(2)]),
             call("reorderClips", ["order": .array([.string("two"), .string("one")])]),
             call("setSpeed", ["itemID": .string("one"), "speed": .number(1.5)]),
+            call(
+                "setKeyframe",
+                [
+                    "property": .string("opacity"), "time": .number(1.25),
+                    "value": .number(0.65), "itemID": .string("one"),
+                ]
+            ),
             call("timeline.rippleDelete", ["itemID": .string("one")]),
             call(
                 "timeline.slip",

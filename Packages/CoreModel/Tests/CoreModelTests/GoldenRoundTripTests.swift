@@ -10,8 +10,8 @@ import Testing
     #expect(document.timeline.videoTracks.map(\.id) == [TrackID(rawValue: "v1")])
     #expect(document.timeline.video.count == 1)
     #expect(document.timeline.video[0].timelineStart == .zero)
-    #expect(document.timeline.video[0].transform == .identity)
-    #expect(document.timeline.video[0].opacity == 1)
+    #expect(document.timeline.video[0].transform == Animatable(constant: .identity))
+    #expect(document.timeline.video[0].opacity == Animatable(constant: 1))
     #expect(document.timeline.video[0].blendMode == .normal)
 
     let migrated = try document.encodedJSON()

@@ -28,6 +28,13 @@ public enum ZoomEvaluator {
         else {
             return .identity
         }
+        if !effect.preservesLegacyTiming {
+            let scale = max(effect.scaleAnimation.value(at: time), 1)
+            return ZoomState(
+                center: clampCentre(effect.centerAnimation.value(at: time), scale: scale),
+                scale: scale
+            )
+        }
         let rampIn = rampProgress(time - effect.range.start, duration: effect.rampIn)
         let rampOut = rampProgress(effect.range.end - time, duration: effect.rampOut)
         let progress = easing(min(rampIn, rampOut), curve: effect.easing)

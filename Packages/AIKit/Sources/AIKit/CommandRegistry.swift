@@ -191,6 +191,14 @@ public enum CommandRegistry {
             "setSpeed", "Set Speed", .clip, exposure: .always,
             required: ["itemID", "speed"], properties: ["itemID": string, "speed": number]),
         command(
+            "setKeyframe", "Set Keyframe", .effect, exposure: .always,
+            required: ["property", "time", "value"],
+            properties: [
+                "property": string, "time": number, "value": keyframeValue,
+                "itemID": string, "trackID": string, "effectID": string,
+                "easing": string,
+            ]),
+        command(
             "addZoom", "Add Zoom", .effect, exposure: .always,
             required: ["itemID", "range", "center", "scale"],
             properties: ["itemID": string, "range": range, "center": point, "scale": number]),
@@ -305,6 +313,9 @@ public enum CommandRegistry {
     private static let rect: JSONValue = typedObject(
         ["x": number, "y": number, "width": number, "height": number],
         required: ["x", "y", "width", "height"])
+    private static let keyframeValue: JSONValue = .object([
+        "anyOf": .array([number, object])
+    ])
 
     private static func array(_ item: JSONValue) -> JSONValue {
         .object(["type": .string("array"), "items": item])

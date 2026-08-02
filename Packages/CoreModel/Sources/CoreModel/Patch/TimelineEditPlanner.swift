@@ -437,6 +437,113 @@ public enum TimelineEditPlanner {
         items[location.index].audioFade = FadeEnvelope(fadeIn: fadeIn, fadeOut: fadeOut)
         return replacementPatch(trackID: location.track.id, items: items, label: "Audio Fade")
     }
+
+    public static func setOpacityKeyframe(
+        in document: ProjectDocument,
+        itemID: ItemID,
+        at localTime: RationalTime,
+        value: Double,
+        easing: Easing = .smoothstep
+    ) throws -> GraphPatch {
+        guard (0...1).contains(value) else { throw ModelError.invalidOpacity(itemID, value) }
+        let location = try itemLocation(in: document, itemID: itemID)
+        var items = location.track.items
+        items[location.index].opacity.setKeyframe(
+            Keyframe(time: localTime, value: value, easing: easing)
+        )
+        return replacementPatch(trackID: location.track.id, items: items, label: "Opacity Keyframe")
+    }
+
+    public static func setTransformKeyframe(
+        in document: ProjectDocument,
+        itemID: ItemID,
+        at localTime: RationalTime,
+        value: Transform2D,
+        easing: Easing = .smoothstep
+    ) throws -> GraphPatch {
+        let location = try itemLocation(in: document, itemID: itemID)
+        var items = location.track.items
+        items[location.index].transform.setKeyframe(
+            Keyframe(time: localTime, value: value, easing: easing)
+        )
+        return replacementPatch(
+            trackID: location.track.id,
+            items: items,
+            label: "Transform Keyframe"
+        )
+    }
+
+    public static func setGainKeyframe(
+        in document: ProjectDocument,
+        trackID: TrackID,
+        at projectTime: RationalTime,
+        decibels: Double,
+        easing: Easing = .smoothstep
+    ) throws -> GraphPatch {
+        guard decibels.isFinite else { throw ModelError.invalidTrackGain(trackID, decibels) }
+        var track = try track(in: document, id: trackID)
+        track.gain.setKeyframe(
+            Keyframe(time: projectTime, value: decibels, easing: easing)
+        )
+        return GraphPatch(ops: [.setTrack(track)], label: "Gain Keyframe", origin: .user)
+    }
+
+    public static func setBlurIntensityKeyframe(
+        in document: ProjectDocument,
+        itemID: ItemID,
+        effectID: EffectID,
+        at localTime: RationalTime,
+        value: Double,
+        easing: Easing = .smoothstep
+    ) throws -> GraphPatch {
+        let location = try itemLocation(in: document, itemID: itemID)
+        var items = location.track.items
+        guard
+            let effectIndex = items[location.index].effects.firstIndex(where: {
+                $0.id == effectID
+            }), case .blur(var blur) = items[location.index].effects[effectIndex]
+        else {
+            throw ModelError.effectNotFound(itemID, effectID)
+        }
+        var animation = blur.intensityAnimation ?? Animatable(constant: blur.mode.constantIntensity)
+        animation.setKeyframe(Keyframe(time: localTime, value: value, easing: easing))
+        blur.intensityAnimation = animation
+        items[location.index].effects[effectIndex] = .blur(blur)
+        return replacementPatch(
+            trackID: location.track.id,
+            items: items,
+            label: "Blur Keyframe"
+        )
+    }
+
+    public static func setZoomScaleKeyframe(
+        in document: ProjectDocument,
+        itemID: ItemID,
+        effectID: EffectID,
+        at localTime: RationalTime,
+        value: Double,
+        easing: Easing = .smoothstep
+    ) throws -> GraphPatch {
+        let location = try itemLocation(in: document, itemID: itemID)
+        var items = location.track.items
+        guard
+            let effectIndex = items[location.index].effects.firstIndex(where: {
+                $0.id == effectID
+            }), case .zoom(var zoom) = items[location.index].effects[effectIndex]
+        else {
+            throw ModelError.effectNotFound(itemID, effectID)
+        }
+        zoom.scaleAnimation.setKeyframe(
+            Keyframe(time: localTime, value: value, easing: easing)
+        )
+        zoom.preservesLegacyTiming = false
+        items[location.index].effects[effectIndex] = .zoom(zoom)
+        return replacementPatch(
+            trackID: location.track.id,
+            items: items,
+            label: "Zoom Keyframe"
+        )
+    }
 }
 
 extension TimelineEditPlanner {

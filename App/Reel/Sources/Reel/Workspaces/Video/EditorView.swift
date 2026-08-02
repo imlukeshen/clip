@@ -618,6 +618,17 @@ struct EditorInspector: View {
                             editor.toggleTargetTrackSolo()
                         }
                     }
+                    KeyframeSlider(
+                        title: "Gain",
+                        value: Binding(
+                            get: { editor.targetedGain },
+                            set: { value in editor.setTargetedGain(value) }
+                        ),
+                        range: -60...12,
+                        suffix: " dB",
+                        hasKeyframe: editor.hasGainKeyframeAtPlayhead,
+                        addKeyframe: { editor.setGainKeyframe() }
+                    )
                     Divider().overlay(theme.palette.line)
                 }
                 SectionLabel("Selected clip")
@@ -669,6 +680,29 @@ struct EditorInspector: View {
                     Text("4×").tag(4.0)
                 }
 
+                KeyframeSlider(
+                    title: "Opacity",
+                    value: Binding(
+                        get: { editor.selectedOpacity },
+                        set: { value in editor.setSelectedOpacity(value) }
+                    ),
+                    range: 0...1,
+                    suffix: "",
+                    hasKeyframe: editor.hasOpacityKeyframeAtPlayhead,
+                    addKeyframe: { editor.setOpacityKeyframe() }
+                )
+                KeyframeSlider(
+                    title: "Scale",
+                    value: Binding(
+                        get: { editor.selectedTransform.scaleX },
+                        set: { value in editor.setSelectedScale(value) }
+                    ),
+                    range: 0.1...3,
+                    suffix: "×",
+                    hasKeyframe: editor.hasTransformKeyframeAtPlayhead,
+                    addKeyframe: { editor.setTransformKeyframe() }
+                )
+
                 Divider().overlay(theme.palette.line)
                 SectionLabel("Precision edit")
                 HStack(spacing: 6) {
@@ -707,6 +741,16 @@ struct EditorInspector: View {
                             Text(effectName(effect.kind))
                                 .font(theme.type.caption.font)
                             Spacer()
+                            if effect.kind == .blur || effect.kind == .zoom {
+                                Button {
+                                    editor.setEffectKeyframe(effect)
+                                } label: {
+                                    Image(systemName: "diamond")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(theme.palette.accent)
+                                .help("Add keyframe at playhead")
+                            }
                             Button {
                                 editor.removeEffect(effect.id, from: item.id)
                             } label: {
@@ -810,5 +854,33 @@ private struct EffectButton: View {
             .padding(.horizontal, 6)
             .background(theme.palette.surfaceRaised)
             .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+    }
+}
+
+private struct KeyframeSlider: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let suffix: String
+    let hasKeyframe: Bool
+    let addKeyframe: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title).font(theme.type.caption.font)
+                Spacer()
+                Text("\(value, specifier: "%.2f")\(suffix)")
+                    .font(theme.type.numeric.font)
+                Button(action: addKeyframe) {
+                    Image(systemName: hasKeyframe ? "diamond.fill" : "diamond")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.palette.accent)
+                .help("Set keyframe at playhead")
+            }
+            Slider(value: $value, in: range)
+        }
     }
 }
