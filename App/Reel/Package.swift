@@ -41,6 +41,11 @@ let package = Package(
                 "ConvertKit",
                 "MediaEngine",
                 "AIKit",
+            ],
+            resources: [
+                .process("Resources/Assets.xcassets"),
+                .copy("Resources/ACKNOWLEDGEMENTS.md"),
+                .copy("Resources/PrivacyInfo.xcprivacy"),
             ]
         ),
         .testTarget(

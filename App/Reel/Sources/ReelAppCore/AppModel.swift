@@ -49,6 +49,13 @@ public final class AppModel {
         return movies.appendingPathComponent("Reel", isDirectory: true)
     }
 
+    public static var sandboxLibraryRoot: URL {
+        let support =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return support.appendingPathComponent("Reel", isDirectory: true)
+    }
+
     public var visibleAssets: [AssetRecord] {
         guard !searchQuery.isEmpty else { return assets }
         return assets.filter {

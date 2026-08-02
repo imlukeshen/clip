@@ -37,6 +37,9 @@ targets:
     info:
       path: App/Reel/Config/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.video
         NSSpeechRecognitionUsageDescription: Reel uses on-device speech recognition to generate captions for your clips.
     dependencies:
       - package: ReelAppCore
@@ -58,6 +61,7 @@ targets:
         PRODUCT_NAME: Reel
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
 schemes:
   Reel:

@@ -28,6 +28,12 @@ Implemented milestones:
 - **M7 — Event track:** opt-in, listen-only click capture, system capture-window
   detection, exact/estimated sidecar alignment, an accessible click lane, and
   deterministic click-cluster auto-zoom applied as one undoable patch.
+- **M8 — AI layer:** hosted and local provider adapters, tool schemas and App-only
+  execution, undoable chat edits, Keychain credentials, an inspectable egress
+  ledger, confirmation policy, and on-device captions.
+- **M9 — Distribution:** hardened Developer ID and sandboxed App Store channels,
+  notarized DMG and App Store Connect release automation, acknowledgements, and
+  CI distribution/licence gates.
 
 ## Test
 
@@ -36,6 +42,8 @@ make test
 ```
 
 Requires macOS 14 or later and a Swift 6 toolchain.
+Release builds currently target Apple silicon because the pinned FFmpeg
+XCFramework is arm64-only.
 
 Generate and build the native app with:
 
@@ -47,3 +55,8 @@ The checked-in FFmpeg framework targets Apple Silicon. Rebuild it from pinned,
 checksum-verified sources with `make ffmpeg`; validate its LGPL-only
 configuration with `make licence-audit`. Third-party notices are collected in
 [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).
+
+Validate signing metadata for both release channels with
+`make distribution-check`. A credentialed tagged release runs `make release`;
+required environment variables and App Store handoff are documented in
+[`DISTRIBUTION.md`](DISTRIBUTION.md).

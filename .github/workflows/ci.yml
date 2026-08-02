@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: make lint
+
+  packages:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test-packages
+
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: swift test --package-path App/Reel
+      - run: make build
+
+  boundaries:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: make deps shortcuts distribution-check
+
+  docs:
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift package --package-path Packages/AIKit generate-documentation

@@ -25,7 +25,7 @@ while IFS= read -r codec_binary; do
         fi
     done
 
-    for forbidden in --enable-gpl --enable-nonfree --enable-libx264 --enable-libx265; do
+    for forbidden in --enable-gpl --enable-nonfree libx264 libx265; do
         if [[ "$configuration" == *"$forbidden"* ]]; then
             echo "Forbidden FFmpeg configuration detected in $codec_binary: $forbidden" >&2
             exit 1

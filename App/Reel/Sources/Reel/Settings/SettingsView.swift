@@ -22,6 +22,7 @@ private struct SettingsContent: View {
     @State private var openAIKey = ""
     @State private var anthropicKey = ""
     @State private var googleKey = ""
+    @State private var showsAcknowledgements = false
 
     var body: some View {
         Form {
@@ -79,12 +80,20 @@ private struct SettingsContent: View {
                 }
                 Button("Refresh ledger") { Task { await settings.refresh() } }
             }
+
+            Section("About") {
+                Button("Third-party acknowledgements") { showsAcknowledgements = true }
+            }
         }
         .formStyle(.grouped)
         .font(theme.type.body.font)
         .foregroundStyle(theme.palette.textPrimary)
         .background(theme.palette.surfaceBase)
         .task { await settings.refresh() }
+        .sheet(isPresented: $showsAcknowledgements) {
+            AcknowledgementsView()
+                .environment(\.theme, theme)
+        }
     }
 
     private var providerBinding: Binding<ProviderID> {
@@ -98,5 +107,40 @@ private struct SettingsContent: View {
         case .google: $googleKey
         default: $openAIKey
         }
+    }
+}
+
+private struct AcknowledgementsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Third-party acknowledgements").font(theme.type.title.font)
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            .padding()
+            Divider()
+            ScrollView {
+                Text(contents)
+                    .font(theme.type.caption.font)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding()
+            }
+        }
+        .frame(width: 620, height: 520)
+        .background(theme.palette.surfaceBase)
+    }
+
+    private var contents: String {
+        guard
+            let url = Bundle.main.url(
+                forResource: "ACKNOWLEDGEMENTS", withExtension: "md"),
+            let value = try? String(contentsOf: url, encoding: .utf8)
+        else { return "Acknowledgements are unavailable in this build." }
+        return value
     }
 }

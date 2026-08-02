@@ -3,3 +3,4 @@
 
 SWIFT_OPTIMIZATION_LEVEL = -O
 DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+CODE_SIGN_IDENTITY = Apple Distribution

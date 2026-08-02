@@ -1,0 +1,15 @@
+name: Licence audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 8 * * 1"
+
+jobs:
+  audit:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: make licence-audit

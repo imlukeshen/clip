@@ -9,10 +9,14 @@ struct ReelApp: App {
     init() {
         #if APPSTORE_BUILD
             let shortcutReader = ShortcutReader(sandboxed: true)
+            let libraryRoot = AppModel.sandboxLibraryRoot
         #else
             let shortcutReader = ShortcutReader(sandboxed: false)
+            let libraryRoot = AppModel.defaultLibraryRoot
         #endif
-        _model = State(initialValue: AppModel(shortcutReader: shortcutReader))
+        _model = State(
+            initialValue: AppModel(libraryRoot: libraryRoot, shortcutReader: shortcutReader)
+        )
     }
 
     var body: some Scene {

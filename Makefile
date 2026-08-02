@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate build test test-packages deps shortcuts licence-audit lint format ffmpeg clean
+.PHONY: bootstrap generate build test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
@@ -29,7 +29,10 @@ shortcuts:
 	Scripts/check-no-hardcoded-shortcuts.sh
 
 licence-audit:
-	Scripts/check-ffmpeg-license.sh
+	Scripts/check-licenses.sh
+
+distribution-check:
+	Scripts/check-distribution.sh
 
 lint:
 	xcrun swift-format lint --strict --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/AIKit/Sources Packages/AIKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
@@ -39,6 +42,12 @@ format:
 
 ffmpeg:
 	Scripts/build-ffmpeg.sh
+
+licences:
+	Scripts/licences.sh
+
+release:
+	Scripts/release.sh
 
 clean:
 	rm -rf Reel.xcodeproj DerivedData
