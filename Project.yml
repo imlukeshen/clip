@@ -63,11 +63,29 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
+  ReelUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: App/Reel/UITests/ReelUITests
+    dependencies:
+      - target: Reel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.reel.editor.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Reel
+
 schemes:
   Reel:
     build:
       targets:
         Reel: all
+        ReelUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - ReelUITests
     run:
       config: Debug
     archive:
