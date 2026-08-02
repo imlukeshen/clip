@@ -18,6 +18,7 @@ test-packages:
 	swift test --package-path Packages/CaptureKit
 	swift test --package-path Packages/ConvertKit
 	swift test --package-path Packages/MediaEngine
+	swift test --package-path Packages/PDFEngine
 	swift test --package-path Packages/AIKit
 	swift test --package-path Packages/DesignSystem
 	swift test --package-path App/Reel

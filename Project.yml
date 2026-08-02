@@ -25,6 +25,8 @@ packages:
     path: Packages/ConvertKit
   MediaEngine:
     path: Packages/MediaEngine
+  PDFEngine:
+    path: Packages/PDFEngine
   AIKit:
     path: Packages/AIKit
 
@@ -49,6 +51,7 @@ targets:
       - package: CaptureKit
       - package: ConvertKit
       - package: MediaEngine
+      - package: PDFEngine
       - package: AIKit
     configFiles:
       Debug: App/Reel/Config/xcconfig/Debug.xcconfig

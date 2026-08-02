@@ -35,3 +35,13 @@ Copyright © 2015–2025 Gwendal Roué. Licensed under the MIT License.
 
 - Source: <https://github.com/groue/GRDB.swift/releases/tag/v7.11.1>
 - License: [`Vendor/licenses/GRDB-LICENSE`](Vendor/licenses/GRDB-LICENSE)
+
+## PDFium 152.0.7961.0
+
+Copyright © the PDFium authors. Licensed under the three-clause BSD license;
+the pinned non-V8 binary also includes permissively licensed third-party
+components whose complete notices are shipped with Reel.
+
+- Source: <https://pdfium.googlesource.com/pdfium/>
+- Binary: <https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7961>
+- Licenses: [`Vendor/pdfium/licenses`](Vendor/pdfium/licenses)

@@ -15,6 +15,7 @@ let package = Package(
         .package(path: "../../Packages/CaptureKit"),
         .package(path: "../../Packages/ConvertKit"),
         .package(path: "../../Packages/MediaEngine"),
+        .package(path: "../../Packages/PDFEngine"),
         .package(path: "../../Packages/AIKit"),
         .package(path: "../../Packages/DesignSystem"),
     ],
@@ -27,6 +28,7 @@ let package = Package(
                 "CaptureKit",
                 "ConvertKit",
                 "MediaEngine",
+                "PDFEngine",
                 "AIKit",
                 "DesignSystem",
             ]
@@ -40,6 +42,7 @@ let package = Package(
                 "CaptureKit",
                 "ConvertKit",
                 "MediaEngine",
+                "PDFEngine",
                 "AIKit",
             ],
             resources: [
@@ -51,7 +54,8 @@ let package = Package(
         .testTarget(
             name: "ReelAppCoreTests",
             dependencies: [
-                "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine", "AIKit",
+                "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine", "PDFEngine",
+                "AIKit",
             ]
         ),
     ],
