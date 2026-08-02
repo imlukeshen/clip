@@ -1,15 +1,16 @@
 import AIKit
 import Testing
 
-@Test func toolCatalogHasTheSpecifiedSurface() {
+@Test func commandRegistryIsUniqueValidAndAgentReachable() {
+    let ids = CommandRegistry.all.map(\.id)
+    #expect(Set(ids).count == ids.count)
+    #expect(CommandRegistry.all.allSatisfy { $0.schema.hasValidObjectSchema })
+    let unreachable = CommandRegistry.all.filter { $0.agentExposure == .never }
+    #expect(unreachable.allSatisfy { CommandRegistry.explicitlyExcluded[$0.id] != nil })
     #expect(
-        ToolCatalog.all.map(\.name) == [
-            "describeTimeline", "describeClip", "trimClip", "splitClip", "reorderClips",
-            "setSpeed", "addZoom", "autoZoomFromClicks", "removeEffect", "setBackground",
-            "detectSilence", "trimSilence", "generateCaptions", "exportProject", "setPreference",
-        ])
-    #expect(ToolCatalog.all.filter { $0.kind == .write }.count == 10)
-    #expect(ToolCatalog.all.filter { $0.kind == .confirm }.count == 2)
+        ToolCatalog.all.map(\.name)
+            == CommandRegistry.all.filter { $0.agentExposure == .always }.map { $0.schema.name }
+    )
 }
 
 @Test func contextDigestCapsItemsAndRetainsCapabilityFacts() throws {

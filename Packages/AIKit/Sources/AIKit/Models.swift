@@ -125,11 +125,14 @@ public enum ConfirmationPolicy: String, Codable, Sendable, CaseIterable {
     case confirmDestructive
     case confirmAll
 
-    public func requiresConfirmation(for kind: ToolKind) -> Bool {
+    public func requiresConfirmation(
+        for kind: ToolKind,
+        isDestructive: Bool = false
+    ) -> Bool {
         if kind == .confirm { return true }
         switch self {
         case .autoApply: return false
-        case .confirmDestructive: return kind == .write
+        case .confirmDestructive: return isDestructive
         case .confirmAll: return kind != .read
         }
     }

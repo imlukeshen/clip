@@ -66,7 +66,7 @@ struct ToolExecutorTests {
         }
     }
 
-    @Test("Dead-air plus click zoom is one request and two independent undo entries")
+    @Test("Dead-air plus click zoom is one request and one turn-level undo entry")
     @MainActor
     func acceptanceTurn() async throws {
         let fixture = try Fixture()
@@ -102,15 +102,38 @@ struct ToolExecutorTests {
 
         let editor = fixture.editor()
         let original = editor.document
-        try editor.perform(try #require(turn.results[0].patch))
-        let afterTrim = editor.document
-        try editor.perform(try #require(turn.results[1].patch))
-        #expect(editor.document != afterTrim)
+        try editor.perform(try #require(turn.combinedPatch))
+        #expect(editor.document != original)
 
         editor.undo()
-        #expect(editor.document == afterTrim)
-        editor.undo()
         #expect(editor.document == original)
+    }
+
+    @Test("An on-demand command is discoverable and runnable through meta-tools")
+    func onDemandCommandDiscovery() async throws {
+        let fixture = try Fixture()
+        let listed = try await fixture.executor.execute(
+            call("listCommands", ["category": .string("audio")]),
+            turnID: "discover",
+            policy: .autoApply,
+            context: fixture.context
+        )
+        #expect(listed.message.contains("detectSilence"))
+
+        let result = try await fixture.executor.execute(
+            call(
+                "runCommand",
+                [
+                    "id": .string("describeClip"),
+                    "arguments": .object(["itemID": .string("one")]),
+                ]
+            ),
+            turnID: "discover",
+            policy: .autoApply,
+            context: fixture.context
+        )
+        #expect(result.message.contains("Clip one"))
+        #expect(result.message.count < 200)
     }
 
     @Test("On-device caption tool needs no provider credential")

@@ -113,6 +113,8 @@ public final class EditorViewModel {
             document: document,
             assets: assets,
             eventTracks: eventTracks,
+            selectedItemIDs: selection,
+            playhead: playhead,
             resolving: resolver
         )
     }

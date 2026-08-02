@@ -33,11 +33,18 @@ public struct AssistantTurn: Sendable, Equatable {
     public var text: String
     public var invocations: [ToolInvocation]
     public var results: [ToolResult]
+    public var combinedPatch: GraphPatch?
 
-    public init(text: String, invocations: [ToolInvocation], results: [ToolResult]) {
+    public init(
+        text: String,
+        invocations: [ToolInvocation],
+        results: [ToolResult],
+        combinedPatch: GraphPatch? = nil
+    ) {
         self.text = text
         self.invocations = invocations
         self.results = results
+        self.combinedPatch = combinedPatch
     }
 }
 
@@ -78,6 +85,11 @@ public struct AssistantTurnRunner: Sendable {
             }
         }
 
+        if invocations.count > 25 {
+            invocations = Array(invocations.prefix(25))
+            text += " I reached the 25-command turn limit. Ask me to continue for the remainder."
+        }
+
         var context = initialContext
         var results: [ToolResult] = []
         for invocation in invocations {
@@ -90,12 +102,25 @@ public struct AssistantTurnRunner: Sendable {
                 context.document = candidate
             }
         }
-        return AssistantTurn(text: text, invocations: invocations, results: results)
+        let patches = results.compactMap(\.patch)
+        let combinedPatch: GraphPatch? = patches.isEmpty
+            ? nil
+            : GraphPatch(
+                ops: patches.flatMap(\.ops),
+                label: "Assistant: \(String(prompt.prefix(72)))",
+                origin: .assistant(turnID: turnID)
+            )
+        return AssistantTurn(
+            text: text,
+            invocations: invocations,
+            results: results,
+            combinedPatch: combinedPatch
+        )
     }
 
     private static let systemPrompt = """
         You are Reel's editing assistant. Use the supplied tools for timeline edits. Keep each
-        requested operation as a separate tool call so every edit remains independently undoable.
+        requested operation as a separate tool call. Reel coalesces the completed turn into one undo.
         Never invent audio or click availability; trust hasAudio and alignment in the context.
         Ask before actions represented by confirm tools.
         """

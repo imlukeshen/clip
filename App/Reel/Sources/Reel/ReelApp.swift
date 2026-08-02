@@ -1,3 +1,4 @@
+import AIKit
 import CaptureKit
 import ReelAppCore
 import SwiftUI
@@ -28,20 +29,30 @@ struct ReelApp: App {
         .defaultSize(width: 1180, height: 760)
         .commands {
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo") { model.editor?.undo() ?? model.undoLibraryAction() }
+                Button(commandTitle("edit.undo")) {
+                    AppCommandRouter.run("edit.undo", in: model)
+                }
                     .keyboardShortcut("z", modifiers: .command)
                     .disabled(model.editor == nil && !model.undoManager.canUndo)
-                Button("Redo") { model.editor?.redo() ?? model.redoLibraryAction() }
+                Button(commandTitle("edit.redo")) {
+                    AppCommandRouter.run("edit.redo", in: model)
+                }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                     .disabled(model.editor == nil && !model.undoManager.canRedo)
             }
             CommandMenu("Assets") {
-                Button("Select All") { model.selection.selectAll() }
+                Button(commandTitle("asset.selectAll")) {
+                    AppCommandRouter.run("asset.selectAll", in: model)
+                }
                     .keyboardShortcut("a", modifiers: .command)
-                Button("Deselect All") { model.selection.deselectAll() }
+                Button(commandTitle("asset.deselectAll")) {
+                    AppCommandRouter.run("asset.deselectAll", in: model)
+                }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                 Divider()
-                Button("Move to Trash") { model.requestTrashSelectedAssets() }
+                Button(commandTitle("asset.delete")) {
+                    AppCommandRouter.run("asset.delete", in: model)
+                }
                     .keyboardShortcut(.delete, modifiers: .command)
                     .disabled(model.selection.selected.isEmpty)
             }
@@ -50,5 +61,9 @@ struct ReelApp: App {
         Settings {
             SettingsView(model: model)
         }
+    }
+
+    private func commandTitle(_ id: CommandID) -> String {
+        CommandRegistry.command(id: id)?.title ?? id.rawValue
     }
 }

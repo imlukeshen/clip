@@ -366,16 +366,24 @@ public final class AppModel {
                 if !turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     responseParts.append(turn.text)
                 }
-                for (invocation, result) in zip(turn.invocations, turn.results) {
-                    if result.requiresConfirmation, result.patch != nil {
+                for result in turn.results {
+                    responseParts.append(result.message)
+                }
+                if let combinedPatch = turn.combinedPatch {
+                    let requiresConfirmation = turn.results.contains(where: \.requiresConfirmation)
+                    if requiresConfirmation {
+                        let result = ToolResult(
+                            callID: turnID,
+                            message: "Apply \(combinedPatch.ops.count) assistant operations?",
+                            patch: combinedPatch,
+                            requiresConfirmation: true
+                        )
                         pendingAssistantActions.append(
-                            PendingAssistantAction(name: invocation.name, result: result))
-                        responseParts.append("Review \(invocation.name) before applying.")
-                    } else if let patch = result.patch {
-                        try editor.perform(patch)
-                        responseParts.append(result.message)
+                            PendingAssistantAction(name: "assistant.turn", result: result)
+                        )
+                        responseParts.append("Review the complete edit plan before applying.")
                     } else {
-                        responseParts.append(result.message)
+                        try editor.perform(combinedPatch)
                     }
                 }
                 if responseParts.isEmpty {

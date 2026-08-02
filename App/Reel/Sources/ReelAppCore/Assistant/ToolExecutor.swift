@@ -9,17 +9,23 @@ public struct ToolExecutionContext: Sendable {
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
     public var eventTracks: [AssetID: EventTrack]
+    public var selectedItemIDs: Set<ItemID>
+    public var playhead: RationalTime
     public var resolving: @Sendable (AssetID) async throws -> URL
 
     public init(
         document: ProjectDocument,
         assets: [AssetID: AssetRecord],
         eventTracks: [AssetID: EventTrack],
+        selectedItemIDs: Set<ItemID> = [],
+        playhead: RationalTime = .zero,
         resolving: @escaping @Sendable (AssetID) async throws -> URL
     ) {
         self.document = document
         self.assets = assets
         self.eventTracks = eventTracks
+        self.selectedItemIDs = selectedItemIDs
+        self.playhead = playhead
         self.resolving = resolving
     }
 }
@@ -51,9 +57,10 @@ public struct ToolExecutor: Sendable {
         policy: ConfirmationPolicy,
         context: ToolExecutionContext
     ) async throws -> ToolResult {
-        guard let schema = ToolCatalog.schema(named: invocation.name) else {
+        guard let command = CommandRegistry.command(named: invocation.name) else {
             throw ToolExecutorError.unknownTool(invocation.name)
         }
+        let schema = command.schema
         if schema.kind == .confirm {
             return ToolResult(
                 callID: invocation.callID,
@@ -65,10 +72,55 @@ public struct ToolExecutor: Sendable {
         let patch: GraphPatch?
         let message: String
         switch invocation.name {
+        case "listCommands":
+            let arguments = try invocation.arguments.decode(ListCommandsArguments.self)
+            let category = arguments.category.flatMap(CommandCategory.init(rawValue:))
+            let commands = CommandRegistry.commands(category: category, query: arguments.query)
+                .filter { $0.id.rawValue != "listCommands" && $0.id.rawValue != "runCommand" }
+            patch = nil
+            let names = commands.prefix(8).map { $0.id.rawValue }.joined(separator: ", ")
+            let remainder = max(0, commands.count - 8)
+            message = "\(commands.count) commands: \(names)\(remainder > 0 ? ", +\(remainder) more" : "")"
+        case "runCommand":
+            let arguments = try invocation.arguments.decode(RunCommandArguments.self)
+            guard let target = CommandRegistry.command(id: CommandID(rawValue: arguments.id)),
+                target.agentExposure == .onDemand,
+                target.id.rawValue != "runCommand",
+                target.id.rawValue != "listCommands"
+            else {
+                throw ToolExecutorError.unknownTool(arguments.id)
+            }
+            return try await execute(
+                ToolInvocation(
+                    callID: invocation.callID,
+                    name: target.id.rawValue,
+                    arguments: arguments.arguments ?? .object([:])
+                ),
+                turnID: turnID,
+                policy: policy,
+                context: context
+            )
         case "describeTimeline":
             patch = nil
             message =
                 "\(context.document.timeline.video.count) clips, \(context.document.duration.seconds.formatted()) seconds."
+        case "timeline.describe":
+            patch = nil
+            message = "V1 has \(context.document.timeline.video.count) clips; audio has \(context.document.timeline.audio.count); duration \(context.document.duration.seconds.formatted())s."
+        case "view.getSelection":
+            patch = nil
+            let ids = context.selectedItemIDs.map(\.rawValue).sorted()
+            message = ids.isEmpty ? "Nothing is selected." : "Selected: \(ids.joined(separator: ", "))."
+        case "view.getPlayhead":
+            patch = nil
+            let under = context.document.item(at: context.playhead)?.item.id.rawValue ?? "none"
+            message = "Playhead \(context.playhead.seconds.formatted())s; clip: \(under)."
+        case "audio.describe":
+            patch = nil
+            let audioCount = context.document.timeline.video.count { item in
+                context.assets[item.assetID]?.hasAudio == true
+            }
+            message = "\(audioCount) of \(context.document.timeline.video.count) video clips contain audio; \(context.document.timeline.audio.count) audio-track clips."
         case "describeClip":
             let arguments = try invocation.arguments.decode(ItemArgument.self)
             let item = try item(arguments.itemID, in: context.document)
@@ -251,7 +303,10 @@ public struct ToolExecutor: Sendable {
             callID: invocation.callID,
             message: message,
             patch: patch,
-            requiresConfirmation: policy.requiresConfirmation(for: schema.kind)
+            requiresConfirmation: policy.requiresConfirmation(
+                for: schema.kind,
+                isDestructive: command.isDestructive
+            )
         )
     }
 
@@ -369,6 +424,14 @@ private struct SilenceArguments: Codable {
 private struct CaptionArguments: Codable {
     var itemIDs: [ItemID]
     var engine: String
+}
+private struct ListCommandsArguments: Codable {
+    var category: String?
+    var query: String?
+}
+private struct RunCommandArguments: Codable {
+    var id: String
+    var arguments: JSONValue?
 }
 
 private func assistant(_ patch: GraphPatch, turnID: String) -> GraphPatch {

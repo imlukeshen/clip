@@ -32,7 +32,7 @@ struct AssetGrid: View {
                         .opacity(model.selection.selected.isEmpty ? 0 : 1)
                     Spacer()
                     Button("Select all") {
-                        model.selection.selectAll()
+                        AppCommandRouter.run("asset.selectAll", in: model)
                     }
                     .buttonStyle(.plain)
                     .disabled(model.selection.selected.count == assets.count)
@@ -57,7 +57,7 @@ struct AssetGrid: View {
                                 if !model.selection.selected.contains(asset.id) {
                                     model.selectAsset(asset.id)
                                 }
-                                model.requestTrashSelectedAssets()
+                                AppCommandRouter.run("asset.delete", in: model)
                             }
                         }
                     }
