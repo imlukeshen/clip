@@ -34,4 +34,8 @@ public enum LibraryLayout {
     public static func imageDocuments(in root: URL) -> URL {
         internalDirectory(in: root).appendingPathComponent("images", isDirectory: true)
     }
+
+    public static func pdfDocuments(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("pdfs", isDirectory: true)
+    }
 }

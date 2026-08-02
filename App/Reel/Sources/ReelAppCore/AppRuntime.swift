@@ -205,6 +205,22 @@ public actor AppRuntime {
         try data.write(to: imageDocumentURL(for: document.sourceAssetID), options: .atomic)
     }
 
+    public func pdfDocument(for assetID: AssetID) throws -> PDFEditDocument? {
+        let url = pdfDocumentURL(for: assetID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(PDFEditDocument.self, from: Data(contentsOf: url))
+    }
+
+    public func savePDFDocument(_ document: PDFEditDocument) throws {
+        let directory = LibraryLayout.pdfDocuments(in: libraryRoot)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(document)
+        data.append(0x0A)
+        try data.write(to: pdfDocumentURL(for: document.sourceAssetID), options: .atomic)
+    }
+
     public func changes() -> AsyncStream<LibraryChange> {
         library.changes
     }
@@ -212,6 +228,11 @@ public actor AppRuntime {
     private func imageDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.imageDocuments(in: libraryRoot)
             .appendingPathComponent("\(assetID.rawValue).reelimage")
+    }
+
+    private func pdfDocumentURL(for assetID: AssetID) -> URL {
+        LibraryLayout.pdfDocuments(in: libraryRoot)
+            .appendingPathComponent("\(assetID.rawValue).reelpdf")
     }
 }
 

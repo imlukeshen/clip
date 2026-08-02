@@ -5,6 +5,7 @@ import CoreModel
 import Foundation
 import LibraryStore
 import Observation
+import PDFEngine
 
 @MainActor
 @Observable
@@ -27,6 +28,7 @@ public final class AppModel {
     public private(set) var conversionQueue: [ConversionQueueItem] = []
     public private(set) var editor: EditorViewModel?
     public private(set) var imageEditor: ImageEditorViewModel?
+    public private(set) var pdfEditor: PDFEditorViewModel?
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
     public let selection = SelectionModel()
@@ -694,7 +696,7 @@ public final class AppModel {
     }
 
     public func openEditor(for assetID: AssetID) {
-        guard editor == nil, imageEditor == nil,
+        guard editor == nil, imageEditor == nil, pdfEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .video }),
             let duration = asset.duration,
             let runtime
@@ -754,7 +756,7 @@ public final class AppModel {
         for assetID: AssetID,
         initialTool: ImageEditorTool = .select
     ) {
-        guard imageEditor == nil, editor == nil,
+        guard imageEditor == nil, editor == nil, pdfEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .image }),
             let runtime
         else { return }
@@ -789,6 +791,42 @@ public final class AppModel {
     public func closeImageEditor() {
         imageEditor?.stop()
         imageEditor = nil
+    }
+
+    public func openPDFEditor(for assetID: AssetID) {
+        guard pdfEditor == nil, editor == nil, imageEditor == nil,
+            let asset = assets.first(where: { $0.id == assetID && $0.kind == .document }),
+            let runtime
+        else { return }
+        Task {
+            do {
+                let sourceURL = try await runtime.url(for: assetID)
+                let source = try PDFiumDocument(url: sourceURL)
+                let title = URL(fileURLWithPath: asset.displayName)
+                    .deletingPathExtension().lastPathComponent
+                let document = try await runtime.pdfDocument(for: assetID)
+                    ?? source.makeEditDocument(sourceAssetID: assetID, title: title)
+                let pdfEditor = PDFEditorViewModel(
+                    document: document,
+                    sourceURL: sourceURL,
+                    source: source,
+                    persisting: { document in
+                        try await runtime.savePDFDocument(document)
+                    }
+                )
+                self.pdfEditor = pdfEditor
+                selectedWorkspace = .pdf
+                try await runtime.savePDFDocument(document)
+                pdfEditor.start()
+            } catch {
+                lastMessage = "The selected PDF could not be opened."
+            }
+        }
+    }
+
+    public func closePDFEditor() {
+        pdfEditor?.stop()
+        pdfEditor = nil
     }
 
     private func refreshAssets() async {

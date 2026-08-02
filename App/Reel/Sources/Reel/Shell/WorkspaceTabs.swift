@@ -27,7 +27,6 @@ struct WorkspaceTabs: View {
     }
 
     private func badge(for workspace: Workspace) -> String {
-        if workspace == .pdf { return "v2" }
         return String(model.assetCount(for: workspace))
     }
 }

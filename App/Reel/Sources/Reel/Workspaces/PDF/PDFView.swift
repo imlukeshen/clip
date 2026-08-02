@@ -1,0 +1,329 @@
+import AppKit
+import CoreModel
+import DesignSystem
+import LibraryStore
+import ReelAppCore
+import SwiftUI
+
+struct PDFView: View {
+    @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
+
+    var body: some View {
+        if let editor = model.pdfEditor {
+            PDFEditorView(model: model, editor: editor)
+        } else {
+            library
+        }
+    }
+
+    private var library: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            WorkspaceHeader(
+                title: "PDF",
+                subtitle:
+                    "Edit pages, add text and markup, export Markdown, and OCR scans locally."
+            )
+            WorkspaceDropZone(model: model, workspace: .pdf)
+            HStack(spacing: theme.metrics.spacing.sm) {
+                Button("Open editor") {
+                    guard let selectedPDF else { return }
+                    model.openPDFEditor(for: selectedPDF.id)
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(selectedPDF == nil)
+                Text("PDFium · local")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            .padding(.top, 18)
+            SectionLabel("Documents")
+                .padding(.top, 28)
+                .padding(.bottom, 11)
+            AssetGrid(
+                model: model,
+                assets: model.visibleAssets.filter { $0.kind == .document }
+            )
+        }
+    }
+
+    private var selectedPDF: AssetRecord? {
+        guard let selectedAssetID = model.selectedAssetID else { return nil }
+        return model.assets.first {
+            $0.id.rawValue == selectedAssetID && $0.kind == .document
+        }
+    }
+}
+
+private struct PDFEditorView: View {
+    @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
+    @Bindable var editor: PDFEditorViewModel
+    @State private var dragStart: CGPoint?
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                header
+                Divider().overlay(theme.palette.line)
+                HStack(spacing: 0) {
+                    thumbnails
+                    Divider().overlay(theme.palette.line)
+                    toolRail
+                    Divider().overlay(theme.palette.line)
+                    canvas
+                }
+            }
+            if let notice = editor.notice {
+                Toast(notice)
+                    .padding(.bottom, 14)
+                    .task(id: notice) {
+                        try? await Task.sleep(for: .seconds(2.1))
+                        editor.clearNotice()
+                    }
+            }
+        }
+        .background(theme.palette.surfaceBase)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.closePDFEditor()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.plain)
+            .help("Back to PDF library")
+            Text(editor.document.title)
+                .font(theme.type.label.font)
+                .lineLimit(1)
+            Text("Page \(editor.selectedPageNumber) of \(editor.document.pages.count)")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            Spacer()
+            if editor.isRendering || editor.isExporting {
+                ProgressView().controlSize(.small)
+            }
+            Button("Save As PDF…", action: saveAsPDF)
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.isExporting)
+            Button {
+                editor.undo()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.plain)
+            .disabled(!editor.undoManager.canUndo)
+            .keyboardShortcut("z", modifiers: .command)
+            Button {
+                editor.redo()
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .buttonStyle(.plain)
+            .disabled(!editor.undoManager.canRedo)
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .background(theme.palette.surfacePanel)
+    }
+
+    private var thumbnails: some View {
+        VStack(spacing: 8) {
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(Array(editor.document.pages.enumerated()), id: \.element.id) {
+                        index, page in
+                        PDFPageThumbnail(
+                            number: index + 1,
+                            image: editor.thumbnails[page.id],
+                            isSelected: page.id == editor.selectedPageID
+                        ) {
+                            editor.selectPage(page.id)
+                        }
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+            HStack(spacing: 8) {
+                Button {
+                    editor.addBlankPage()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                Button {
+                    editor.deleteSelectedPage()
+                } label: {
+                    Image(systemName: "trash")
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 10)
+        }
+        .frame(width: 124)
+        .background(theme.palette.surfacePanel)
+    }
+
+    private var toolRail: some View {
+        VStack(spacing: 6) {
+            ForEach(PDFEditorTool.allCases) { tool in
+                PDFToolButton(
+                    systemName: tool.symbol,
+                    help: tool.title,
+                    isActive: editor.activeTool == tool
+                ) {
+                    editor.activeTool = tool
+                }
+            }
+            Divider().overlay(theme.palette.line).padding(.vertical, 5)
+            PDFToolButton(systemName: "rotate.right", help: "Rotate page") {
+                editor.rotateSelectedPage()
+            }
+            PDFToolButton(systemName: "arrow.up", help: "Move page earlier") {
+                editor.moveSelectedPage(by: -1)
+            }
+            PDFToolButton(systemName: "arrow.down", help: "Move page later") {
+                editor.moveSelectedPage(by: 1)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .frame(width: 44)
+        .background(theme.palette.surfacePanel)
+    }
+
+    private var canvas: some View {
+        GeometryReader { proxy in
+            ZStack {
+                theme.palette.surfaceSunken
+                if let image = editor.renderedPage {
+                    let frame = fittedRect(
+                        imageSize: CGSize(width: image.width, height: image.height),
+                        container: proxy.size
+                    )
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .frame(width: frame.width, height: frame.height)
+                        .position(x: frame.midX, y: frame.midY)
+                        .shadow(color: .black.opacity(0.28), radius: 16, y: 7)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(width: frame.width, height: frame.height)
+                        .position(x: frame.midX, y: frame.midY)
+                        .gesture(editGesture(in: frame))
+                } else if editor.isRendering {
+                    ProgressView()
+                }
+            }
+        }
+        .padding(24)
+    }
+
+    private func editGesture(in frame: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+            .onChanged { value in
+                if dragStart == nil { dragStart = normalized(value.startLocation, in: frame.size) }
+            }
+            .onEnded { value in
+                guard let start = dragStart else { return }
+                editor.commitGesture(
+                    from: start,
+                    to: normalized(value.location, in: frame.size)
+                )
+                dragStart = nil
+            }
+    }
+
+    private func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x / max(size.width, 1), 0), 1),
+            y: min(max(point.y / max(size.height, 1), 0), 1)
+        )
+    }
+
+    private func fittedRect(imageSize: CGSize, container: CGSize) -> CGRect {
+        let available = CGSize(
+            width: max(container.width - 48, 1),
+            height: max(container.height - 48, 1)
+        )
+        let scale = min(available.width / imageSize.width, available.height / imageSize.height)
+        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(
+            x: (container.width - size.width) / 2,
+            y: (container.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func saveAsPDF() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = "\(editor.document.title)-edited.pdf"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            editor.export(to: url)
+        }
+    }
+}
+
+private struct PDFPageThumbnail: View {
+    @Environment(\.theme) private var theme
+    let number: Int
+    let image: CGImage?
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                preview
+                    .frame(width: 92, height: 118)
+                    .background(Color.white)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(
+                                isSelected ? theme.palette.accent : theme.palette.line,
+                                lineWidth: isSelected ? 2 : 1
+                            )
+                    }
+                Text("\(number)")
+                    .font(theme.type.numeric.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var preview: some View {
+        if let image {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Rectangle().fill(theme.palette.surfaceRaised)
+        }
+    }
+}
+
+private struct PDFToolButton: View {
+    @Environment(\.theme) private var theme
+    let systemName: String
+    let help: String
+    var isActive = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: 30, height: 28)
+                .background(isActive ? theme.palette.accentDim : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? theme.palette.accent : theme.palette.textSecondary)
+        .help(help)
+    }
+}

@@ -119,6 +119,7 @@ private struct ThemedMainWindow: View {
                     Divider().overlay(theme.palette.line)
                     if (model.selectedWorkspace == .video && model.editor != nil)
                         || (model.selectedWorkspace == .photo && model.imageEditor != nil)
+                        || (model.selectedWorkspace == .pdf && model.pdfEditor != nil)
                     {
                         WorkspaceContent(model: model)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -163,7 +164,7 @@ private struct WorkspaceContent: View {
             case .inbox: InboxView(model: model)
             case .video: VideoView(model: model)
             case .photo: PhotoView(model: model)
-            case .pdf: PDFPlaceholderView(model: model)
+            case .pdf: PDFView(model: model)
             case .convert: ConvertView(model: model)
             }
         }

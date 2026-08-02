@@ -11,7 +11,9 @@ struct UnifiedInspector: View {
 
     var body: some View {
         Group {
-            if let editor = model.imageEditor {
+            if let editor = model.pdfEditor {
+                PDFLayerInspector(editor: editor)
+            } else if let editor = model.imageEditor {
                 ImageLayerInspector(editor: editor)
             } else if let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
@@ -78,6 +80,113 @@ struct UnifiedInspector: View {
             Spacer()
         }
         .padding(14)
+    }
+}
+
+private struct PDFLayerInspector: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: PDFEditorViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("PDF Edits").font(theme.type.label.font)
+                Spacer()
+                Text("\(editor.selectedPage?.layers.count ?? 0)")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            if let layers = editor.selectedPage?.layers, !layers.isEmpty {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(Array(layers.reversed())) { layer in
+                            Button { editor.selectLayer(layer.id) } label: {
+                                HStack {
+                                    Image(systemName: symbol(for: layer))
+                                    Text(layer.name)
+                                    Spacer()
+                                }
+                                .padding(6)
+                                .background(
+                                    editor.selectedLayerID == layer.id
+                                        ? theme.palette.accentDim : Color.clear
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            } else {
+                EmptyState(
+                    headline: "No page edits",
+                    body: "Choose Text, Highlight, or Redact and drag on the page."
+                )
+            }
+            if case .text(let text) = editor.selectedLayer {
+                Divider().overlay(theme.palette.line)
+                Text("Text").font(theme.type.label.font)
+                TextField(
+                    "Text",
+                    text: Binding(
+                        get: { text.text },
+                        set: { editor.updateSelectedText($0) }
+                    ),
+                    axis: .vertical
+                )
+                LabeledContent("Font", value: text.font.postScriptName)
+                    .font(theme.type.caption.font)
+                if text.font.isEmbedded {
+                    Text(text.font.isSubset ? "Embedded subset" : "Embedded font")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(
+                            text.font.isSubset ? theme.palette.click : theme.palette.success
+                        )
+                }
+            }
+            if editor.selectedLayer != nil {
+                Button("Delete edit", role: .destructive) { editor.removeSelectedLayer() }
+                    .buttonStyle(.borderless)
+            }
+            Divider().overlay(theme.palette.line)
+            Text("Fonts on source page").font(theme.type.label.font)
+            if let fonts = editor.pageAnalysis?.fonts, !fonts.isEmpty {
+                ForEach(fonts, id: \.postScriptName) { font in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(font.postScriptName).font(theme.type.caption.font)
+                        Text(fontStatus(font))
+                            .font(theme.type.micro.font)
+                            .foregroundStyle(
+                                font.isSubset ? theme.palette.click : theme.palette.textTertiary
+                            )
+                    }
+                }
+            } else {
+                Text("No embedded text fonts detected.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            ForEach(editor.fontWarnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.click)
+            }
+            Spacer()
+        }
+        .padding(14)
+    }
+
+    private func symbol(for layer: PDFLayer) -> String {
+        switch layer {
+        case .text: "textformat"
+        case .highlight: "highlighter"
+        case .redaction: "eye.slash"
+        }
+    }
+
+    private func fontStatus(_ font: PDFFontDescriptor) -> String {
+        if font.isSubset { return "Embedded subset - new glyphs may be unavailable" }
+        return font.isEmbedded ? "Embedded" : "Referenced"
     }
 }
 

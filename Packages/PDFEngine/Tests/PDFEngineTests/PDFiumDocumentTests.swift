@@ -78,10 +78,16 @@ struct PDFiumDocumentTests {
         let preview = try renderer.render(document, pageID: pageID, maxPixelDimension: 640)
         #expect(try blackPixelCount(preview) > 5_000)
 
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "reel-pdf-export-\(UUID().uuidString).pdf"
-        )
-        defer { try? FileManager.default.removeItem(at: output) }
+        let requestedOutput = ProcessInfo.processInfo.environment["REEL_PDF_QA_OUTPUT"].map {
+            URL(fileURLWithPath: $0)
+        }
+        let output = requestedOutput
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent(
+                "reel-pdf-export-\(UUID().uuidString).pdf"
+            )
+        defer {
+            if requestedOutput == nil { try? FileManager.default.removeItem(at: output) }
+        }
         try renderer.export(document, to: output)
         try renderer.export(document, to: output)
         let exported = try PDFiumDocument(url: output)

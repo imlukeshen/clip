@@ -49,7 +49,7 @@ struct WorkspaceDropZone: View {
         case .inbox: "MOV, MP4, PNG, JPEG, HEIC"
         case .video: "MOV, MP4, M4V, WebM, MKV"
         case .photo: "PNG, JPEG, HEIC, TIFF, WebP"
-        case .pdf: "Held in the library until PDF editing lands"
+        case .pdf: "PDF pages stay local and source files remain unchanged"
         case .convert: "Video, images, audio"
         }
     }
