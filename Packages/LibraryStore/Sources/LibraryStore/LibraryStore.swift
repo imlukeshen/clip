@@ -138,6 +138,49 @@ public actor LibraryStore {
         }
     }
 
+    /// Atomically updates indexed paths after a Reel-owned filesystem move.
+    public func updateLocations(_ records: [AssetRecord]) async throws {
+        guard !records.isEmpty else { return }
+        var originals: [AssetRecord] = []
+        for record in records {
+            guard let original = try await asset(id: record.id) else {
+                throw LibraryError.assetNotFound(record.id)
+            }
+            originals.append(original)
+        }
+        do {
+            for record in records {
+                try MetadataCodec.encode(record).write(
+                    to: metadataURL(for: record.id),
+                    options: .atomic
+                )
+            }
+            try await database.write { db in
+                for record in records {
+                    try db.execute(
+                        sql: """
+                            UPDATE asset SET relative_path = ?, display_name = ?,
+                              event_track_path = ? WHERE id = ?
+                            """,
+                        arguments: [
+                            record.relativePath, record.displayName,
+                            record.eventTrackPath, record.id.rawValue,
+                        ]
+                    )
+                }
+            }
+        } catch {
+            for original in originals {
+                try? MetadataCodec.encode(original).write(
+                    to: metadataURL(for: original.id),
+                    options: .atomic
+                )
+            }
+            throw LibraryError.databaseOperationFailed("update asset locations")
+        }
+        for record in records { changeContinuation.yield(.assetUpdated(record.id)) }
+    }
+
     /// Resolves the immutable media URL for an indexed asset.
     public func url(for id: AssetID) async throws -> URL {
         guard let asset = try await asset(id: id) else {

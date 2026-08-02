@@ -83,6 +83,12 @@ public enum CommandRegistry {
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,
             properties: ["assetIDs": array(string)]),
+        command(
+            "asset.quickLook", "Quick Look", .asset,
+            shortcut: .init("space", modifiers: []), kind: .confirm, exposure: .onDemand),
+        command(
+            "asset.reveal", "Reveal in Finder", .asset,
+            shortcut: .init("r"), kind: .confirm, exposure: .onDemand),
         command("describeTimeline", "Describe Timeline", .timeline, kind: .read, exposure: .always),
         command(
             "describeClip", "Describe Clip", .clip, kind: .read, exposure: .onDemand,

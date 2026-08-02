@@ -12,6 +12,11 @@ public final class AppModel {
     public var selectedWorkspace: Workspace = .inbox
     public var searchQuery = ""
     public private(set) var assets: [AssetRecord] = []
+    public private(set) var folderTree: FolderNode?
+    public private(set) var expandedFolders: Set<String>
+    public var selectedFolderPath: String? = "Inbox"
+    public var browserViewMode: BrowserViewMode = .grid
+    public var assetSort: AssetSort = .modified
     public private(set) var shortcutRow: ShortcutRowModel
     public private(set) var libraryRoot: URL
     public private(set) var isWatching = false
@@ -44,6 +49,9 @@ public final class AppModel {
         self.shortcutReader = shortcutReader
         self.shortcutRow = ShortcutRowModel(result: shortcutReader.read())
         self.aiSettings = AISettingsModel(libraryRoot: libraryRoot.standardizedFileURL)
+        self.expandedFolders = Set(
+            UserDefaults.standard.stringArray(forKey: "reel.expandedFolders") ?? [""]
+        )
         self.undoManager.groupsByEvent = false
     }
 
@@ -74,10 +82,25 @@ public final class AppModel {
     }
 
     public var visibleAssets: [AssetRecord] {
-        guard !searchQuery.isEmpty else { return assets }
-        return assets.filter {
+        let scoped: [AssetRecord]
+        if selectedWorkspace == .inbox, let selectedFolderPath {
+            let prefix = selectedFolderPath.isEmpty
+                ? "Media/" : "Media/\(selectedFolderPath)/"
+            scoped = assets.filter { asset in
+                guard asset.relativePath.hasPrefix(prefix) else { return false }
+                return !asset.relativePath.dropFirst(prefix.count).contains("/")
+            }
+        } else {
+            scoped = assets
+        }
+        let searched = searchQuery.isEmpty ? scoped : scoped.filter {
             $0.displayName.localizedCaseInsensitiveContains(searchQuery)
         }
+        return searched.sorted(by: assetOrdering)
+    }
+
+    public var currentFolderName: String {
+        selectedFolderPath?.split(separator: "/").last.map(String.init) ?? "Recent"
     }
 
     public func assetCount(for workspace: Workspace) -> Int {
@@ -115,6 +138,138 @@ public final class AppModel {
         } catch {
             isWatching = false
             lastMessage = "The library could not be opened. Check the folder and try again."
+        }
+    }
+
+    public func selectFolder(_ path: String?) {
+        selectedWorkspace = .inbox
+        selectedFolderPath = path
+        selection.deselectAll()
+    }
+
+    public func toggleFolderExpansion(_ path: String) {
+        if expandedFolders.contains(path) {
+            expandedFolders.remove(path)
+        } else {
+            expandedFolders.insert(path)
+        }
+        UserDefaults.standard.set(Array(expandedFolders).sorted(), forKey: "reel.expandedFolders")
+        Task { await refreshFolderTree() }
+    }
+
+    public func createFolder(named name: String, in parent: String) {
+        guard let runtime else { return }
+        Task {
+            do {
+                let path = try await runtime.createFolder(named: name, in: parent)
+                expandedFolders.insert(parent)
+                await refreshFolderTree()
+                selectFolder(path)
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.trashFolder(path)
+                }
+                undoManager.setActionName("Create Folder")
+            } catch {
+                lastMessage = "The folder could not be created."
+            }
+        }
+    }
+
+    public func renameFolder(_ path: String, to name: String) {
+        guard let runtime else { return }
+        let oldName = URL(fileURLWithPath: path).lastPathComponent
+        Task {
+            do {
+                let updated = try await runtime.renameFolder(path, to: name)
+                if selectedFolderPath == path { selectedFolderPath = updated }
+                await refreshAssets()
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.renameFolder(updated, to: oldName)
+                }
+                undoManager.setActionName("Rename Folder")
+            } catch {
+                lastMessage = "The folder could not be renamed."
+            }
+        }
+    }
+
+    public func moveSelectedAssets(to folder: String) {
+        moveAssets(Array(selection.selected), to: folder)
+    }
+
+    public func moveAssets(_ ids: [AssetID], to folder: String) {
+        guard let runtime, !ids.isEmpty else { return }
+        let oldParents = Dictionary(grouping: ids) { id in
+            assets.first(where: { $0.id == id })?.relativePath
+                .deletingLastPathComponent.deletingMediaPrefix ?? "Inbox"
+        }
+        Task {
+            do {
+                _ = try await runtime.moveAssets(ids, to: folder)
+                await refreshAssets()
+                selection.deselectAll()
+                undoManager.registerUndo(withTarget: self) { target in
+                    for (parent, ids) in oldParents {
+                        target.moveAssets(ids, to: parent)
+                    }
+                }
+                undoManager.setActionName("Move Assets")
+            } catch {
+                lastMessage = "The selected files could not be moved."
+            }
+        }
+    }
+
+    public func moveFolder(_ path: String, to parent: String) {
+        guard let runtime else { return }
+        let oldParent = path.deletingLastPathComponent
+        Task {
+            do {
+                let updated = try await runtime.moveFolder(path, to: parent)
+                if selectedFolderPath == path { selectedFolderPath = updated }
+                await refreshAssets()
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.moveFolder(updated, to: oldParent)
+                }
+                undoManager.setActionName("Move Folder")
+            } catch {
+                lastMessage = "The folder could not be moved."
+            }
+        }
+    }
+
+    public func trashFolder(_ path: String) {
+        guard let runtime else { return }
+        Task {
+            do {
+                let receipt = try await runtime.trashFolder(path)
+                if selectedFolderPath == path { selectedFolderPath = "Inbox" }
+                await refreshAssets()
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.restoreFolder(receipt)
+                }
+                undoManager.setActionName("Move Folder to Trash")
+            } catch {
+                lastMessage = "The folder could not be moved to Trash."
+            }
+        }
+    }
+
+    public func revealSelectionInFinder() {
+        guard let runtime else { return }
+        Task { await runtime.revealInFinder(Array(selection.selected)) }
+    }
+
+    public func quickLookSelection() {
+        guard let runtime else { return }
+        let ids = Array(selection.selected)
+        Task {
+            let urls = await runtime.urls(for: ids)
+            guard !urls.isEmpty else { return }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/qlmanage")
+            process.arguments = ["-p"] + urls.map(\.path)
+            try? process.run()
         }
     }
 
@@ -531,8 +686,48 @@ public final class AppModel {
         guard let runtime else { return }
         do {
             assets = try await runtime.assets()
+            await refreshFolderTree()
         } catch {
             lastMessage = "The library index could not be read. Reopen Reel to rebuild it."
+        }
+    }
+
+    private func refreshFolderTree() async {
+        guard let runtime else { return }
+        folderTree = try? await runtime.folderTree(expanding: expandedFolders)
+    }
+
+    private func restoreFolder(_ receipt: FolderTrashReceipt) {
+        guard let runtime else { return }
+        Task {
+            do {
+                try await runtime.restoreFolder(receipt)
+                await refreshAssets()
+                undoManager.registerUndo(withTarget: self) { target in
+                    let path = receipt.originalURL.path
+                        .replacingOccurrences(of: LibraryLayout.media(in: target.libraryRoot).path + "/", with: "")
+                    target.trashFolder(path)
+                }
+                undoManager.setActionName("Move Folder to Trash")
+            } catch {
+                lastMessage = "The folder could not be restored."
+            }
+        }
+    }
+
+    private func assetOrdering(_ lhs: AssetRecord, _ rhs: AssetRecord) -> Bool {
+        switch assetSort {
+        case .name:
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+        case .kind:
+            return lhs.kind.rawValue == rhs.kind.rawValue
+                ? lhs.displayName < rhs.displayName : lhs.kind.rawValue < rhs.kind.rawValue
+        case .duration:
+            return (lhs.duration?.seconds ?? 0) > (rhs.duration?.seconds ?? 0)
+        case .size:
+            return lhs.byteSize > rhs.byteSize
+        case .modified:
+            return lhs.createdAt > rhs.createdAt
         }
     }
 
@@ -597,6 +792,16 @@ public final class AppModel {
             }
             suffix += 1
         }
+    }
+}
+
+extension String {
+    fileprivate var deletingLastPathComponent: String {
+        (self as NSString).deletingLastPathComponent
+    }
+
+    fileprivate var deletingMediaPrefix: String {
+        hasPrefix("Media/") ? String(dropFirst("Media/".count)) : self
     }
 }
 

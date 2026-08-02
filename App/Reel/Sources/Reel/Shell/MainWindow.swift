@@ -111,19 +111,23 @@ private struct ThemedMainWindow: View {
                 Titlebar(model: model)
                 WorkspaceTabs(model: model)
                 Divider().overlay(theme.palette.line)
-                if model.selectedWorkspace == .video, model.editor != nil {
-                    WorkspaceContent(model: model)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView {
+                HStack(spacing: 0) {
+                    LibrarySidebar(model: model)
+                    Divider().overlay(theme.palette.line)
+                    if model.selectedWorkspace == .video, model.editor != nil {
                         WorkspaceContent(model: model)
-                            .frame(maxWidth: 900, alignment: .leading)
-                            .padding(.horizontal, theme.metrics.spacing.xxl)
-                            .padding(.top, 24)
-                            .padding(.bottom, 32)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            WorkspaceContent(model: model)
+                                .frame(maxWidth: 1100, alignment: .leading)
+                                .padding(.horizontal, 32)
+                                .padding(.top, 24)
+                                .padding(.bottom, 32)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .scrollIndicators(.visible)
                     }
-                    .scrollIndicators(.visible)
                 }
                 StatusBar(model: model)
             }

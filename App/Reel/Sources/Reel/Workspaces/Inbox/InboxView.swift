@@ -10,7 +10,7 @@ struct InboxView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceHeader(
-                title: "Inbox",
+                title: model.currentFolderName,
                 subtitle:
                     "Capture with the screenshot shortcuts you already have set. Files land here on their own."
             )

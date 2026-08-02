@@ -9,6 +9,7 @@ public actor AppRuntime {
     public let libraryRoot: URL
 
     private let library: LibraryStore
+    private let folders: LibraryFolders
     private let pipeline: IngestPipeline
     private let coordinator: IngestCoordinator
     private let converter = Converter()
@@ -33,6 +34,7 @@ public actor AppRuntime {
 
         self.libraryRoot = root
         self.library = library
+        self.folders = LibraryFolders(root: root, library: library)
         self.pipeline = pipeline
         self.clickTracking = clickTracking
         self.coordinator = IngestCoordinator(
@@ -78,11 +80,51 @@ public actor AppRuntime {
     }
 
     public func assets() async throws -> [AssetRecord] {
-        try await library.assets(kind: nil, limit: 500, offset: 0)
+        try await library.assets(kind: nil, limit: Int.max, offset: 0)
+    }
+
+    public func folderTree(expanding: Set<String>) async throws -> FolderNode {
+        try await folders.tree(expanding: expanding)
+    }
+
+    public func createFolder(named name: String, in parent: String) async throws -> String {
+        try await folders.createFolder(named: name, in: parent)
+    }
+
+    public func renameFolder(_ path: String, to name: String) async throws -> String {
+        try await folders.rename(path, to: name)
+    }
+
+    public func moveAssets(_ ids: [AssetID], to folder: String) async throws -> [AssetRecord] {
+        try await folders.move(ids, to: folder)
+    }
+
+    public func moveFolder(_ path: String, to parent: String) async throws -> String {
+        try await folders.moveFolder(path, to: parent)
+    }
+
+    public func trashFolder(_ path: String) async throws -> FolderTrashReceipt {
+        try await folders.trashFolder(path)
+    }
+
+    public func restoreFolder(_ receipt: FolderTrashReceipt) async throws {
+        try await folders.restoreFolder(receipt)
+    }
+
+    public func revealInFinder(_ ids: [AssetID]) async {
+        await folders.revealInFinder(ids)
     }
 
     public func url(for assetID: AssetID) async throws -> URL {
         try await library.url(for: assetID)
+    }
+
+    public func urls(for assetIDs: [AssetID]) async -> [URL] {
+        var urls: [URL] = []
+        for id in assetIDs {
+            if let url = try? await library.url(for: id) { urls.append(url) }
+        }
+        return urls
     }
 
     public func projectsReferencing(assetIDs: [AssetID]) async throws -> [ProjectSummary] {

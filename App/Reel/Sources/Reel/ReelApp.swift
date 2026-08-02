@@ -50,6 +50,17 @@ struct ReelApp: App {
                 }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                 Divider()
+                Button(commandTitle("asset.quickLook")) {
+                    AppCommandRouter.run("asset.quickLook", in: model)
+                }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(model.selection.selected.isEmpty)
+                Button(commandTitle("asset.reveal")) {
+                    AppCommandRouter.run("asset.reveal", in: model)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.selection.selected.isEmpty)
+                Divider()
                 Button(commandTitle("asset.delete")) {
                     AppCommandRouter.run("asset.delete", in: model)
                 }

@@ -10,7 +10,8 @@ public enum AppCommandOutcome: Sendable, Equatable {
 @MainActor
 public enum AppCommandRouter {
     public static let menuCommandIDs: [CommandID] = [
-        "edit.undo", "edit.redo", "asset.selectAll", "asset.deselectAll", "asset.delete",
+        "edit.undo", "edit.redo", "asset.selectAll", "asset.deselectAll", "asset.quickLook",
+        "asset.reveal", "asset.delete",
     ]
 
     public static func availability(
@@ -27,7 +28,7 @@ public enum AppCommandRouter {
         case "asset.selectAll":
             return model.visibleAssets.isEmpty
                 ? .unavailable(reason: "This view contains no assets.") : .available
-        case "asset.deselectAll", "asset.delete":
+        case "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete":
             return model.selection.selected.isEmpty
                 ? .unavailable(reason: "No assets are selected.") : .available
         default:
@@ -57,6 +58,12 @@ public enum AppCommandRouter {
         case "asset.delete":
             model.requestTrashSelectedAssets()
             return .requestedConfirmation
+        case "asset.quickLook":
+            model.quickLookSelection()
+            return .completed
+        case "asset.reveal":
+            model.revealSelectionInFinder()
+            return .completed
         default:
             return .completed
         }
