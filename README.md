@@ -22,6 +22,9 @@ Implemented milestones:
   compositions, proxy/full playback rebuilding, a shared-context effect
   compositor, and an AppKit timeline with trim, split, reorder, speed, and exact
   undo/redo.
+- **M6 — Effects and export:** crop, background framing, rounded corners,
+  shadows, regional blur, and zoom rendering, plus atomic H.264, HEVC, and
+  ProRes exports with live progress and codec-aware presets.
 
 ## Test
 

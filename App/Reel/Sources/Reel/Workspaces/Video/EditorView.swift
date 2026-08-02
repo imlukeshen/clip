@@ -1,7 +1,10 @@
+import AppKit
 import CoreModel
 import DesignSystem
+import MediaEngine
 import ReelAppCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EditorView: View {
     @Environment(\.theme) private var theme
@@ -70,6 +73,26 @@ struct EditorView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
 
+            if editor.isExporting {
+                ProgressView(value: editor.exportProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 80)
+                Button("Cancel") { editor.cancelExport() }
+                    .buttonStyle(.plain)
+            } else {
+                Menu {
+                    Button("H.264 · MP4") { chooseExport(codec: .h264, container: .mp4) }
+                    Button("HEVC · MP4") { chooseExport(codec: .hevc, container: .mp4) }
+                    Button("ProRes 422 · MOV") {
+                        chooseExport(codec: .proRes422, container: .mov)
+                    }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
             Button {
                 editor.undo()
             } label: {
@@ -102,7 +125,10 @@ struct EditorView: View {
                 editor.splitAtPlayhead()
             }
             .keyboardShortcut("k", modifiers: .command)
-            ToolButton(systemName: "magnifyingglass", help: "Zoom effects") {}
+            ToolButton(systemName: "magnifyingglass", help: "Add zoom effect") {
+                guard let itemID = editor.selectedItem?.id else { return }
+                editor.addZoom(to: itemID)
+            }
             Spacer()
         }
         .padding(.vertical, 9)
@@ -195,6 +221,34 @@ struct EditorView: View {
             Int(seconds) % 60,
             Int(seconds * 1_000) % 1_000
         )
+    }
+
+    private func chooseExport(
+        codec: ExportPreset.Codec,
+        container: ExportPreset.Container
+    ) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(editor.document.name).\(container.rawValue)"
+        panel.allowedContentTypes = container == .mp4 ? [.mpeg4Movie] : [.quickTimeMovie]
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            editor.export(
+                to: url,
+                preset: ExportPreset(
+                    container: container,
+                    codec: codec,
+                    size: CGSize(
+                        width: editor.document.canvas.width,
+                        height: editor.document.canvas.height
+                    ),
+                    frameRate: editor.document.canvas.frameRate,
+                    bitrate: codec == .proRes422 ? nil : 12_000_000,
+                    includeAudio: true,
+                    burnCaptions: true
+                )
+            )
+        }
     }
 }
 
@@ -308,14 +362,30 @@ private struct EditorInspector: View {
 
                 Divider().overlay(theme.palette.line)
                 SectionLabel("Effects")
+                HStack(spacing: 6) {
+                    EffectButton("Zoom") { editor.addZoom(to: item.id) }
+                    EffectButton("Frame") { editor.addBackground(to: item.id) }
+                    EffectButton("Crop") { editor.addCrop(to: item.id) }
+                    EffectButton("Blur") { editor.addBlur(to: item.id) }
+                }
                 if item.effects.isEmpty {
                     Text("No clip effects")
                         .font(theme.type.caption.font)
                         .foregroundStyle(theme.palette.textTertiary)
                 } else {
                     ForEach(item.effects) { effect in
-                        Text(String(describing: effect.kind).capitalized)
-                            .font(theme.type.caption.font)
+                        HStack {
+                            Text(effectName(effect.kind))
+                                .font(theme.type.caption.font)
+                            Spacer()
+                            Button {
+                                editor.removeEffect(effect.id, from: item.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(theme.palette.textTertiary)
+                        }
                     }
                 }
                 Spacer()
@@ -333,5 +403,39 @@ private struct EditorInspector: View {
 
     private var durationText: String {
         String(format: "%.1f seconds", editor.duration.seconds)
+    }
+
+    private func effectName(_ kind: EffectKind) -> String {
+        switch kind {
+        case .zoom: "Zoom"
+        case .crop: "Crop"
+        case .background: "Background"
+        case .blur: "Blur"
+        case .cursor: "Cursor"
+        case .text: "Text"
+        case .unknown(let name): name
+        }
+    }
+}
+
+private struct EffectButton: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    let action: () -> Void
+
+    init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(theme.type.micro.font)
+            .foregroundStyle(theme.palette.textSecondary)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(theme.palette.surfaceRaised)
+            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
     }
 }

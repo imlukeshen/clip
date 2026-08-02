@@ -7,6 +7,10 @@ public enum MediaEngineError: Error, Sendable, Equatable {
     case cannotCreateTrack
     case invalidSourceRange(ItemID)
     case compositionFailed(ItemID, String)
+    case invalidExportPreset(String)
+    case cannotCreateOutput
+    case exportFailed(String)
+    case cancelled
 }
 
 extension MediaEngineError: LocalizedError {
@@ -17,6 +21,10 @@ extension MediaEngineError: LocalizedError {
         case .cannotCreateTrack: "The playback tracks could not be created."
         case .invalidSourceRange: "A clip range falls outside its source media."
         case .compositionFailed(_, let reason): reason
+        case .invalidExportPreset(let reason): reason
+        case .cannotCreateOutput: "The export destination could not be prepared."
+        case .exportFailed(let reason): reason
+        case .cancelled: "The export was cancelled."
         }
     }
 }

@@ -14,6 +14,9 @@ public final class EditorViewModel {
     public private(set) var isPlaying = false
     public private(set) var isScrubbing = false
     public private(set) var isBuilding = false
+    public private(set) var isExporting = false
+    public private(set) var exportProgress = 0.0
+    public private(set) var lastExportURL: URL?
     public private(set) var notice: String?
     public let undoManager = UndoManager()
     public let player = AVPlayer()
@@ -22,9 +25,11 @@ public final class EditorViewModel {
     private let resolver: @Sendable (AssetID) async throws -> URL
     private let persistence: @Sendable (ProjectDocument, GraphPatch?) async throws -> Void
     private let buildsPlayback: Bool
+    private let exporter = Exporter()
     private var rebuildTask: Task<Void, Never>?
     private var playbackTask: Task<Void, Never>?
     private var persistenceTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
     private var resumeAfterScrub = false
 
     public init(
@@ -68,6 +73,8 @@ public final class EditorViewModel {
         pause()
         rebuildTask?.cancel()
         rebuildTask = nil
+        exportTask?.cancel()
+        exportTask = nil
     }
 
     public func perform(_ patch: GraphPatch) throws {
@@ -187,6 +194,131 @@ public final class EditorViewModel {
         }
     }
 
+    public func addZoom(to itemID: ItemID) {
+        guard let item = document.item(itemID) else { return }
+        addEffect(
+            .zoom(
+                ZoomEffect(
+                    id: .generate(),
+                    range: item.effectRange,
+                    center: NormalizedPoint(x: 0.5, y: 0.5),
+                    scale: 1.85
+                )
+            ),
+            to: itemID
+        )
+    }
+
+    public func addBackground(to itemID: ItemID) {
+        guard let item = document.item(itemID) else { return }
+        addEffect(
+            .background(
+                BackgroundEffect(
+                    id: .generate(),
+                    range: item.effectRange,
+                    padding: 0.06,
+                    cornerRadius: 24,
+                    style: .solid(.black),
+                    shadow: ShadowSpec(
+                        color: RGBA(r: 0, g: 0, b: 0, a: 0.4),
+                        radius: 18,
+                        offsetX: 0,
+                        offsetY: 8
+                    )
+                )
+            ),
+            to: itemID
+        )
+    }
+
+    public func addCrop(to itemID: ItemID) {
+        guard let item = document.item(itemID) else { return }
+        addEffect(
+            .crop(
+                CropEffect(
+                    id: .generate(),
+                    range: item.effectRange,
+                    rect: NormalizedRect(x: 0.05, y: 0.05, width: 0.9, height: 0.9)
+                )
+            ),
+            to: itemID
+        )
+    }
+
+    public func addBlur(to itemID: ItemID) {
+        guard let item = document.item(itemID) else { return }
+        addEffect(
+            .blur(
+                BlurEffect(
+                    id: .generate(),
+                    range: item.effectRange,
+                    regions: [
+                        TimedRegion(
+                            time: .zero,
+                            rect: NormalizedRect(x: 0.35, y: 0.35, width: 0.3, height: 0.3)
+                        )
+                    ],
+                    mode: .gaussian(radius: 18),
+                    isDestructiveOnExport: true
+                )
+            ),
+            to: itemID
+        )
+    }
+
+    public func removeEffect(_ effectID: EffectID, from itemID: ItemID) {
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.removeEffect(itemID, effectID)],
+                    label: "Remove Effect",
+                    origin: .user
+                )
+            )
+        } catch {
+            notice = "The effect could not be removed."
+        }
+    }
+
+    public func export(to url: URL, preset: ExportPreset) {
+        guard !isExporting else { return }
+        isExporting = true
+        exportProgress = 0
+        lastExportURL = nil
+        let document = document
+        let resolver = resolver
+        let exporter = exporter
+        exportTask = Task { [weak self] in
+            do {
+                let updates = await exporter.export(
+                    document,
+                    preset: preset,
+                    to: url,
+                    resolving: resolver
+                )
+                for try await update in updates {
+                    guard let self else { return }
+                    exportProgress = update.fraction
+                }
+                guard let self else { return }
+                lastExportURL = url
+                isExporting = false
+                notice = "Exported \(url.lastPathComponent)."
+            } catch MediaEngineError.cancelled {
+                self?.isExporting = false
+                self?.notice = "Export cancelled."
+            } catch {
+                self?.isExporting = false
+                self?.notice = error.localizedDescription
+            }
+        }
+    }
+
+    public func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
+    }
+
     public func insert(_ asset: AssetRecord) {
         guard asset.kind == .video, let duration = asset.duration else {
             notice = "That asset has no playable duration."
@@ -220,6 +352,20 @@ public final class EditorViewModel {
 
     public func clearNotice() {
         notice = nil
+    }
+
+    private func addEffect(_ effect: Effect, to itemID: ItemID) {
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.addEffect(itemID, effect)],
+                    label: "Add Effect",
+                    origin: .user
+                )
+            )
+        } catch {
+            notice = "The effect could not be added."
+        }
     }
 
     private func apply(_ patch: GraphPatch, registeringUndo: Bool) throws {
@@ -325,5 +471,11 @@ public final class EditorViewModel {
         isPlaying = false
         playbackTask?.cancel()
         playbackTask = nil
+    }
+}
+
+extension TimelineItem {
+    fileprivate var effectRange: TimeRange {
+        TimeRange(start: .zero, duration: sourceRange.duration)
     }
 }

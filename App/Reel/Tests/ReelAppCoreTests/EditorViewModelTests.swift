@@ -42,6 +42,20 @@ struct EditorViewModelTests {
         #expect(editor.document == original)
     }
 
+    @Test("Effect actions use the mutation path and remain exactly undoable")
+    func addEffectAndUndo() throws {
+        let original = try document()
+        let editor = makeEditor(document: original)
+        let itemID = try #require(original.timeline.video.first?.id)
+
+        editor.addZoom(to: itemID)
+
+        #expect(editor.document.timeline.video[0].effects.count == 1)
+        #expect(editor.document.timeline.video[0].effects[0].kind == .zoom)
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
     private func makeEditor(document: ProjectDocument) -> EditorViewModel {
         let record = AssetRecord(
             id: AssetID(rawValue: "asset"),

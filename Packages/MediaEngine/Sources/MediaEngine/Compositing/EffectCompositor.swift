@@ -61,15 +61,14 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
             return
         }
         let bounds = CGRect(origin: .zero, size: request.renderContext.size)
-        let color = instruction.background
-        let background = CIImage(
-            color: CIColor(
-                red: color.r,
-                green: color.g,
-                blue: color.b,
-                alpha: color.a
-            )
-        ).cropped(to: bounds)
+        let background = FrameEffectRenderer.background(
+            instruction.background,
+            effects: instruction.effects,
+            at: (request.compositionTime - instruction.timeRange.start).rational.scaled(
+                by: instruction.speed
+            ),
+            bounds: bounds
+        )
 
         var composed = background
         if let trackID = instruction.sourceTrackID,
@@ -83,40 +82,15 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
                     y: -image.extent.minY
                 )
             )
-            if image.extent.width > 0, image.extent.height > 0 {
-                let fit = min(
-                    bounds.width / image.extent.width,
-                    bounds.height / image.extent.height
-                )
-                image = image.transformed(by: CGAffineTransform(scaleX: fit, y: fit))
-                image = image.transformed(
-                    by: CGAffineTransform(
-                        translationX: (bounds.width - image.extent.width) / 2,
-                        y: (bounds.height - image.extent.height) / 2
-                    )
-                )
-            }
-
             let timelineLocal = (request.compositionTime - instruction.timeRange.start).rational
             let sourceLocal = timelineLocal.scaled(by: instruction.speed)
-            let zooms = instruction.effects.compactMap { effect -> ZoomEffect? in
-                if case .zoom(let zoom) = effect { return zoom }
-                return nil
-            }
-            let zoom = ZoomEvaluator.state(at: sourceLocal, effects: zooms)
-            if zoom.scale != 1 {
-                image = image.transformed(
-                    by: CGAffineTransform(
-                        a: zoom.scale,
-                        b: 0,
-                        c: 0,
-                        d: zoom.scale,
-                        tx: bounds.midX - zoom.center.x * bounds.width * zoom.scale,
-                        ty: bounds.midY - zoom.center.y * bounds.height * zoom.scale
-                    )
-                )
-            }
-            composed = image.cropped(to: bounds).composited(over: background)
+            composed = FrameEffectRenderer.render(
+                image,
+                effects: instruction.effects,
+                at: sourceLocal,
+                bounds: bounds,
+                background: background
+            )
         }
 
         context.render(
