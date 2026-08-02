@@ -92,7 +92,8 @@ public final class AppModel {
     public var visibleAssets: [AssetRecord] {
         let scoped: [AssetRecord]
         if selectedWorkspace == .inbox, let selectedFolderPath {
-            let prefix = selectedFolderPath.isEmpty
+            let prefix =
+                selectedFolderPath.isEmpty
                 ? "Media/" : "Media/\(selectedFolderPath)/"
             scoped = assets.filter { asset in
                 guard asset.relativePath.hasPrefix(prefix) else { return false }
@@ -101,9 +102,12 @@ public final class AppModel {
         } else {
             scoped = assets
         }
-        let searched = searchQuery.isEmpty ? scoped : scoped.filter {
-            $0.displayName.localizedCaseInsensitiveContains(searchQuery)
-        }
+        let searched =
+            searchQuery.isEmpty
+            ? scoped
+            : scoped.filter {
+                $0.displayName.localizedCaseInsensitiveContains(searchQuery)
+            }
         return searched.sorted(by: assetOrdering)
     }
 
@@ -188,8 +192,14 @@ public final class AppModel {
             isCommandPalettePresented = false
             return
         }
+        if let pdfEditor, CommandRegistry.command(id: id)?.category == .pdf {
+            pdfEditor.runPDFCommand(id.rawValue)
+            isCommandPalettePresented = false
+            return
+        }
         guard let editor else {
-            lastMessage = "Open a document to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
+            lastMessage =
+                "Open a document to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
             return
         }
         switch id.rawValue {
@@ -765,7 +775,8 @@ public final class AppModel {
                 let sourceURL = try await runtime.url(for: assetID)
                 let width = max(asset.width ?? 1_920, 1)
                 let height = max(asset.height ?? 1_080, 1)
-                let document = try await runtime.imageDocument(for: assetID)
+                let document =
+                    try await runtime.imageDocument(for: assetID)
                     ?? ImageDocument(
                         sourceAssetID: assetID,
                         canvas: ImageCanvas(width: width, height: height)
@@ -804,7 +815,8 @@ public final class AppModel {
                 let source = try PDFiumDocument(url: sourceURL)
                 let title = URL(fileURLWithPath: asset.displayName)
                     .deletingPathExtension().lastPathComponent
-                let document = try await runtime.pdfDocument(for: assetID)
+                let document =
+                    try await runtime.pdfDocument(for: assetID)
                     ?? source.makeEditDocument(sourceAssetID: assetID, title: title)
                 let pdfEditor = PDFEditorViewModel(
                     document: document,
@@ -852,7 +864,8 @@ public final class AppModel {
                 await refreshAssets()
                 undoManager.registerUndo(withTarget: self) { target in
                     let path = receipt.originalURL.path
-                        .replacingOccurrences(of: LibraryLayout.media(in: target.libraryRoot).path + "/", with: "")
+                        .replacingOccurrences(
+                            of: LibraryLayout.media(in: target.libraryRoot).path + "/", with: "")
                     target.trashFolder(path)
                 }
                 undoManager.setActionName("Move Folder to Trash")

@@ -70,6 +70,7 @@ struct CommandPaletteView: View {
         case .audio: "waveform"
         case .timeline: "timeline.selection"
         case .image: "photo.badge.wand.fill"
+        case .pdf: "doc.richtext"
         case .file: "doc"
         case .view: "rectangle.3.group"
         case .app: "command"

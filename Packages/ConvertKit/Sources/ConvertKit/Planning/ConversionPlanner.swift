@@ -5,7 +5,7 @@ import LibraryStore
 public func plan(from source: AssetRecord, to target: TargetFormat) -> ConversionPlan {
     if source.kind == .document || source.container?.lowercased() == "pdf" {
         return ConversionPlan(
-            backend: .unsupported("PDF conversion is planned for v2"),
+            backend: .unsupported("Use the PDF workspace to export Markdown or an edited PDF"),
             estimate: .instant,
             lossless: false
         )

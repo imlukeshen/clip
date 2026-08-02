@@ -41,6 +41,12 @@ struct PDFEditorViewModelTests {
         editor.undo()
         #expect(editor.document == before)
 
+        editor.recognizeSelectedPage()
+        try await waitUntil { editor.selectedPage?.ocrText != nil }
+        editor.runPDFCommand("pdf.toMarkdown")
+        try await waitUntil { editor.generatedMarkdown != nil }
+        #expect(editor.generatedMarkdown?.contains("<!-- Page 1 -->") == true)
+
         try await waitUntil { await recorder.count >= 2 }
         editor.stop()
     }

@@ -52,7 +52,7 @@ struct ConversionQueueItemTests {
         #expect(item.status == .converting)
     }
 
-    @Test("Images expose ImageIO targets and PDFs remain an explicit v2 state")
+    @Test("Images expose ImageIO targets and PDFs route to their workspace")
     func mediaFamiliesStayTruthful() {
         let image = ConversionQueueItem(
             asset: record(kind: .image, container: "png", codec: nil),
@@ -66,7 +66,10 @@ struct ConversionQueueItemTests {
         #expect(image.plan.backend == .imageIO(.jpeg))
         #expect(image.plan.estimate == .instant)
         #expect(!image.availableTargets.contains(.mp4H264))
-        #expect(document.plan.backend == .unsupported("PDF conversion is planned for v2"))
+        #expect(
+            document.plan.backend
+                == .unsupported("Use the PDF workspace to export Markdown or an edited PDF")
+        )
     }
 
     private func record(

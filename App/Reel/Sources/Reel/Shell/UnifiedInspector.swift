@@ -44,7 +44,8 @@ struct UnifiedInspector: View {
                 LabeledContent("Kind", value: asset.kind.rawValue.capitalized)
                 LabeledContent(
                     "Size",
-                    value: ByteCountFormatter.string(fromByteCount: asset.byteSize, countStyle: .file)
+                    value: ByteCountFormatter.string(
+                        fromByteCount: asset.byteSize, countStyle: .file)
                 )
                 if let duration = asset.duration {
                     LabeledContent("Duration", value: String(format: "%.2fs", duration.seconds))
@@ -100,7 +101,9 @@ private struct PDFLayerInspector: View {
                 ScrollView {
                     LazyVStack(spacing: 3) {
                         ForEach(Array(layers.reversed())) { layer in
-                            Button { editor.selectLayer(layer.id) } label: {
+                            Button {
+                                editor.selectLayer(layer.id)
+                            } label: {
                                 HStack {
                                     Image(systemName: symbol(for: layer))
                                     Text(layer.name)
@@ -171,6 +174,22 @@ private struct PDFLayerInspector: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.click)
             }
+            Divider().overlay(theme.palette.line)
+            Text("On-device text recognition").font(theme.type.label.font)
+            if let text = editor.selectedPage?.ocrText {
+                Text(text.isEmpty ? "No text recognized" : "\(text.count) characters saved")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            } else {
+                Text("OCR has not been run for this page.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            Button(editor.selectedPage?.ocrText == nil ? "Recognize page" : "Recognize again") {
+                editor.recognizeSelectedPage()
+            }
+            .buttonStyle(ReelBorderedButtonStyle())
+            .disabled(editor.isRecognizingText)
             Spacer()
         }
         .padding(14)

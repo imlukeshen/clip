@@ -58,14 +58,17 @@ struct PlanningTests {
                 == expected)
     }
 
-    @Test("PDF conversion remains an explicit v2 result")
+    @Test("PDF files route users to the dedicated workspace")
     func pdfUnsupported() {
         for target in TargetFormat.allCases {
             let result = plan(
                 from: asset(kind: .document, container: "pdf", codec: nil),
                 to: target
             )
-            #expect(result.backend == .unsupported("PDF conversion is planned for v2"))
+            #expect(
+                result.backend
+                    == .unsupported("Use the PDF workspace to export Markdown or an edited PDF")
+            )
         }
     }
 

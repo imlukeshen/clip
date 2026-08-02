@@ -1,3 +1,4 @@
+import AIKit
 import CoreGraphics
 import CoreModel
 import Foundation
@@ -33,6 +34,9 @@ public final class PDFEditorViewModel {
     public private(set) var pageAnalysis: PDFPageAnalysis?
     public private(set) var isRendering = false
     public private(set) var isExporting = false
+    public private(set) var isRecognizingText = false
+    public private(set) var isExportingMarkdown = false
+    public private(set) var generatedMarkdown: String?
     public private(set) var notice: String?
     public var selectedPageID: PDFPageID
     public var selectedLayerID: PDFLayerID?
@@ -42,6 +46,8 @@ public final class PDFEditorViewModel {
 
     private let source: PDFiumDocument
     private let renderer: PDFDocumentRenderer
+    private let markdownConverter: PDFMarkdownConverter
+    private let toolExecutor: PDFToolExecutor
     private let persistence: @Sendable (PDFEditDocument) async throws -> Void
     private var renderTask: Task<Void, Never>?
     private var thumbnailTask: Task<Void, Never>?
@@ -53,10 +59,24 @@ public final class PDFEditorViewModel {
         source: PDFiumDocument,
         persisting: @escaping @Sendable (PDFEditDocument) async throws -> Void
     ) {
+        let renderer = PDFDocumentRenderer(source: source)
+        let converter = PDFMarkdownConverter(source: source)
         self.document = document
         self.sourceURL = sourceURL
         self.source = source
-        self.renderer = PDFDocumentRenderer(source: source)
+        self.renderer = renderer
+        self.markdownConverter = converter
+        self.toolExecutor = PDFToolExecutor(
+            recognizer: { document, pageID in
+                let image = try renderer.render(
+                    document,
+                    pageID: pageID,
+                    maxPixelDimension: 2_400
+                )
+                return try await OnDevicePDFOCR().recognize(image)
+            },
+            markdownConverter: { document in try converter.convert(document) }
+        )
         self.persistence = persisting
         self.selectedPageID = document.pages[0].id
         undoManager.groupsByEvent = false
@@ -101,15 +121,19 @@ public final class PDFEditorViewModel {
     }
 
     public func perform(_ patch: PDFPatch, actionName: String) throws {
+        try perform([patch], actionName: actionName)
+    }
+
+    public func perform(_ patches: [PDFPatch], actionName: String) throws {
+        guard !patches.isEmpty else { return }
         undoManager.beginUndoGrouping()
         defer { undoManager.endUndoGrouping() }
         var candidate = document
-        let inverse = try candidate.apply(patch)
+        var inverses: [PDFPatch] = []
+        for patch in patches { inverses.append(try candidate.apply(patch)) }
         document = candidate
-        if document.page(selectedPageID) == nil {
-            selectedPageID = document.pages[0].id
-        }
-        registerUndo(inverse, actionName: actionName)
+        reconcileSelection()
+        registerUndo(Array(inverses.reversed()), actionName: actionName)
         undoManager.setActionName(actionName)
         persist()
         rebuild()
@@ -225,6 +249,65 @@ public final class PDFEditorViewModel {
         }
     }
 
+    public func recognizeSelectedPage() {
+        runPDFCommand("pdf.ocrPage")
+    }
+
+    public func exportMarkdown(to url: URL) {
+        let document = document
+        let converter = markdownConverter
+        isExportingMarkdown = true
+        Task {
+            do {
+                let markdown = try await Task.detached(priority: .userInitiated) {
+                    try converter.convert(document)
+                }.value
+                try Data(markdown.utf8).write(to: url, options: .atomic)
+                generatedMarkdown = markdown
+                notice = "Saved \(url.lastPathComponent)."
+            } catch {
+                notice = "The Markdown file could not be saved."
+            }
+            isExportingMarkdown = false
+        }
+    }
+
+    public func runPDFCommand(_ id: String) {
+        let arguments = defaultArguments(for: id)
+        let context = PDFToolExecutionContext(
+            document: document,
+            selectedPageID: selectedPageID
+        )
+        if id == "pdf.ocrPage" { isRecognizingText = true }
+        if id == "pdf.toMarkdown" { isExportingMarkdown = true }
+        Task {
+            defer {
+                if id == "pdf.ocrPage" { isRecognizingText = false }
+                if id == "pdf.toMarkdown" { isExportingMarkdown = false }
+            }
+            do {
+                let result = try await toolExecutor.execute(
+                    ToolInvocation(
+                        callID: UUID().uuidString,
+                        name: id,
+                        arguments: arguments
+                    ),
+                    context: context
+                )
+                if !result.patches.isEmpty {
+                    try perform(
+                        result.patches,
+                        actionName: CommandRegistry.command(named: id)?.title ?? id
+                    )
+                }
+                if id == "pdf.toMarkdown" { generatedMarkdown = result.value }
+                notice = result.message
+            } catch {
+                notice = "The PDF command could not be completed."
+            }
+        }
+    }
+
     public func clearNotice() { notice = nil }
 
     private func rebuild() {
@@ -289,19 +372,52 @@ public final class PDFEditorViewModel {
         }
     }
 
-    private func registerUndo(_ patch: PDFPatch, actionName: String) {
+    private func registerUndo(_ patches: [PDFPatch], actionName: String) {
         undoManager.registerUndo(withTarget: self) { target in
             do {
                 var candidate = target.document
-                let redo = try candidate.apply(patch)
+                var redos: [PDFPatch] = []
+                for patch in patches { redos.append(try candidate.apply(patch)) }
                 target.document = candidate
-                target.registerUndo(redo, actionName: actionName)
+                target.reconcileSelection()
+                target.registerUndo(Array(redos.reversed()), actionName: actionName)
+                target.undoManager.setActionName(actionName)
                 target.persist()
                 target.rebuild()
                 target.rebuildThumbnails()
             } catch {
                 target.notice = "The PDF edit could not be undone."
             }
+        }
+    }
+
+    private func reconcileSelection() {
+        if document.page(selectedPageID) == nil {
+            selectedPageID = document.pages[0].id
+            selectedLayerID = nil
+        } else if let selectedLayerID,
+            selectedPage?.layers.contains(where: { $0.id == selectedLayerID }) != true
+        {
+            self.selectedLayerID = nil
+        }
+    }
+
+    private func defaultArguments(for id: String) -> JSONValue {
+        let rect: JSONValue = .object([
+            "x": .number(0.2), "y": .number(0.2),
+            "width": .number(0.36), "height": .number(0.12),
+        ])
+        switch id {
+        case "pdf.addText":
+            return .object(["text": .string("Text"), "rect": rect])
+        case "pdf.highlight", "pdf.redact":
+            return .object(["rect": rect])
+        case "pdf.reorderPage":
+            let index = document.pages.firstIndex { $0.id == selectedPageID } ?? 0
+            let destination = min(index + 1, document.pages.count - 1)
+            return .object(["destination": .number(Double(destination))])
+        default:
+            return .object([:])
         }
     }
 

@@ -9,7 +9,7 @@ public struct CommandID: RawRepresentable, Codable, Sendable, Hashable, Expressi
 }
 
 public enum CommandCategory: String, Codable, Sendable, CaseIterable {
-    case asset, clip, effect, audio, timeline, image, file, view, app
+    case asset, clip, effect, audio, timeline, image, pdf, file, view, app
 }
 
 public enum AgentExposure: String, Codable, Sendable {
@@ -264,6 +264,33 @@ public enum CommandRegistry {
             kind: .read, exposure: .onDemand),
         command(
             "numberSteps", "Number Image Steps", .image, exposure: .onDemand),
+        command(
+            "pdf.describe", "Describe PDF", .pdf, kind: .read, exposure: .onDemand),
+        command(
+            "pdf.addText", "Add PDF Text", .pdf, exposure: .onDemand,
+            required: ["text", "rect"],
+            properties: [
+                "pageID": string, "text": string, "rect": rect, "fontSize": number,
+            ]),
+        command(
+            "pdf.highlight", "Highlight PDF Region", .pdf, exposure: .onDemand,
+            required: ["rect"], properties: ["pageID": string, "rect": rect]),
+        command(
+            "pdf.redact", "Redact PDF Region", .pdf, destructive: true, exposure: .onDemand,
+            required: ["rect"], properties: ["pageID": string, "rect": rect]),
+        command(
+            "pdf.rotatePage", "Rotate PDF Page", .pdf, exposure: .onDemand,
+            properties: ["pageID": string]),
+        command(
+            "pdf.reorderPage", "Reorder PDF Page", .pdf, exposure: .onDemand,
+            required: ["destination"],
+            properties: ["pageID": string, "destination": number]),
+        command(
+            "pdf.ocrPage", "Recognize PDF Page Text", .pdf, exposure: .onDemand,
+            properties: ["pageID": string]),
+        command(
+            "pdf.toMarkdown", "Convert PDF to Markdown", .pdf,
+            kind: .read, exposure: .onDemand),
         command(
             "listCommands", "List Commands", .app, kind: .read, exposure: .always,
             properties: ["category": string, "query": string]),

@@ -4,6 +4,7 @@ import DesignSystem
 import LibraryStore
 import ReelAppCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PDFView: View {
     @Environment(\.theme) private var theme
@@ -102,9 +103,17 @@ private struct PDFEditorView: View {
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
             Spacer()
-            if editor.isRendering || editor.isExporting {
+            if editor.isRendering || editor.isExporting || editor.isRecognizingText
+                || editor.isExportingMarkdown
+            {
                 ProgressView().controlSize(.small)
             }
+            Button("OCR Page", action: editor.recognizeSelectedPage)
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.isRecognizingText)
+            Button("Markdown…", action: saveAsMarkdown)
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.isExportingMarkdown)
             Button("Save As PDF…", action: saveAsPDF)
                 .buttonStyle(ReelBorderedButtonStyle())
                 .disabled(editor.isExporting)
@@ -187,6 +196,13 @@ private struct PDFEditorView: View {
             PDFToolButton(systemName: "arrow.down", help: "Move page later") {
                 editor.moveSelectedPage(by: 1)
             }
+            Divider().overlay(theme.palette.line).padding(.vertical, 5)
+            PDFToolButton(systemName: "doc.text.magnifyingglass", help: "OCR this page") {
+                editor.recognizeSelectedPage()
+            }
+            PDFToolButton(systemName: "text.document", help: "Export Markdown") {
+                saveAsMarkdown()
+            }
             Spacer()
         }
         .padding(.vertical, 10)
@@ -265,6 +281,16 @@ private struct PDFEditorView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             editor.export(to: url)
+        }
+    }
+
+    private func saveAsMarkdown() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(editor.document.title).md"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            editor.exportMarkdown(to: url)
         }
     }
 }
