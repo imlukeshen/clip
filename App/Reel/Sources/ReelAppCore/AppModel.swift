@@ -17,6 +17,9 @@ public final class AppModel {
     public var selectedFolderPath: String? = "Inbox"
     public var browserViewMode: BrowserViewMode = .grid
     public var assetSort: AssetSort = .modified
+    public var isInspectorVisible = true
+    public var isCommandPalettePresented = false
+    public var commandQuery = ""
     public private(set) var shortcutRow: ShortcutRowModel
     public private(set) var libraryRoot: URL
     public private(set) var isWatching = false
@@ -40,6 +43,8 @@ public final class AppModel {
     private var runtime: AppRuntime?
     private var libraryChangesTask: Task<Void, Never>?
     private var hasStarted = false
+    private var folderBackHistory: [String?] = []
+    private var folderForwardHistory: [String?] = []
 
     public init(
         libraryRoot: URL = AppModel.defaultLibraryRoot,
@@ -103,6 +108,9 @@ public final class AppModel {
         selectedFolderPath?.split(separator: "/").last.map(String.init) ?? "Recent"
     }
 
+    public var canNavigateBack: Bool { !folderBackHistory.isEmpty }
+    public var canNavigateForward: Bool { !folderForwardHistory.isEmpty }
+
     public func assetCount(for workspace: Workspace) -> Int {
         switch workspace {
         case .inbox: assets.count
@@ -142,9 +150,50 @@ public final class AppModel {
     }
 
     public func selectFolder(_ path: String?) {
+        guard selectedFolderPath != path || selectedWorkspace != .inbox else { return }
+        folderBackHistory.append(selectedFolderPath)
+        folderForwardHistory.removeAll()
         selectedWorkspace = .inbox
         selectedFolderPath = path
         selection.deselectAll()
+    }
+
+    public func navigateBack() {
+        guard let destination = folderBackHistory.popLast() else { return }
+        folderForwardHistory.append(selectedFolderPath)
+        selectedFolderPath = destination
+        selectedWorkspace = .inbox
+        selection.deselectAll()
+    }
+
+    public func navigateForward() {
+        guard let destination = folderForwardHistory.popLast() else { return }
+        folderBackHistory.append(selectedFolderPath)
+        selectedFolderPath = destination
+        selectedWorkspace = .inbox
+        selection.deselectAll()
+    }
+
+    public func runPaletteCommand(_ id: CommandID) {
+        if AppCommandRouter.menuCommandIDs.contains(id) {
+            AppCommandRouter.run(id, in: self)
+            isCommandPalettePresented = false
+            return
+        }
+        guard let editor else {
+            lastMessage = "Open a project to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
+            return
+        }
+        switch id.rawValue {
+        case "splitClip": editor.splitAtPlayhead()
+        case "addZoom":
+            if let item = editor.selectedItem { editor.addZoom(to: item.id) }
+        case "autoZoomFromClicks": editor.autoZoomSelectedClip()
+        default:
+            assistantDraft = "Run command \(id.rawValue) for the current selection."
+            lastMessage = "Command prepared in Chat with current editor context."
+        }
+        isCommandPalettePresented = false
     }
 
     public func toggleFolderExpansion(_ path: String) {
@@ -270,6 +319,19 @@ public final class AppModel {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/qlmanage")
             process.arguments = ["-p"] + urls.map(\.path)
             try? process.run()
+        }
+    }
+
+    public func locateMissingAsset(_ id: AssetID, at url: URL) {
+        guard let runtime else { return }
+        Task {
+            do {
+                try await runtime.locate(assetID: id, at: url)
+                await refreshAssets()
+                lastMessage = "Missing media located."
+            } catch {
+                lastMessage = "That file does not match the missing original."
+            }
         }
     }
 

@@ -28,6 +28,28 @@ struct ReelApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
         .commands {
+            CommandMenu("Navigate") {
+                Button(commandTitle("app.commandPalette")) {
+                    AppCommandRouter.run("app.commandPalette", in: model)
+                }
+                .keyboardShortcut("k", modifiers: .command)
+                Divider()
+                Button(commandTitle("navigation.inbox")) {
+                    AppCommandRouter.run("navigation.inbox", in: model)
+                }
+                Button(commandTitle("navigation.video")) {
+                    AppCommandRouter.run("navigation.video", in: model)
+                }
+                Button(commandTitle("navigation.photo")) {
+                    AppCommandRouter.run("navigation.photo", in: model)
+                }
+                Button(commandTitle("navigation.pdf")) {
+                    AppCommandRouter.run("navigation.pdf", in: model)
+                }
+                Button(commandTitle("navigation.convert")) {
+                    AppCommandRouter.run("navigation.convert", in: model)
+                }
+            }
             CommandGroup(replacing: .undoRedo) {
                 Button(commandTitle("edit.undo")) {
                     AppCommandRouter.run("edit.undo", in: model)

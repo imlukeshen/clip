@@ -25,6 +25,9 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
     public var thumbnailPath: String?
     public var peaksPath: String?
     public var ingestState: IngestState
+    public var missingSince: Date?
+
+    public var isMissing: Bool { missingSince != nil }
 
     public init(
         id: AssetID,
@@ -48,7 +51,8 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         eventAlignment: EventAlignmentKind? = nil,
         thumbnailPath: String? = nil,
         peaksPath: String? = nil,
-        ingestState: IngestState
+        ingestState: IngestState,
+        missingSince: Date? = nil
     ) {
         self.id = id
         self.relativePath = relativePath
@@ -72,5 +76,6 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         self.thumbnailPath = thumbnailPath
         self.peaksPath = peaksPath
         self.ingestState = ingestState
+        self.missingSince = missingSince
     }
 }

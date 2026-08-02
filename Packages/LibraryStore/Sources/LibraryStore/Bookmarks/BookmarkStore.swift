@@ -40,6 +40,58 @@ public actor BookmarkStore {
         cachedBookmarks = bookmarks
     }
 
+    /// Stores a bookmark plus the volume-stable file identifier used when a bookmark URL goes stale.
+    public func storeFileReference(_ url: URL, key: String) throws {
+        var bookmarks = try loadedBookmarks()
+        var storedReference = false
+        if let bookmark = try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) {
+            bookmarks[key] = bookmark
+            storedReference = true
+        }
+        if let identifier = try? url.resourceValues(
+            forKeys: [.fileResourceIdentifierKey]
+        ).fileResourceIdentifier {
+            bookmarks["\(key).resource-id"] = Data(String(describing: identifier).utf8)
+            storedReference = true
+        }
+        guard storedReference else {
+            throw LibraryError.bookmarkCreationFailed(key)
+        }
+        try persist(bookmarks)
+        cachedBookmarks = bookmarks
+    }
+
+    /// Resolves a moved file by bookmark first, then by its stable identifier within one root.
+    public func resolveFileReference(key: String, searching root: URL) throws -> URL {
+        if let bookmarked = try? resolve(key: key),
+            FileManager.default.fileExists(atPath: bookmarked.path)
+        {
+            return bookmarked
+        }
+        guard let data = try loadedBookmarks()["\(key).resource-id"],
+            let expected = String(data: data, encoding: .utf8),
+            let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileResourceIdentifierKey],
+                options: [.skipsHiddenFiles]
+            )
+        else { throw LibraryError.bookmarkResolutionFailed(key) }
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(
+                forKeys: [.isRegularFileKey, .fileResourceIdentifierKey]
+            )
+            guard values?.isRegularFile == true, let identifier = values?.fileResourceIdentifier else {
+                continue
+            }
+            if String(describing: identifier) == expected { return url }
+        }
+        throw LibraryError.bookmarkResolutionFailed(key)
+    }
+
     /// Resolves a bookmark without starting access. Prefer `withAccess` at call sites.
     public func resolve(key: String) throws -> URL {
         guard let data = try loadedBookmarks()[key] else {

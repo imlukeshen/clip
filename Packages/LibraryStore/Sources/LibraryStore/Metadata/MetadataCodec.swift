@@ -4,7 +4,10 @@ import Foundation
 enum MetadataCodec {
     static func encode<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSinceReferenceDate)
+        }
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var data = try encoder.encode(value)
         data.append(0x0A)
@@ -13,8 +16,33 @@ enum MetadataCodec {
 
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            if let interval = try? container.decode(Double.self) {
+                return Date(timeIntervalSinceReferenceDate: interval)
+            }
+            let value = try container.decode(String.self)
+            if let date = preciseISO8601.date(from: value) ?? legacyISO8601.date(from: value) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO-8601 date \(value)"
+            )
+        }
         return try decoder.decode(type, from: data)
+    }
+
+    private static var preciseISO8601: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }
+
+    private static var legacyISO8601: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
     }
 
     static func encodeJSONValue(_ value: JSONValue?) throws -> String? {

@@ -10,8 +10,9 @@ public enum AppCommandOutcome: Sendable, Equatable {
 @MainActor
 public enum AppCommandRouter {
     public static let menuCommandIDs: [CommandID] = [
-        "edit.undo", "edit.redo", "asset.selectAll", "asset.deselectAll", "asset.quickLook",
-        "asset.reveal", "asset.delete",
+        "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
+        "navigation.pdf", "navigation.convert", "edit.undo", "edit.redo", "asset.selectAll",
+        "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete",
     ]
 
     public static func availability(
@@ -19,6 +20,9 @@ public enum AppCommandRouter {
         in model: AppModel
     ) -> Availability {
         switch id.rawValue {
+        case "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
+            "navigation.pdf", "navigation.convert":
+            return .available
         case "edit.undo":
             return model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
                 ? .available : .unavailable(reason: "There is nothing to undo.")
@@ -43,6 +47,24 @@ public enum AppCommandRouter {
     ) -> AppCommandOutcome {
         guard availability(of: id, in: model) == .available else { return .completed }
         switch id.rawValue {
+        case "app.commandPalette":
+            model.isCommandPalettePresented = true
+            return .completed
+        case "navigation.inbox":
+            model.selectedWorkspace = .inbox
+            return .completed
+        case "navigation.video":
+            model.selectedWorkspace = .video
+            return .completed
+        case "navigation.photo":
+            model.selectedWorkspace = .photo
+            return .completed
+        case "navigation.pdf":
+            model.selectedWorkspace = .pdf
+            return .completed
+        case "navigation.convert":
+            model.selectedWorkspace = .convert
+            return .completed
         case "edit.undo":
             if let editor = model.editor { editor.undo() } else { model.undoLibraryAction() }
             return .completed

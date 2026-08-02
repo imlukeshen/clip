@@ -32,6 +32,10 @@ struct MainWindow: View {
                     cancel: model.deferMigration
                 )
             }
+            .sheet(isPresented: $model.isCommandPalettePresented) {
+                CommandPaletteView(model: model)
+                    .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+            }
     }
 
     private var migrationBinding: Binding<LibraryMigrationPlan?> {
@@ -109,7 +113,6 @@ private struct ThemedMainWindow: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 Titlebar(model: model)
-                WorkspaceTabs(model: model)
                 Divider().overlay(theme.palette.line)
                 HStack(spacing: 0) {
                     LibrarySidebar(model: model)
@@ -128,8 +131,11 @@ private struct ThemedMainWindow: View {
                         }
                         .scrollIndicators(.visible)
                     }
+                    if model.isInspectorVisible {
+                        Divider().overlay(theme.palette.line)
+                        UnifiedInspector(model: model)
+                    }
                 }
-                StatusBar(model: model)
             }
             if let message = model.lastMessage {
                 Toast(message)

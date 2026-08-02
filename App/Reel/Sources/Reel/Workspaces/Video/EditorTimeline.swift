@@ -7,6 +7,7 @@ struct EditorTimeline: NSViewRepresentable {
     let timeline: Timeline
     let names: [AssetID: String]
     let assetDurations: [AssetID: RationalTime]
+    let missingAssetIDs: Set<AssetID>
     let selection: Set<ItemID>
     let playhead: RationalTime
     let duration: RationalTime
@@ -36,6 +37,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.timeline = timeline
         view.names = names
         view.assetDurations = assetDurations
+        view.missingAssetIDs = missingAssetIDs
         view.selection = selection
         view.playhead = playhead
         view.duration = duration
@@ -64,6 +66,7 @@ final class TimelineCanvas: NSView {
     var timeline = Timeline()
     var names: [AssetID: String] = [:]
     var assetDurations: [AssetID: RationalTime] = [:]
+    var missingAssetIDs: Set<AssetID> = []
     var selection: Set<ItemID> = []
     var playhead = RationalTime.zero
     var duration = RationalTime.zero
@@ -309,6 +312,10 @@ final class TimelineCanvas: NSView {
             path.lineWidth = selected ? 1.5 : 0.5
             path.stroke()
 
+            if missingAssetIDs.contains(clip.item.assetID) {
+                drawMissingHatch(in: clip.rect.insetBy(dx: 1, dy: 0))
+            }
+
             let title = names[clip.item.assetID] ?? "Clip \(clip.index + 1)"
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: clip.rect.insetBy(dx: 7, dy: 2)).addClip()
@@ -342,6 +349,22 @@ final class TimelineCanvas: NSView {
                 NSRect(x: clip.rect.maxX - 3, y: clip.rect.minY + 4, width: 3, height: 26).fill()
             }
         }
+    }
+
+    private func drawMissingHatch(in rect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect).addClip()
+        textTertiary.withAlphaComponent(0.45).setStroke()
+        var x = rect.minX - rect.height
+        while x < rect.maxX {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: x, y: rect.maxY))
+            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
+            path.lineWidth = 1
+            path.stroke()
+            x += 8
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawAudio() {

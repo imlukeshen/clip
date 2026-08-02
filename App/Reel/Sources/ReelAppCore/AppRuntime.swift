@@ -14,6 +14,7 @@ public actor AppRuntime {
     private let coordinator: IngestCoordinator
     private let converter = Converter()
     private let clickTracking: EventTrackAssociator
+    private let libraryWatcher: LibraryRootWatcher
 
     public init(libraryRoot: URL) async throws {
         let root = libraryRoot.standardizedFileURL
@@ -37,6 +38,9 @@ public actor AppRuntime {
         self.folders = LibraryFolders(root: root, library: library)
         self.pipeline = pipeline
         self.clickTracking = clickTracking
+        self.libraryWatcher = LibraryRootWatcher(url: LibraryLayout.media(in: root)) {
+            Task { await library.refreshLocations() }
+        }
         self.coordinator = IngestCoordinator(
             pipeline: pipeline,
             inbox: inbox,
@@ -60,6 +64,8 @@ public actor AppRuntime {
     }
 
     public func start() async throws {
+        await library.refreshLocations()
+        libraryWatcher.start()
         _ = await clickTracking.start()
         do {
             try await coordinator.start()
@@ -70,6 +76,7 @@ public actor AppRuntime {
     }
 
     public func stop() async {
+        libraryWatcher.stop()
         await coordinator.stop()
         await clickTracking.stop()
     }
@@ -137,6 +144,16 @@ public actor AppRuntime {
 
     public func restore(_ receipt: TrashReceipt) async throws {
         try await library.restore(receipt)
+    }
+
+    public func locate(assetID: AssetID, at url: URL) async throws {
+        guard let record = try await library.asset(id: assetID) else {
+            throw LibraryError.assetNotFound(assetID)
+        }
+        guard try SampledFileHasher.hash(url) == record.contentHash else {
+            throw LibraryError.fileOperationFailed("located file hash does not match")
+        }
+        try await library.relink(assetID: assetID, to: url)
     }
 
     public func eventTracks(for assetIDs: [AssetID]) async -> [AssetID: EventTrack] {

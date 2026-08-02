@@ -22,6 +22,7 @@ struct LibrarySidebar: View {
                     smartRow("Recordings", icon: "video") { model.selectedWorkspace = .video }
                     smartRow("Screenshots", icon: "photo") { model.selectedWorkspace = .photo }
                     smartRow("Projects", icon: "film.stack") { model.selectedWorkspace = .video }
+                    smartRow("Documents", icon: "doc") { model.selectedWorkspace = .pdf }
 
                     HStack {
                         SectionLabel("Media")
@@ -50,6 +51,15 @@ struct LibrarySidebar: View {
             }
 
             Spacer(minLength: 0)
+            smartRow(
+                "Convert  \(model.assetCount(for: .convert))",
+                icon: "arrow.left.arrow.right",
+                selected: model.selectedWorkspace == .convert
+            ) {
+                AppCommandRouter.run("navigation.convert", in: model)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
             Divider().overlay(theme.palette.line)
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.libraryRoot.path(percentEncoded: false))

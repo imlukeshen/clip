@@ -2,6 +2,7 @@ import AIKit
 import AppKit
 import CoreModel
 import DesignSystem
+import LibraryStore
 import MediaEngine
 import ReelAppCore
 import SwiftUI
@@ -11,6 +12,8 @@ struct EditorView: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: EditorViewModel
+    @State private var showsExportSheet = false
+    @State private var exportCompletionAction = CompletionAction.reveal
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -21,9 +24,6 @@ struct EditorView: View {
                     toolRail
                     Divider().overlay(theme.palette.line)
                     preview
-                    Divider().overlay(theme.palette.line)
-                    EditorInspector(model: model, editor: editor)
-                        .frame(width: 284)
                 }
                 Divider().overlay(theme.palette.line)
                 timeline
@@ -41,6 +41,24 @@ struct EditorView: View {
             }
         }
         .background(theme.palette.surfaceBase)
+        .sheet(isPresented: $showsExportSheet) {
+            ExportDestinationSheet(
+                model: model,
+                editor: editor,
+                completionAction: $exportCompletionAction
+            )
+            .environment(\.theme, theme)
+        }
+        .onChange(of: editor.lastExportURL) { _, url in
+            guard let url else { return }
+            switch exportCompletionAction {
+            case .reveal: NSWorkspace.shared.activateFileViewerSelecting([url])
+            case .copyPath:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.path, forType: .string)
+            case .nothing: break
+            }
+        }
     }
 
     private var editorHeader: some View {
@@ -81,16 +99,12 @@ struct EditorView: View {
                 Button("Cancel") { editor.cancelExport() }
                     .buttonStyle(.plain)
             } else {
-                Menu {
-                    Button("H.264 · MP4") { chooseExport(codec: .h264, container: .mp4) }
-                    Button("HEVC · MP4") { chooseExport(codec: .hevc, container: .mp4) }
-                    Button("ProRes 422 · MOV") {
-                        chooseExport(codec: .proRes422, container: .mov)
-                    }
+                Button {
+                    showsExportSheet = true
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
                 .fixedSize()
             }
 
@@ -198,6 +212,7 @@ struct EditorView: View {
             timeline: editor.document.timeline,
             names: editor.assetNames,
             assetDurations: editor.assetDurations,
+            missingAssetIDs: editor.missingAssetIDs,
             selection: editor.selection,
             playhead: editor.playhead,
             duration: editor.duration,
@@ -232,33 +247,168 @@ struct EditorView: View {
         )
     }
 
-    private func chooseExport(
-        codec: ExportPreset.Codec,
-        container: ExportPreset.Container
-    ) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(editor.document.name).\(container.rawValue)"
-        panel.allowedContentTypes = container == .mp4 ? [.mpeg4Movie] : [.quickTimeMovie]
-        panel.canCreateDirectories = true
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            editor.export(
-                to: url,
-                preset: ExportPreset(
-                    container: container,
-                    codec: codec,
-                    size: CGSize(
-                        width: editor.document.canvas.width,
-                        height: editor.document.canvas.height
-                    ),
-                    frameRate: editor.document.canvas.frameRate,
-                    bitrate: codec == .proRes422 ? nil : 12_000_000,
-                    includeAudio: true,
-                    burnCaptions: true
-                )
-            )
+}
+
+private struct ExportDestinationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
+    @Bindable var editor: EditorViewModel
+    @Binding var completionAction: CompletionAction
+    @State private var baseFolder = FileManager.default.urls(
+        for: .downloadsDirectory,
+        in: .userDomainMask
+    ).first ?? FileManager.default.homeDirectoryForCurrentUser
+    @State private var destination = ExportDestination(bookmarkKey: "default")
+    @State private var codec = ExportPreset.Codec.h264
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Export Project").font(theme.type.title.font)
+            Picker("Preset", selection: $codec) {
+                Text("H.264 · MP4").tag(ExportPreset.Codec.h264)
+                Text("HEVC · MP4").tag(ExportPreset.Codec.hevc)
+                Text("ProRes 422 · MOV").tag(ExportPreset.Codec.proRes422)
+            }
+            HStack {
+                Text("Destination")
+                Spacer()
+                Menu(baseFolder.lastPathComponent) {
+                    ForEach(recentFolders, id: \.path) { folder in
+                        Button(folder.path) { baseFolder = folder }
+                    }
+                    Divider()
+                    Button("Reel Media") { baseFolder = LibraryLayout.media(in: model.libraryRoot) }
+                    Button("Choose…", action: chooseFolder)
+                }
+                .frame(maxWidth: 320)
+            }
+            TextField("Subfolder template", text: $destination.subpathTemplate)
+            TextField("Filename template", text: $destination.filenameTemplate)
+            Picker("When finished", selection: $destination.onCompletion) {
+                Text("Reveal in Finder").tag(CompletionAction.reveal)
+                Text("Copy path").tag(CompletionAction.copyPath)
+                Text("Do nothing").tag(CompletionAction.nothing)
+            }
+            Divider().overlay(theme.palette.line)
+            SectionLabel("Resolved path")
+            Text(resolvedURL?.path ?? validationMessage)
+                .font(theme.type.numeric.font)
+                .foregroundStyle(resolvedURL == nil ? theme.palette.danger : theme.palette.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Export") { startExport() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(resolvedURL == nil)
+            }
+        }
+        .padding(22)
+        .frame(width: 620)
+        .onAppear(perform: loadPreference)
+    }
+
+    private var container: ExportPreset.Container { codec == .proRes422 ? .mov : .mp4 }
+
+    private var resolvedURL: URL? {
+        try? destination.resolve(
+            in: baseFolder,
+            context: ExportTemplateContext(
+                project: editor.document.name,
+                preset: codec == .proRes422 ? "prores-422" : "1080p",
+                codec: codec.rawValue,
+                resolution: "\(editor.document.canvas.width)x\(editor.document.canvas.height)",
+                duration: String(format: "%.1f", editor.duration.seconds)
+            ),
+            extension: container.rawValue
+        )
+    }
+
+    private var validationMessage: String {
+        do {
+            try destination.validate()
+            return "Choose a valid destination."
+        } catch {
+            return error.localizedDescription
         }
     }
+
+    private var preferenceKey: String { "reel.export.\(editor.document.id.rawValue)" }
+
+    private var recentFolders: [URL] {
+        (UserDefaults.standard.stringArray(forKey: "reel.export.recents") ?? [])
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            baseFolder = url
+        }
+    }
+
+    private func startExport() {
+        guard let url = resolvedURL else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch { return }
+        completionAction = destination.onCompletion
+        savePreference()
+        editor.export(
+            to: url,
+            preset: ExportPreset(
+                container: container,
+                codec: codec,
+                size: CGSize(
+                    width: editor.document.canvas.width,
+                    height: editor.document.canvas.height
+                ),
+                frameRate: editor.document.canvas.frameRate,
+                bitrate: codec == .proRes422 ? nil : 12_000_000,
+                includeAudio: true,
+                burnCaptions: true
+            )
+        )
+        dismiss()
+    }
+
+    private func loadPreference() {
+        guard let data = UserDefaults.standard.data(forKey: preferenceKey),
+            let preference = try? JSONDecoder().decode(SavedExportPreference.self, from: data)
+        else { return }
+        baseFolder = URL(fileURLWithPath: preference.folder, isDirectory: true)
+        destination = preference.destination
+        codec = ExportPreset.Codec(rawValue: preference.codec) ?? .h264
+    }
+
+    private func savePreference() {
+        let preference = SavedExportPreference(
+            folder: baseFolder.path,
+            destination: destination,
+            codec: codec.rawValue
+        )
+        UserDefaults.standard.set(try? JSONEncoder().encode(preference), forKey: preferenceKey)
+        var recent = UserDefaults.standard.stringArray(forKey: "reel.export.recents") ?? []
+        recent.removeAll { $0 == baseFolder.path }
+        recent.insert(baseFolder.path, at: 0)
+        UserDefaults.standard.set(Array(recent.prefix(6)), forKey: "reel.export.recents")
+    }
+}
+
+private struct SavedExportPreference: Codable {
+    var folder: String
+    var destination: ExportDestination
+    var codec: String
 }
 
 private struct ToolButton: View {
@@ -283,7 +433,7 @@ private struct ToolButton: View {
     }
 }
 
-private struct EditorInspector: View {
+struct EditorInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: EditorViewModel

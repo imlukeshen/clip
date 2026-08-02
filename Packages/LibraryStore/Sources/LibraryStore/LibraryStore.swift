@@ -76,6 +76,7 @@ public actor LibraryStore {
                 [.posixPermissions: NSNumber(value: Int16(0o444))],
                 ofItemAtPath: mediaURL.path
             )
+            try? await bookmarks.storeFileReference(mediaURL, key: bookmarkKey(for: asset.id))
         } catch let error as LibraryError {
             throw error
         } catch {
@@ -178,7 +179,11 @@ public actor LibraryStore {
             }
             throw LibraryError.databaseOperationFailed("update asset locations")
         }
-        for record in records { changeContinuation.yield(.assetUpdated(record.id)) }
+        for record in records {
+            let url = root.appendingPathComponent(record.relativePath)
+            try? await bookmarks.storeFileReference(url, key: bookmarkKey(for: record.id))
+            changeContinuation.yield(.assetUpdated(record.id))
+        }
     }
 
     /// Resolves the immutable media URL for an indexed asset.
@@ -186,7 +191,65 @@ public actor LibraryStore {
         guard let asset = try await asset(id: id) else {
             throw LibraryError.assetNotFound(id)
         }
-        return try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
+        if let bookmarked = try? await bookmarks.resolveFileReference(
+            key: bookmarkKey(for: id),
+            searching: assetsURL
+        ),
+            FileManager.default.fileExists(atPath: bookmarked.path)
+        {
+            if asset.isMissing { try? await setMissing(nil, for: asset) }
+            return bookmarked
+        }
+        let recorded = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
+        if FileManager.default.fileExists(atPath: recorded.path) {
+            if asset.isMissing { try? await setMissing(nil, for: asset) }
+            try? await bookmarks.storeFileReference(recorded, key: bookmarkKey(for: id))
+            return recorded
+        }
+        try? await setMissing(asset.missingSince ?? .now, for: asset)
+        throw LibraryError.assetFileMissing(asset.relativePath)
+    }
+
+    /// Resolves bookmarks after launch and marks records that can no longer be found.
+    public func refreshLocations() async {
+        guard let records = try? await assets(kind: nil, limit: Int.max, offset: 0) else { return }
+        for var record in records {
+            if let bookmarked = try? await bookmarks.resolveFileReference(
+                key: bookmarkKey(for: record.id),
+                searching: assetsURL
+            ),
+                FileManager.default.fileExists(atPath: bookmarked.path)
+            {
+                let boundary = assetsURL.path + "/"
+                let resolved = bookmarked.standardizedFileURL
+                if resolved.path.hasPrefix(boundary),
+                    resolved.path != root.appendingPathComponent(record.relativePath).standardizedFileURL.path
+                {
+                    record.relativePath = relativePath(resolved)
+                    record.displayName = resolved.lastPathComponent
+                    record.missingSince = nil
+                    try? await updateLocations([record])
+                } else if record.isMissing {
+                    try? await setMissing(nil, for: record)
+                }
+                continue
+            }
+            let recorded = root.appendingPathComponent(record.relativePath)
+            if FileManager.default.fileExists(atPath: recorded.path) {
+                try? await bookmarks.storeFileReference(recorded, key: bookmarkKey(for: record.id))
+                if record.isMissing { try? await setMissing(nil, for: record) }
+            } else if !record.isMissing {
+                try? await setMissing(.now, for: record)
+            }
+        }
+    }
+
+    public func relink(assetID: AssetID, to url: URL) async throws {
+        guard let record = try await asset(id: assetID) else {
+            throw LibraryError.assetNotFound(assetID)
+        }
+        try await bookmarks.storeFileReference(url, key: bookmarkKey(for: assetID))
+        try await setMissing(nil, for: record)
     }
 
     /// Atomically stores an event sidecar and updates its indexed asset summary.
@@ -615,6 +678,30 @@ extension LibraryStore {
 
     private func metadataURL(for assetID: AssetID) -> URL {
         LibraryLayout.metadata(in: root).appendingPathComponent("\(assetID.rawValue).json")
+    }
+
+    private func bookmarkKey(for assetID: AssetID) -> String {
+        "asset.\(assetID.rawValue)"
+    }
+
+    private func relativePath(_ url: URL) -> String {
+        String(url.standardizedFileURL.path.dropFirst(root.path.count + 1))
+    }
+
+    private func setMissing(_ date: Date?, for record: AssetRecord) async throws {
+        var updated = record
+        updated.missingSince = date
+        try MetadataCodec.encode(updated).write(
+            to: metadataURL(for: record.id),
+            options: .atomic
+        )
+        try await database.write { db in
+            try db.execute(
+                sql: "UPDATE asset SET missing_since = ? WHERE id = ?",
+                arguments: [date?.timeIntervalSince1970, record.id.rawValue]
+            )
+        }
+        changeContinuation.yield(.assetUpdated(record.id))
     }
 
     private func assetRecordsOnDisk() throws -> [AssetRecord] {

@@ -73,6 +73,14 @@ public struct CommandDefinition: Command, Sendable, Equatable, Identifiable {
 /// The single capability catalog for Reel's user and assistant surfaces.
 public enum CommandRegistry {
     public static let all: [CommandDefinition] = [
+        command(
+            "app.commandPalette", "Command Palette", .app,
+            shortcut: .init("k"), kind: .read, exposure: .never),
+        command("navigation.inbox", "Open Media Browser", .view, kind: .confirm, exposure: .onDemand),
+        command("navigation.video", "Open Video Editor", .view, kind: .confirm, exposure: .onDemand),
+        command("navigation.photo", "Open Photo Editor", .view, kind: .confirm, exposure: .onDemand),
+        command("navigation.pdf", "Open PDF Workspace", .view, kind: .confirm, exposure: .onDemand),
+        command("navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
@@ -159,7 +167,9 @@ public enum CommandRegistry {
     ]
 
     /// Deliberately non-agent commands require a documented entry here.
-    public static let explicitlyExcluded: [CommandID: String] = [:]
+    public static let explicitlyExcluded: [CommandID: String] = [
+        "app.commandPalette": "Opening UI chrome has no useful assistant-side effect."
+    ]
 
     public static func command(id: CommandID) -> CommandDefinition? {
         all.first { $0.id == id }

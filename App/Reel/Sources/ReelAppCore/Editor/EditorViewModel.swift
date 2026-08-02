@@ -70,6 +70,10 @@ public final class EditorViewModel {
         assets.compactMapValues(\.duration)
     }
 
+    public var missingAssetIDs: Set<AssetID> {
+        Set(assets.values.filter(\.isMissing).map(\.id))
+    }
+
     public var availableVideoAssets: [AssetRecord] {
         assets.values.filter { $0.kind == .video }
             .sorted { $0.importedAt < $1.importedAt }

@@ -69,8 +69,25 @@ struct AssetGrid: View {
                             ) {
                                 AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
                             }
+                            .opacity(asset.isMissing ? 0.45 : 1)
+                            .overlay(alignment: .topLeading) {
+                                if asset.isMissing {
+                                    Text("Missing")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(.black.opacity(0.75))
+                                        .foregroundStyle(.white)
+                                        .clipShape(Capsule())
+                                        .padding(6)
+                                }
+                            }
                             .draggable(dragValue(for: asset))
                             .contextMenu {
+                                if asset.isMissing {
+                                    Button("Locate…") { locate(asset) }
+                                    Divider()
+                                }
                                 Button("Reveal in Finder") {
                                     if !model.selection.selected.contains(asset.id) {
                                         model.selectAsset(asset.id)
@@ -204,6 +221,17 @@ struct AssetGrid: View {
         let totalSeconds = max(0, Int(duration.seconds.rounded()))
         return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
+
+    private func locate(_ asset: AssetRecord) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.locateMissingAsset(asset.id, at: url)
+        }
+    }
 }
 
 private struct AssetList: View {
@@ -252,6 +280,7 @@ private struct AssetList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .opacity(asset.isMissing ? 0.45 : 1)
                 .draggable(
                     "assets:" + (
                         model.selection.selected.contains(asset.id)
@@ -259,6 +288,10 @@ private struct AssetList: View {
                     ).map(\.rawValue).sorted().joined(separator: ",")
                 )
                 .contextMenu {
+                    if asset.isMissing {
+                        Button("Locate…") { locate(asset) }
+                        Divider()
+                    }
                     Button("Reveal in Finder") {
                         if !model.selection.selected.contains(asset.id) { model.selectAsset(asset.id) }
                         model.revealSelectionInFinder()
@@ -294,6 +327,17 @@ private struct AssetList: View {
         case .image: "photo"
         case .audio: "waveform"
         case .document: "doc"
+        }
+    }
+
+    private func locate(_ asset: AssetRecord) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.locateMissingAsset(asset.id, at: url)
         }
     }
 }

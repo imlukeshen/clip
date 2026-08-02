@@ -75,6 +75,11 @@ enum LibrarySchema {
                 arguments: [LibraryLayout.schemaVersion]
             )
         }
+        migrator.registerMigration("v3-missing-media") { db in
+            try db.alter(table: "asset") { table in
+                table.add(column: "missing_since", .double)
+            }
+        }
         try migrator.migrate(database)
     }
 }
