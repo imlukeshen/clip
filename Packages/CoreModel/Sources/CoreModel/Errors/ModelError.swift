@@ -18,4 +18,12 @@ public enum ModelError: Error, Sendable, Equatable {
     case duplicateEffect(ItemID, EffectID)
     case effectRangeExceedsItem(ItemID, EffectID)
     case splitTooCloseToBoundary(ItemID, minimumDistance: RationalTime)
+    case duplicateTrack(TrackID)
+    case overlappingItems(TrackID)
+    case invalidTrackGain(TrackID, Double)
+    case invalidTimelineStart(ItemID, RationalTime)
+    case invalidOpacity(ItemID, Double)
+    case invalidTransform(ItemID)
+    case invalidMarkerTime(MarkerID, RationalTime)
+    case trackLocked(TrackID)
 }

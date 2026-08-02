@@ -2,7 +2,7 @@ import Foundation
 
 /// A complete, deterministic, non-destructive Reel edit graph.
 public struct ProjectDocument: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var id: ProjectID
@@ -27,7 +27,7 @@ public struct ProjectDocument: Codable, Sendable, Equatable {
                 supported: ProjectDocument.currentSchemaVersion
             )
         }
-        self.schemaVersion = schemaVersion
+        self.schemaVersion = ProjectDocument.currentSchemaVersion
         self.id = id
         self.name = name
         self.canvas = canvas
@@ -56,7 +56,9 @@ public struct ProjectDocument: Codable, Sendable, Equatable {
                 supported: ProjectDocument.currentSchemaVersion
             )
         }
-        schemaVersion = version
+        // Decoding is the migration boundary. A v1 timeline is mechanically
+        // promoted by Timeline.init(from:) and all subsequent saves are v2.
+        schemaVersion = ProjectDocument.currentSchemaVersion
         id = try container.decode(ProjectID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         canvas = try container.decode(CanvasSpec.self, forKey: .canvas)

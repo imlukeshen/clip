@@ -3,41 +3,35 @@ import Foundation
 extension ProjectDocument {
     /// Returns an item from either media track.
     public func item(_ id: ItemID) -> TimelineItem? {
-        timeline.video.first(where: { $0.id == id })
-            ?? timeline.audio.first(where: { $0.id == id })
+        timeline.videoTracks.lazy.flatMap(\.items).first(where: { $0.id == id })
+            ?? timeline.audioTracks.lazy.flatMap(\.items).first(where: { $0.id == id })
     }
 
-    /// Returns the derived gapless start of an item in its owning track.
+    /// Returns the explicit project start of an item in its owning track.
     public func timelineStart(of id: ItemID) -> RationalTime? {
-        for track in [timeline.video, timeline.audio] {
-            var start = RationalTime.zero
-            for item in track {
-                if item.id == id {
-                    return start
-                }
-                start = start + item.timelineDuration
-            }
-        }
-        return nil
+        item(id)?.timelineStart
     }
 
     /// Returns the video item and item-local timeline time at a project timestamp.
     public func item(at time: RationalTime) -> (item: TimelineItem, local: RationalTime)? {
         guard time >= .zero else { return nil }
-        var start = RationalTime.zero
-        for item in timeline.video {
-            let end = start + item.timelineDuration
-            if time >= start && time < end {
-                return (item, time - start)
+        for track in timeline.videoTracks.reversed() where track.isEnabled {
+            for item in track.items.reversed() where item.isEnabled {
+                if time >= item.timelineStart && time < item.timelineEnd {
+                    return (item, time - item.timelineStart)
+                }
             }
-            start = end
         }
         return nil
     }
 
-    /// The gapless video-track duration.
+    /// The end of the final video item across all video tracks. Disabled media
+    /// still occupies timeline time and renders as a gap.
     public var duration: RationalTime {
-        timeline.video.reduce(.zero) { $0 + $1.timelineDuration }
+        timeline.videoTracks
+            .flatMap(\.items)
+            .map(\.timelineEnd)
+            .max() ?? .zero
     }
 
     /// Verifies schema, geometry, identity, timing, and clip-local effect invariants.
@@ -56,18 +50,35 @@ extension ProjectDocument {
             throw ModelError.invalidCanvas(width: canvas.width, height: canvas.height)
         }
 
+        var trackIDs = Set<TrackID>()
         var itemIDs = Set<ItemID>()
-        for item in timeline.video + timeline.audio {
-            guard itemIDs.insert(item.id).inserted else {
-                throw ModelError.duplicateItem(item.id)
+        for track in timeline.videoTracks + timeline.audioTracks {
+            guard trackIDs.insert(track.id).inserted else {
+                throw ModelError.duplicateTrack(track.id)
             }
-            try validate(item)
+            guard track.gain.isFinite else {
+                throw ModelError.invalidTrackGain(track.id, track.gain)
+            }
+            var previousEnd: RationalTime?
+            for item in track.items {
+                guard itemIDs.insert(item.id).inserted else {
+                    throw ModelError.duplicateItem(item.id)
+                }
+                guard previousEnd.map({ item.timelineStart >= $0 }) ?? true else {
+                    throw ModelError.overlappingItems(track.id)
+                }
+                try validate(item)
+                previousEnd = item.timelineEnd
+            }
         }
 
         for caption in timeline.captions {
             guard caption.range.start >= .zero, caption.range.duration >= .zero else {
                 throw ModelError.invalidRange(caption.range)
             }
+        }
+        for marker in timeline.markers where marker.time < .zero {
+            throw ModelError.invalidMarkerTime(marker.id, marker.time)
         }
     }
 
@@ -77,6 +88,23 @@ extension ProjectDocument {
         }
         guard item.sourceRange.start >= .zero, item.sourceRange.duration >= .zero else {
             throw ModelError.invalidRange(item.sourceRange)
+        }
+        guard item.timelineStart >= .zero else {
+            throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
+        }
+        guard item.opacity.isFinite, (0...1).contains(item.opacity) else {
+            throw ModelError.invalidOpacity(item.id, item.opacity)
+        }
+        let transform = item.transform
+        guard transform.translationX.isFinite,
+            transform.translationY.isFinite,
+            transform.scaleX.isFinite,
+            transform.scaleY.isFinite,
+            transform.rotationDegrees.isFinite,
+            transform.scaleX != 0,
+            transform.scaleY != 0
+        else {
+            throw ModelError.invalidTransform(item.id)
         }
 
         var effectIDs = Set<EffectID>()

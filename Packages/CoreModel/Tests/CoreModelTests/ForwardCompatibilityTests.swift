@@ -2,7 +2,7 @@ import CoreModel
 import Foundation
 import Testing
 
-@Test func unknownEffectRoundTripsByteForByte() throws {
+@Test func unknownEffectSurvivesV1MigrationAndV2RoundTrip() throws {
     let url = try #require(
         Bundle.module.url(
             forResource: "project-v1-unknown-effect.json",
@@ -20,5 +20,12 @@ import Testing
     }
     #expect(raw.type == "futureGlow")
     #expect(raw.rawValue["blend"] == .string("screen"))
-    #expect(try document.encodedJSON() == original)
+    let migrated = try document.encodedJSON()
+    let decoded = try ProjectDocument.decodeJSON(migrated)
+    #expect(decoded == document)
+    guard case .unknown(let roundTripped) = decoded.timeline.video[0].effects[0] else {
+        Issue.record("Expected the migrated effect to remain unknown")
+        return
+    }
+    #expect(roundTripped.rawValue == raw.rawValue)
 }

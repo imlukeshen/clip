@@ -2,6 +2,38 @@ import CoreModel
 import Foundation
 import Testing
 
+@Test func lockedTrackRejectsGraphMutationTransactionally() throws {
+    let item = TimelineItem(
+        id: ItemID(rawValue: "locked-item"),
+        assetID: AssetID(rawValue: "locked-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1))
+    )
+    var document = try ProjectDocument(
+        id: ProjectID(rawValue: "locked-project"),
+        name: "Locked",
+        timeline: Timeline(
+            videoTracks: [
+                Track(
+                    id: TrackID(rawValue: "v1"),
+                    name: "V1",
+                    items: [item],
+                    isLocked: true
+                )
+            ]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
+    )
+    let original = document
+
+    #expect(throws: ModelError.trackLocked(TrackID(rawValue: "v1"))) {
+        try document.apply(
+            GraphPatch(ops: [.setSpeed(item.id, 2)], label: "Speed", origin: .user)
+        )
+    }
+    #expect(document == original)
+}
+
 @Test func patchAndInverseRestoreIdentityAcrossOneThousandRandomSequences() throws {
     var random = DeterministicRandom(seed: 0x5EED_CAFE)
 

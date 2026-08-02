@@ -10,56 +10,48 @@ public struct CompositionBuilder: Sendable {
         resolving: @Sendable (AssetID) async throws -> URL,
         quality: RenderQuality
     ) async throws -> sending BuiltComposition {
-        guard !document.timeline.video.isEmpty else {
+        guard document.timeline.videoTracks.contains(where: { !$0.items.isEmpty }) else {
             throw MediaEngineError.emptyTimeline
         }
         try document.validate()
 
         let composition = AVMutableComposition()
-        guard
-            let videoTrack = composition.addMutableTrack(
-                withMediaType: .video,
-                preferredTrackID: kCMPersistentTrackID_Invalid
-            ),
-            let audioTrack = composition.addMutableTrack(
-                withMediaType: .audio,
-                preferredTrackID: kCMPersistentTrackID_Invalid
-            )
-        else {
-            throw MediaEngineError.cannotCreateTrack
-        }
-
         var assets: [AssetID: AVURLAsset] = [:]
-        var instructions: [ReelVideoInstruction] = []
+        var layers: [ReelVideoLayer] = []
         var itemsByTrackID: [CMPersistentTrackID: ItemID] = [:]
-        var videoCursor = CMTime.zero
 
-        for item in document.timeline.video {
-            let asset = try await asset(for: item.assetID, cache: &assets, resolving: resolving)
-            let targetDuration = item.timelineDuration.cmTime
-            let targetRange = CMTimeRange(start: videoCursor, duration: targetDuration)
-            var sourceTrackID: CMPersistentTrackID?
-            var transform = CGAffineTransform.identity
+        for modelTrack in document.timeline.videoTracks where modelTrack.isEnabled {
+            guard
+                let compositionTrack = composition.addMutableTrack(
+                    withMediaType: .video,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                )
+            else {
+                throw MediaEngineError.cannotCreateTrack
+            }
 
-            if item.isEnabled {
+            for item in modelTrack.items where item.isEnabled {
+                let asset = try await asset(
+                    for: item.assetID,
+                    cache: &assets,
+                    resolving: resolving
+                )
                 guard let source = try await asset.loadTracks(withMediaType: .video).first else {
                     throw MediaEngineError.assetHasNoVideo(item.assetID)
                 }
-                let assetDuration = try await asset.load(.duration)
-                guard item.sourceRange.start.cmTime >= .zero,
-                    item.sourceRange.end.cmTime <= assetDuration
-                else {
-                    throw MediaEngineError.invalidSourceRange(item.id)
-                }
+                try await validateSourceRange(item, in: asset)
                 do {
-                    try videoTrack.insertTimeRange(
+                    try compositionTrack.insertTimeRange(
                         item.sourceRange.cmTimeRange,
                         of: source,
-                        at: videoCursor
+                        at: item.timelineStart.cmTime
                     )
-                    videoTrack.scaleTimeRange(
-                        CMTimeRange(start: videoCursor, duration: item.sourceRange.duration.cmTime),
-                        toDuration: targetDuration
+                    compositionTrack.scaleTimeRange(
+                        CMTimeRange(
+                            start: item.timelineStart.cmTime,
+                            duration: item.sourceRange.duration.cmTime
+                        ),
+                        toDuration: item.timelineDuration.cmTime
                     )
                 } catch {
                     throw MediaEngineError.compositionFailed(
@@ -67,61 +59,49 @@ public struct CompositionBuilder: Sendable {
                         "The video clip could not be added to the timeline."
                     )
                 }
-                transform = try await source.load(.preferredTransform)
-                sourceTrackID = videoTrack.trackID
-                itemsByTrackID[videoTrack.trackID] = itemsByTrackID[videoTrack.trackID] ?? item.id
-            } else {
-                videoTrack.insertEmptyTimeRange(targetRange)
+                layers.append(
+                    ReelVideoLayer(
+                        item: item,
+                        preferredTransform: try await source.load(.preferredTransform),
+                        sourceTrackID: compositionTrack.trackID
+                    )
+                )
+                itemsByTrackID[compositionTrack.trackID] =
+                    itemsByTrackID[compositionTrack.trackID] ?? item.id
             }
+        }
 
-            instructions.append(
-                ReelVideoInstruction(
-                    timeRange: targetRange,
-                    item: item,
-                    preferredTransform: transform,
-                    background: document.canvas.background,
-                    sourceTrackID: sourceTrackID
+        if composition.tracks(withMediaType: .video).isEmpty {
+            guard
+                composition.addMutableTrack(
+                    withMediaType: .video,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                ) != nil
+            else {
+                throw MediaEngineError.cannotCreateTrack
+            }
+        }
+        if composition.duration < document.duration.cmTime {
+            composition.insertEmptyTimeRange(
+                CMTimeRange(
+                    start: composition.duration,
+                    duration: document.duration.cmTime - composition.duration
                 )
             )
-            videoCursor = videoCursor + targetDuration
         }
 
-        let audioItems =
-            document.timeline.audio.isEmpty
-            ? document.timeline.video : document.timeline.audio
-        var audioCursor = CMTime.zero
-        for item in audioItems {
-            let asset = try await asset(for: item.assetID, cache: &assets, resolving: resolving)
-            let targetDuration = item.timelineDuration.cmTime
-            let targetRange = CMTimeRange(start: audioCursor, duration: targetDuration)
-            if item.isEnabled,
-                let source = try await asset.loadTracks(withMediaType: .audio).first
-            {
-                do {
-                    try audioTrack.insertTimeRange(
-                        item.sourceRange.cmTimeRange,
-                        of: source,
-                        at: audioCursor
-                    )
-                    audioTrack.scaleTimeRange(
-                        CMTimeRange(start: audioCursor, duration: item.sourceRange.duration.cmTime),
-                        toDuration: targetDuration
-                    )
-                    itemsByTrackID[audioTrack.trackID] =
-                        itemsByTrackID[audioTrack.trackID] ?? item.id
-                } catch {
-                    audioTrack.insertEmptyTimeRange(targetRange)
-                }
-            } else {
-                audioTrack.insertEmptyTimeRange(targetRange)
-            }
-            audioCursor = audioCursor + targetDuration
-        }
-        if audioCursor < videoCursor {
-            audioTrack.insertEmptyTimeRange(
-                CMTimeRange(start: audioCursor, duration: videoCursor - audioCursor)
-            )
-        }
+        let instructions = makeInstructions(
+            layers: layers,
+            duration: document.duration,
+            background: document.canvas.background
+        )
+        let audioMix = try await addAudio(
+            from: document,
+            to: composition,
+            assets: &assets,
+            itemsByTrackID: &itemsByTrackID,
+            resolving: resolving
+        )
 
         let videoComposition = AVMutableVideoComposition()
         videoComposition.customVideoCompositorClass = EffectCompositor.self
@@ -129,14 +109,117 @@ public struct CompositionBuilder: Sendable {
         videoComposition.renderSize = renderSize(for: document.canvas, quality: quality)
         videoComposition.frameDuration = document.canvas.frameRate.frameDuration.cmTime
 
-        let audioMix = AVMutableAudioMix()
-        audioMix.inputParameters = []
         return BuiltComposition(
             composition: composition,
             videoComposition: videoComposition,
             audioMix: audioMix,
             itemsByTrackID: itemsByTrackID
         )
+    }
+
+    private func makeInstructions(
+        layers: [ReelVideoLayer],
+        duration: RationalTime,
+        background: RGBA
+    ) -> [ReelVideoInstruction] {
+        var boundaries = [RationalTime.zero, duration]
+        for layer in layers {
+            boundaries.append(layer.item.timelineStart)
+            boundaries.append(layer.item.timelineEnd)
+        }
+        boundaries = Array(Set(boundaries)).sorted()
+
+        return zip(boundaries, boundaries.dropFirst()).compactMap { start, end in
+            guard end > start else { return nil }
+            let active = layers.filter {
+                start >= $0.item.timelineStart && start < $0.item.timelineEnd
+            }
+            return ReelVideoInstruction(
+                timeRange: CMTimeRange(
+                    start: start.cmTime,
+                    duration: (end - start).cmTime
+                ),
+                layers: active,
+                background: background
+            )
+        }
+    }
+
+    private func addAudio(
+        from document: ProjectDocument,
+        to composition: AVMutableComposition,
+        assets: inout [AssetID: AVURLAsset],
+        itemsByTrackID: inout [CMPersistentTrackID: ItemID],
+        resolving: @Sendable (AssetID) async throws -> URL
+    ) async throws -> AVMutableAudioMix {
+        let usingFallback = document.timeline.audioTracks.isEmpty
+        let modelTracks =
+            usingFallback
+            ? Array(document.timeline.videoTracks.prefix(1))
+            : document.timeline.audioTracks
+        let anySolo = modelTracks.contains { $0.isEnabled && $0.isSolo }
+        var parameters: [AVMutableAudioMixInputParameters] = []
+
+        // Preserve the v1 contract: even a silent primary video timeline gets
+        // an aligned, empty audio composition track.
+        for modelTrack in modelTracks where modelTrack.isEnabled {
+            guard
+                let compositionTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                )
+            else {
+                throw MediaEngineError.cannotCreateTrack
+            }
+            for item in modelTrack.items where item.isEnabled {
+                let asset = try await asset(
+                    for: item.assetID,
+                    cache: &assets,
+                    resolving: resolving
+                )
+                guard let source = try await asset.loadTracks(withMediaType: .audio).first else {
+                    continue
+                }
+                do {
+                    try compositionTrack.insertTimeRange(
+                        item.sourceRange.cmTimeRange,
+                        of: source,
+                        at: item.timelineStart.cmTime
+                    )
+                    compositionTrack.scaleTimeRange(
+                        CMTimeRange(
+                            start: item.timelineStart.cmTime,
+                            duration: item.sourceRange.duration.cmTime
+                        ),
+                        toDuration: item.timelineDuration.cmTime
+                    )
+                    itemsByTrackID[compositionTrack.trackID] =
+                        itemsByTrackID[compositionTrack.trackID] ?? item.id
+                } catch {
+                    // Video-only media and a damaged optional audio stream do
+                    // not prevent the visual edit from rendering.
+                    continue
+                }
+            }
+            let input = AVMutableAudioMixInputParameters(track: compositionTrack)
+            let audible = !modelTrack.isMuted && (!anySolo || modelTrack.isSolo)
+            let linearGain = audible ? pow(10, modelTrack.gain / 20) : 0
+            input.setVolume(Float(linearGain), at: .zero)
+            parameters.append(input)
+        }
+
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = parameters
+        return mix
+    }
+
+    private func validateSourceRange(_ item: TimelineItem, in asset: AVURLAsset) async throws {
+        let assetDuration = try await asset.load(.duration)
+        guard item.sourceRange.start.cmTime >= .zero,
+            item.sourceRange.end.cmTime <= assetDuration
+        else {
+            throw MediaEngineError.invalidSourceRange(item.id)
+        }
     }
 
     private func asset(

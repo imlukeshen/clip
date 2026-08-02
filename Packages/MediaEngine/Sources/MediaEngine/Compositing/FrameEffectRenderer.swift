@@ -24,6 +24,29 @@ enum FrameEffectRenderer {
         return CIImage(color: color.ciColor).cropped(to: bounds)
     }
 
+    /// Resolves background effects while retaining an already-created canvas.
+    /// When no timed background effect is active this returns `background`
+    /// exactly, preserving the v1 compositor path.
+    static func background(
+        background: CIImage,
+        effects: [Effect],
+        at time: RationalTime,
+        bounds: CGRect
+    ) -> CIImage {
+        guard
+            let effect = effects.compactMap({ effect -> BackgroundEffect? in
+                guard case .background(let value) = effect, value.range.contains(time) else {
+                    return nil
+                }
+                return value
+            }).last,
+            case .solid(let color) = effect.style
+        else {
+            return background
+        }
+        return CIImage(color: color.ciColor).cropped(to: bounds)
+    }
+
     static func render(
         _ source: CIImage,
         effects: [Effect],

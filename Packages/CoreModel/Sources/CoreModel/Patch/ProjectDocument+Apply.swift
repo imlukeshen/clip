@@ -12,7 +12,9 @@ extension ProjectDocument {
         inverseOperations.reserveCapacity(patch.ops.count)
 
         for operation in patch.ops {
-            inverseOperations.append(try candidate.apply(operation))
+            let inverse = try candidate.apply(operation)
+            candidate.normalizeLegacyTrack(after: operation)
+            inverseOperations.append(inverse)
             try candidate.validate()
         }
 
@@ -24,9 +26,31 @@ extension ProjectDocument {
         )
     }
 
+    private mutating func normalizeLegacyTrack(after operation: GraphOp) {
+        switch operation {
+        case .insertItem(_, let track, _):
+            timeline.normalizePrimaryTrack(track)
+        case .removeItem(let id), .moveItem(let id, _), .setSourceRange(let id, _),
+            .setSpeed(let id, _):
+            if timeline.video.contains(where: { $0.id == id }) {
+                timeline.normalizePrimaryTrack(.video)
+            } else if timeline.audio.contains(where: { $0.id == id }) {
+                timeline.normalizePrimaryTrack(.audio)
+            } else {
+                // Removal has already erased the item; both primary tracks are
+                // cheap to normalize and only one can have changed.
+                timeline.normalizePrimaryTrack(.video)
+                timeline.normalizePrimaryTrack(.audio)
+            }
+        default:
+            break
+        }
+    }
+
     private mutating func apply(_ operation: GraphOp) throws -> GraphOp {
         switch operation {
         case .insertItem(let item, let track, let index):
+            try ensureUnlocked(track)
             guard self.item(item.id) == nil else {
                 throw ModelError.duplicateItem(item.id)
             }
@@ -39,12 +63,14 @@ extension ProjectDocument {
 
         case .removeItem(let id):
             let location = try itemLocation(id)
+            try ensureUnlocked(location.track)
             let removed = items(for: location.track)[location.index]
             mutateItems(for: location.track) { $0.remove(at: location.index) }
             return .insertItem(removed, track: location.track, index: location.index)
 
         case .moveItem(let id, let destination):
             let location = try itemLocation(id)
+            try ensureUnlocked(location.track)
             let count = items(for: location.track).count
             guard (0..<count).contains(destination) else {
                 throw ModelError.indexOutOfRange(destination, count: count)
@@ -57,6 +83,7 @@ extension ProjectDocument {
 
         case .setSourceRange(let id, let range):
             let location = try itemLocation(id)
+            try ensureUnlocked(location.track)
             let previous = items(for: location.track)[location.index].sourceRange
             mutateItem(at: location) { $0.sourceRange = range }
             return .setSourceRange(id, previous)
@@ -66,18 +93,21 @@ extension ProjectDocument {
                 throw ModelError.invalidSpeed(speed)
             }
             let location = try itemLocation(id)
+            try ensureUnlocked(location.track)
             let previous = items(for: location.track)[location.index].speed
             mutateItem(at: location) { $0.speed = speed }
             return .setSpeed(id, previous)
 
         case .setEnabled(let id, let isEnabled):
             let location = try itemLocation(id)
+            try ensureUnlocked(location.track)
             let previous = items(for: location.track)[location.index].isEnabled
             mutateItem(at: location) { $0.isEnabled = isEnabled }
             return .setEnabled(id, previous)
 
         case .addEffect(let itemID, let effect, let requestedIndex):
             let location = try itemLocation(itemID)
+            try ensureUnlocked(location.track)
             let effects = items(for: location.track)[location.index].effects
             guard !effects.contains(where: { $0.id == effect.id }) else {
                 throw ModelError.duplicateEffect(itemID, effect.id)
@@ -91,6 +121,7 @@ extension ProjectDocument {
 
         case .removeEffect(let itemID, let effectID):
             let location = try itemLocation(itemID)
+            try ensureUnlocked(location.track)
             let effects = items(for: location.track)[location.index].effects
             guard let effectIndex = effects.firstIndex(where: { $0.id == effectID }) else {
                 throw ModelError.effectNotFound(itemID, effectID)
@@ -101,6 +132,7 @@ extension ProjectDocument {
 
         case .updateEffect(let itemID, let effect):
             let location = try itemLocation(itemID)
+            try ensureUnlocked(location.track)
             let effects = items(for: location.track)[location.index].effects
             guard let effectIndex = effects.firstIndex(where: { $0.id == effect.id }) else {
                 throw ModelError.effectNotFound(itemID, effect.id)
@@ -123,6 +155,17 @@ extension ProjectDocument {
             let previous = self.name
             self.name = name
             return .rename(previous)
+        }
+    }
+
+    private func ensureUnlocked(_ kind: TrackKind) throws {
+        let track: Track?
+        switch kind {
+        case .video: track = timeline.videoTracks.first
+        case .audio: track = timeline.audioTracks.first
+        }
+        if let track, track.isLocked {
+            throw ModelError.trackLocked(track.id)
         }
     }
 

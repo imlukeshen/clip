@@ -2,36 +2,32 @@
 import CoreModel
 import Foundation
 
+struct ReelVideoLayer: Sendable {
+    let item: TimelineItem
+    let preferredTransform: CGAffineTransform
+    let sourceTrackID: CMPersistentTrackID
+}
+
 final class ReelVideoInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     let timeRange: CMTimeRange
     let enablePostProcessing = false
     let containsTweening: Bool
     var requiredSourceTrackIDs: [NSValue]? {
-        sourceTrackID.map { [NSNumber(value: $0)] }
+        layers.map { NSNumber(value: $0.sourceTrackID) }
     }
     let passthroughTrackID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
 
-    let itemID: ItemID
-    let effects: [Effect]
-    let speed: Double
-    let preferredTransform: CGAffineTransform
+    let layers: [ReelVideoLayer]
     let background: RGBA
-    let sourceTrackID: CMPersistentTrackID?
 
     init(
         timeRange: CMTimeRange,
-        item: TimelineItem,
-        preferredTransform: CGAffineTransform,
-        background: RGBA,
-        sourceTrackID: CMPersistentTrackID?
+        layers: [ReelVideoLayer],
+        background: RGBA
     ) {
         self.timeRange = timeRange
-        self.itemID = item.id
-        self.effects = item.effects
-        self.speed = item.speed
-        self.preferredTransform = preferredTransform
+        self.layers = layers
         self.background = background
-        self.sourceTrackID = sourceTrackID
-        self.containsTweening = !item.effects.isEmpty
+        containsTweening = layers.contains { !$0.item.effects.isEmpty }
     }
 }

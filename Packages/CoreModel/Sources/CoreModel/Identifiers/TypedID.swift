@@ -51,3 +51,15 @@ public enum ProjectTag: Sendable {}
 
 /// Identifies a project document.
 public typealias ProjectID = TypedID<ProjectTag>
+
+/// The phantom tag for a timeline track identifier.
+public enum TrackTag: Sendable {}
+
+/// Identifies a video or audio track.
+public typealias TrackID = TypedID<TrackTag>
+
+/// The phantom tag for a marker identifier.
+public enum MarkerTag: Sendable {}
+
+/// Identifies a project-timed marker.
+public typealias MarkerID = TypedID<MarkerTag>
