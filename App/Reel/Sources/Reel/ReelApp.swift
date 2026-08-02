@@ -24,7 +24,7 @@ struct ReelApp: App {
         .defaultSize(width: 1180, height: 760)
 
         Settings {
-            SettingsView(libraryRoot: model.libraryRoot)
+            SettingsView(model: model)
         }
     }
 }

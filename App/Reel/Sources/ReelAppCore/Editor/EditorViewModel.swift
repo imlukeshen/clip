@@ -1,3 +1,4 @@
+import AIKit
 @preconcurrency import AVFoundation
 import CoreModel
 import Foundation
@@ -52,6 +53,7 @@ public final class EditorViewModel {
         self.buildsPlayback = buildsPlayback
         self.resolver = resolving
         self.persistence = persisting
+        self.undoManager.groupsByEvent = false
     }
 
     public var duration: RationalTime { document.duration }
@@ -71,6 +73,48 @@ public final class EditorViewModel {
     public var availableVideoAssets: [AssetRecord] {
         assets.values.filter { $0.kind == .video }
             .sorted { $0.importedAt < $1.importedAt }
+    }
+
+    public func assistantContextDigest() -> ContextDigest {
+        let items = document.timeline.video.map { item in
+            let asset = assets[item.assetID]
+            let track = eventTracks[item.assetID]
+            let alignment: String
+            switch track?.alignment {
+            case .exact: alignment = "exact"
+            case .estimated: alignment = "estimated"
+            case .unavailable: alignment = "unavailable"
+            case nil: alignment = asset?.eventAlignment?.rawValue ?? "unavailable"
+            }
+            let effectCounts = Dictionary(grouping: item.effects, by: { effectName($0.kind) })
+                .map { "\($0.key)×\($0.value.count)" }.sorted()
+            return ContextItem(
+                id: item.id.rawValue,
+                name: asset?.displayName ?? "Clip",
+                duration: item.timelineDuration.seconds,
+                hasAudio: asset?.hasAudio ?? false,
+                clicks: track?.clicks.count ?? 0,
+                effects: effectCounts,
+                alignment: alignment
+            )
+        }
+        return ContextDigest(
+            projectName: document.name,
+            duration: document.duration.seconds,
+            canvas:
+                "\(document.canvas.width)x\(document.canvas.height)@\(document.canvas.frameRate.framesPerSecond.formatted())",
+            selectedItemID: selectedItem?.id.rawValue,
+            items: items
+        )
+    }
+
+    public func toolExecutionContext() -> ToolExecutionContext {
+        ToolExecutionContext(
+            document: document,
+            assets: assets,
+            eventTracks: eventTracks,
+            resolving: resolver
+        )
     }
 
     public var timelineClickMarkers: [TimelineClickMarker] {
@@ -153,6 +197,8 @@ public final class EditorViewModel {
     }
 
     public func perform(_ patch: GraphPatch) throws {
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
         try apply(patch, registeringUndo: true)
     }
 
@@ -580,6 +626,18 @@ public final class EditorViewModel {
         isPlaying = false
         playbackTask?.cancel()
         playbackTask = nil
+    }
+}
+
+private func effectName(_ kind: EffectKind) -> String {
+    switch kind {
+    case .zoom: "zoom"
+    case .crop: "crop"
+    case .background: "background"
+    case .blur: "blur"
+    case .cursor: "cursor"
+    case .text: "text"
+    case .unknown(let name): name
     }
 }
 

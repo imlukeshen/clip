@@ -1,3 +1,4 @@
+import AIKit
 import AppKit
 import CoreModel
 import DesignSystem
@@ -21,7 +22,7 @@ struct EditorView: View {
                     Divider().overlay(theme.palette.line)
                     preview
                     Divider().overlay(theme.palette.line)
-                    EditorInspector(editor: editor)
+                    EditorInspector(model: model, editor: editor)
                         .frame(width: 284)
                 }
                 Divider().overlay(theme.palette.line)
@@ -284,6 +285,7 @@ private struct ToolButton: View {
 
 private struct EditorInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: EditorViewModel
     @State private var panel = Panel.inspector
 
@@ -308,36 +310,74 @@ private struct EditorInspector: View {
             if panel == .inspector {
                 inspector
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel("Project context")
-                    if let item = editor.selectedItem {
-                        HStack(spacing: 7) {
-                            Image(systemName: "film")
-                            Text(editor.assetNames[item.assetID] ?? "Selected clip")
-                                .lineLimit(1)
-                        }
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textPrimary)
-                        .padding(9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(theme.palette.surfaceRaised)
-                        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
-                    }
-                    Text("\(editor.document.timeline.video.count) clips · \(durationText)")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textSecondary)
-                    Text(
-                        "Local editing context is ready for assistant actions in a later milestone."
-                    )
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                }
-                .padding(14)
+                chat
             }
         }
         .background(theme.palette.surfacePanel)
+    }
+
+    private var chat: some View {
+        VStack(spacing: 0) {
+            chatTranscript
+            Divider().overlay(theme.palette.line)
+            chatComposer
+        }
+    }
+
+    private var chatTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 9) {
+                    if model.assistantMessages.isEmpty { chatEmptyState }
+                    ForEach(model.assistantMessages) { message in
+                        AssistantBubble(message: message).id(message.id)
+                    }
+                    ForEach(model.pendingAssistantActions) { action in
+                        PendingActionCard(model: model, action: action)
+                    }
+                    if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                }
+                .padding(12)
+            }
+            .onChange(of: model.assistantMessages.count) {
+                if let id = model.assistantMessages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+            }
+        }
+    }
+
+    private var chatEmptyState: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            SectionLabel("Project context")
+            Text("\(editor.document.timeline.video.count) clips · \(durationText)")
+                .foregroundStyle(theme.palette.textSecondary)
+            Text("Ask Reel to trim, split, zoom, restyle, or caption this edit.")
+                .foregroundStyle(theme.palette.textTertiary)
+        }
+        .font(theme.type.caption.font)
+    }
+
+    private var chatComposer: some View {
+        HStack(alignment: .bottom, spacing: 7) {
+            TextField("Ask Reel…", text: $model.assistantDraft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .onSubmit { model.sendAssistantMessage() }
+            Button {
+                model.sendAssistantMessage()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(theme.palette.accent)
+            .disabled(isSendDisabled)
+        }
+        .padding(10)
+        .background(theme.palette.surfaceRaised)
+    }
+
+    private var isSendDisabled: Bool {
+        model.assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || model.isAssistantWorking
     }
 
     @ViewBuilder private var inspector: some View {
@@ -447,6 +487,50 @@ private struct EditorInspector: View {
         case .text: "Text"
         case .unknown(let name): name
         }
+    }
+}
+
+private struct AssistantBubble: View {
+    @Environment(\.theme) private var theme
+    let message: AssistantMessage
+
+    var body: some View {
+        Text(message.text)
+            .font(theme.type.caption.font)
+            .foregroundStyle(
+                message.role == .status ? theme.palette.textTertiary : theme.palette.textPrimary
+            )
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                message.role == .user ? theme.palette.accentDim : theme.palette.surfaceRaised
+            )
+            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .textSelection(.enabled)
+    }
+}
+
+private struct PendingActionCard: View {
+    @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
+    let action: PendingAssistantAction
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Review \(action.name)").font(theme.type.label.font)
+            Text(action.result.message)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textSecondary)
+            HStack {
+                Button("Apply") { model.approveAssistantAction(action.id) }
+                    .buttonStyle(ReelBorderedButtonStyle())
+                Button("Skip") { model.rejectAssistantAction(action.id) }
+                    .buttonStyle(.plain)
+            }
+        }
+        .padding(9)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
     }
 }
 

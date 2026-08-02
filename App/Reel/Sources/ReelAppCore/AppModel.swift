@@ -1,3 +1,4 @@
+import AIKit
 import CaptureKit
 import ConvertKit
 import CoreModel
@@ -20,6 +21,11 @@ public final class AppModel {
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
     public var selectedAssetID: String?
+    public var assistantDraft = ""
+    public private(set) var assistantMessages: [AssistantMessage] = []
+    public private(set) var pendingAssistantActions: [PendingAssistantAction] = []
+    public private(set) var isAssistantWorking = false
+    public let aiSettings: AISettingsModel
 
     private let shortcutReader: ShortcutReader
     private var runtime: AppRuntime?
@@ -33,6 +39,7 @@ public final class AppModel {
         self.libraryRoot = libraryRoot.standardizedFileURL
         self.shortcutReader = shortcutReader
         self.shortcutRow = ShortcutRowModel(result: shortcutReader.read())
+        self.aiSettings = AISettingsModel(libraryRoot: libraryRoot.standardizedFileURL)
     }
 
     public static var defaultLibraryRoot: URL {
@@ -266,6 +273,83 @@ public final class AppModel {
 
     public func clearMessage() {
         lastMessage = nil
+    }
+
+    public func sendAssistantMessage() {
+        let prompt = assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !isAssistantWorking, let editor else { return }
+        assistantDraft = ""
+        assistantMessages.append(AssistantMessage(role: .user, text: prompt))
+        isAssistantWorking = true
+        let turnID = UUID().uuidString.lowercased()
+        let digest = editor.assistantContextDigest()
+        let context = editor.toolExecutionContext()
+        let settings = aiSettings
+
+        Task {
+            defer { isAssistantWorking = false }
+            do {
+                let provider = try await settings.provider()
+                let turn = try await AssistantTurnRunner().run(
+                    prompt: prompt,
+                    turnID: turnID,
+                    provider: provider,
+                    policy: settings.confirmationPolicy,
+                    digest: digest,
+                    context: context
+                )
+                var responseParts: [String] = []
+                if !turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    responseParts.append(turn.text)
+                }
+                for (invocation, result) in zip(turn.invocations, turn.results) {
+                    if result.requiresConfirmation, result.patch != nil {
+                        pendingAssistantActions.append(
+                            PendingAssistantAction(name: invocation.name, result: result))
+                        responseParts.append("Review \(invocation.name) before applying.")
+                    } else if let patch = result.patch {
+                        try editor.perform(patch)
+                        responseParts.append(result.message)
+                    } else {
+                        responseParts.append(result.message)
+                    }
+                }
+                if responseParts.isEmpty {
+                    responseParts.append("No edit was requested by the provider.")
+                }
+                assistantMessages.append(
+                    AssistantMessage(role: .assistant, text: responseParts.joined(separator: "\n")))
+                await settings.refresh()
+            } catch {
+                assistantMessages.append(
+                    AssistantMessage(
+                        role: .status,
+                        text: error.localizedDescription
+                    ))
+            }
+        }
+    }
+
+    public func approveAssistantAction(_ id: String) {
+        guard let index = pendingAssistantActions.firstIndex(where: { $0.id == id }),
+            let patch = pendingAssistantActions[index].result.patch,
+            let editor
+        else { return }
+        do {
+            try editor.perform(patch)
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status, text: pendingAssistantActions[index].result.message))
+            pendingAssistantActions.remove(at: index)
+        } catch {
+            assistantMessages.append(
+                AssistantMessage(role: .status, text: error.localizedDescription))
+        }
+    }
+
+    public func rejectAssistantAction(_ id: String) {
+        pendingAssistantActions.removeAll { $0.id == id }
+        assistantMessages.append(AssistantMessage(role: .status, text: "Edit skipped."))
     }
 
     public func openEditor(for assetID: AssetID) {

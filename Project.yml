@@ -25,6 +25,8 @@ packages:
     path: Packages/ConvertKit
   MediaEngine:
     path: Packages/MediaEngine
+  AIKit:
+    path: Packages/AIKit
 
 targets:
   Reel:
@@ -34,6 +36,8 @@ targets:
       - path: App/Reel/Sources/Reel
     info:
       path: App/Reel/Config/Info.plist
+      properties:
+        NSSpeechRecognitionUsageDescription: Reel uses on-device speech recognition to generate captions for your clips.
     dependencies:
       - package: ReelAppCore
         product: ReelAppCore
@@ -42,6 +46,7 @@ targets:
       - package: CaptureKit
       - package: ConvertKit
       - package: MediaEngine
+      - package: AIKit
     configFiles:
       Debug: App/Reel/Config/xcconfig/Debug.xcconfig
       Release: App/Reel/Config/xcconfig/Release.xcconfig
