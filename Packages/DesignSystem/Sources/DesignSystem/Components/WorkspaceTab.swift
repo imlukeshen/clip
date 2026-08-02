@@ -50,6 +50,7 @@ public struct WorkspaceTab: View {
             )
             .padding(.horizontal, 12)
             .frame(height: 34)
+            .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(isActive ? theme.palette.accent : Color.clear)
@@ -58,6 +59,8 @@ public struct WorkspaceTab: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .accessibilityIdentifier("workspace-tab-\(title.lowercased())")
+        .accessibilityValue(isActive ? "selected" : "unselected")
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }

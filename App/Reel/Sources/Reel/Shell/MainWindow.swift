@@ -69,12 +69,15 @@ private struct WorkspaceContent: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        switch model.selectedWorkspace {
-        case .inbox: InboxView(model: model)
-        case .video: VideoView(model: model)
-        case .photo: PhotoView(model: model)
-        case .pdf: PDFPlaceholderView(model: model)
-        case .convert: ConvertView(model: model)
+        Group {
+            switch model.selectedWorkspace {
+            case .inbox: InboxView(model: model)
+            case .video: VideoView(model: model)
+            case .photo: PhotoView(model: model)
+            case .pdf: PDFPlaceholderView(model: model)
+            case .convert: ConvertView(model: model)
+            }
         }
+        .accessibilityIdentifier("workspace-content-\(model.selectedWorkspace.rawValue)")
     }
 }
