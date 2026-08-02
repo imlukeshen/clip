@@ -70,6 +70,18 @@ public actor AppRuntime {
         try await library.url(for: assetID)
     }
 
+    public func projectsReferencing(assetIDs: [AssetID]) async throws -> [ProjectSummary] {
+        try await library.projectsReferencing(assetIDs: assetIDs)
+    }
+
+    public func trash(assetIDs: [AssetID]) async throws -> TrashReceipt {
+        try await library.trash(assetIDs: assetIDs)
+    }
+
+    public func restore(_ receipt: TrashReceipt) async throws {
+        try await library.restore(receipt)
+    }
+
     public func eventTracks(for assetIDs: [AssetID]) async -> [AssetID: EventTrack] {
         var tracks: [AssetID: EventTrack] = [:]
         for assetID in assetIDs {

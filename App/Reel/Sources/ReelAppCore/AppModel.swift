@@ -20,7 +20,9 @@ public final class AppModel {
     public private(set) var editor: EditorViewModel?
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
-    public var selectedAssetID: String?
+    public let selection = SelectionModel()
+    public let undoManager = UndoManager()
+    public private(set) var pendingTrashConfirmation: TrashConfirmation?
     public var assistantDraft = ""
     public private(set) var assistantMessages: [AssistantMessage] = []
     public private(set) var pendingAssistantActions: [PendingAssistantAction] = []
@@ -40,6 +42,19 @@ public final class AppModel {
         self.shortcutReader = shortcutReader
         self.shortcutRow = ShortcutRowModel(result: shortcutReader.read())
         self.aiSettings = AISettingsModel(libraryRoot: libraryRoot.standardizedFileURL)
+        self.undoManager.groupsByEvent = false
+    }
+
+    public var selectedAssetID: String? {
+        get { selection.anchor?.rawValue }
+        set {
+            guard let newValue else {
+                selection.deselectAll()
+                return
+            }
+            let id = AssetID(rawValue: newValue)
+            selection.click(id)
+        }
     }
 
     public static var defaultLibraryRoot: URL {
@@ -140,6 +155,48 @@ public final class AppModel {
 
     public func acceptDrop(_ urls: [URL]) {
         accept(urls, source: .drop)
+    }
+
+    public func selectAsset(_ id: AssetID, modifiers: EventModifiers = []) {
+        selection.click(id, modifiers: modifiers)
+    }
+
+    public func requestTrashSelectedAssets() {
+        let ids = Array(selection.selected)
+        guard !ids.isEmpty, let runtime else { return }
+        Task {
+            do {
+                let projects = try await runtime.projectsReferencing(assetIDs: ids)
+                if projects.isEmpty {
+                    await performTrash(ids)
+                } else {
+                    pendingTrashConfirmation = TrashConfirmation(
+                        assetIDs: ids,
+                        projectNames: projects.map(\.name)
+                    )
+                }
+            } catch {
+                lastMessage = "Reel couldn't check whether those files are in a project."
+            }
+        }
+    }
+
+    public func confirmTrash() {
+        guard let confirmation = pendingTrashConfirmation else { return }
+        pendingTrashConfirmation = nil
+        Task { await performTrash(confirmation.assetIDs) }
+    }
+
+    public func cancelTrash() {
+        pendingTrashConfirmation = nil
+    }
+
+    public func undoLibraryAction() {
+        undoManager.undo()
+    }
+
+    public func redoLibraryAction() {
+        undoManager.redo()
     }
 
     public func acceptPicker(_ urls: [URL]) {
@@ -425,6 +482,42 @@ public final class AppModel {
         }
     }
 
+    private func performTrash(_ ids: [AssetID]) async {
+        guard let runtime, !ids.isEmpty else { return }
+        do {
+            let receipt = try await runtime.trash(assetIDs: ids)
+            selection.deselectAll()
+            await refreshAssets()
+            undoManager.registerUndo(withTarget: self) { target in
+                Task { await target.restoreFromTrash(receipt) }
+            }
+            undoManager.setActionName("Move to Trash")
+            lastMessage = ids.count == 1 ? "Moved to Trash" : "Moved \(ids.count) items to Trash"
+        } catch {
+            lastMessage = "Reel couldn't move the selected files to Trash."
+        }
+    }
+
+    private func restoreFromTrash(_ receipt: TrashReceipt) async {
+        guard let runtime else { return }
+        do {
+            try await runtime.restore(receipt)
+            await refreshAssets()
+            let ids = receipt.items.map { $0.asset.id }
+            selection.setItems(assets.map(\.id))
+            for id in ids {
+                selection.click(id, modifiers: selection.selected.isEmpty ? [] : [.command])
+            }
+            undoManager.registerUndo(withTarget: self) { target in
+                Task { await target.performTrash(ids) }
+            }
+            undoManager.setActionName("Move to Trash")
+            lastMessage = ids.count == 1 ? "Restored from Trash" : "Restored \(ids.count) items"
+        } catch {
+            lastMessage = "Reel couldn't restore the files. They may have been removed from Trash."
+        }
+    }
+
     private func uniqueOutputURL(
         folder: URL,
         filename: String,
@@ -450,5 +543,16 @@ public final class AppModel {
             }
             suffix += 1
         }
+    }
+}
+
+public struct TrashConfirmation: Identifiable, Sendable {
+    public let id = UUID()
+    public var assetIDs: [AssetID]
+    public var projectNames: [String]
+
+    public init(assetIDs: [AssetID], projectNames: [String]) {
+        self.assetIDs = assetIDs
+        self.projectNames = projectNames
     }
 }

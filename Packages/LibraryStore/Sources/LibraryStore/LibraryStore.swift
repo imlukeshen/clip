@@ -7,13 +7,18 @@ public actor LibraryStore {
     private let root: URL
     private let database: DatabaseQueue
     private let bookmarks: BookmarkStore
+    private let trashManager: any FileTrashManaging
     private let changeContinuation: AsyncStream<LibraryChange>.Continuation
 
     /// A stream of committed library mutations.
     public nonisolated let changes: AsyncStream<LibraryChange>
 
     /// Opens or creates a library rooted at a user-approved directory.
-    public init(root: URL, bookmarks: BookmarkStore) async throws {
+    public init(
+        root: URL,
+        bookmarks: BookmarkStore,
+        trashManager: any FileTrashManaging = SystemTrashManager()
+    ) async throws {
         let normalizedRoot = root.standardizedFileURL
         do {
             try Self.prepareLayout(at: normalizedRoot)
@@ -40,6 +45,7 @@ public actor LibraryStore {
         self.root = normalizedRoot
         self.database = queue
         self.bookmarks = bookmarks
+        self.trashManager = trashManager
         self.changes = stream.stream
         self.changeContinuation = stream.continuation
     }
@@ -210,51 +216,109 @@ public actor LibraryStore {
         }
     }
 
-    /// Removes an asset and its durable sidecars from the library.
-    public func delete(asset id: AssetID, moveToTrash: Bool) async throws {
-        guard let record = try await asset(id: id) else {
-            throw LibraryError.assetNotFound(id)
-        }
-        let mediaURL = try resolvedURL(forRelativePath: record.relativePath, under: assetsURL)
-        let paths = [
-            record.eventTrackPath,
-            record.thumbnailPath,
-            record.peaksPath,
-        ].compactMap { $0 }
+    /// Moves assets and every durable sidecar to the system Trash as one reversible operation.
+    public func trash(assetIDs: [AssetID]) async throws -> TrashReceipt {
+        let uniqueIDs = Array(Set(assetIDs))
+        guard !uniqueIDs.isEmpty else { return TrashReceipt(items: []) }
 
+        var receiptItems: [TrashReceipt.Item] = []
         do {
-            if FileManager.default.fileExists(atPath: mediaURL.path) {
-                if moveToTrash {
-                    var trashedURL: NSURL?
-                    try FileManager.default.trashItem(at: mediaURL, resultingItemURL: &trashedURL)
-                } else {
-                    try FileManager.default.removeItem(at: mediaURL)
+            for id in uniqueIDs {
+                guard let record = try await asset(id: id) else {
+                    throw LibraryError.assetNotFound(id)
                 }
-            }
-            let metadata = metadataURL(for: mediaURL)
-            if FileManager.default.fileExists(atPath: metadata.path) {
-                try FileManager.default.removeItem(at: metadata)
-            }
-            for path in paths {
-                let sidecar = try resolvedURL(forRelativePath: path, under: assetsURL)
-                if FileManager.default.fileExists(atPath: sidecar.path) {
-                    try FileManager.default.removeItem(at: sidecar)
+                let projectIDs = try await referencingProjectIDs(for: id)
+                let urls = try durableURLs(for: record).filter {
+                    FileManager.default.fileExists(atPath: $0.path)
                 }
+                var moved: [TrashReceipt.MovedFile] = []
+                for url in urls {
+                    let trashed = try trashManager.trashItem(at: url)
+                    moved.append(.init(originalURL: url, trashedURL: trashed))
+                }
+                receiptItems.append(
+                    .init(asset: record, movedFiles: moved, referencingProjectIDs: projectIDs)
+                )
             }
-        } catch let error as LibraryError {
-            throw error
         } catch {
-            throw LibraryError.fileOperationFailed("delete asset")
+            try? restoreFiles(in: TrashReceipt(items: receiptItems))
+            throw error
         }
 
         do {
             try await database.write { db in
-                try db.execute(sql: "DELETE FROM asset WHERE id = ?", arguments: [id.rawValue])
+                for id in uniqueIDs {
+                    try db.execute(
+                        sql: "DELETE FROM project_asset WHERE asset_id = ?",
+                        arguments: [id.rawValue]
+                    )
+                    try db.execute(
+                        sql: "DELETE FROM asset WHERE id = ?",
+                        arguments: [id.rawValue]
+                    )
+                }
             }
         } catch {
-            throw LibraryError.databaseOperationFailed("delete asset index")
+            try? restoreFiles(in: TrashReceipt(items: receiptItems))
+            throw LibraryError.databaseOperationFailed("trash asset index")
         }
-        changeContinuation.yield(.assetDeleted(id))
+
+        for id in uniqueIDs {
+            changeContinuation.yield(.assetDeleted(id))
+        }
+        return TrashReceipt(items: receiptItems)
+    }
+
+    /// Restores a prior Trash operation and its project-reference index entries.
+    public func restore(_ receipt: TrashReceipt) async throws {
+        do {
+            try restoreFiles(in: receipt)
+        } catch {
+            throw LibraryError.fileOperationFailed("restore asset from Trash")
+        }
+        do {
+            try await database.write { db in
+                for item in receipt.items {
+                    try item.asset.insert(db)
+                    for projectID in item.referencingProjectIDs {
+                        try db.execute(
+                            sql: """
+                                INSERT OR IGNORE INTO project_asset (project_id, asset_id)
+                                SELECT ?, ? WHERE EXISTS (SELECT 1 FROM project WHERE id = ?)
+                                """,
+                            arguments: [
+                                projectID.rawValue,
+                                item.asset.id.rawValue,
+                                projectID.rawValue,
+                            ]
+                        )
+                    }
+                }
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("restore asset index")
+        }
+        for item in receipt.items {
+            changeContinuation.yield(.assetInserted(item.asset.id))
+        }
+    }
+
+    /// Returns projects that reference any of the supplied assets.
+    public func projectsReferencing(assetIDs: [AssetID]) async throws -> [ProjectSummary] {
+        let ids = Set(assetIDs)
+        guard !ids.isEmpty else { return [] }
+        let summaries = try await projects(limit: Int.max)
+        var matches: [ProjectSummary] = []
+        for summary in summaries {
+            let document = try await loadProject(id: summary.id)
+            let referenced = Set(
+                document.timeline.video.map(\.assetID) + document.timeline.audio.map(\.assetID)
+            )
+            if !ids.isDisjoint(with: referenced) {
+                matches.append(summary)
+            }
+        }
+        return matches
     }
 
     /// Loads a project document from its package.
@@ -437,6 +501,47 @@ extension Alignment {
 }
 
 extension LibraryStore {
+    private func durableURLs(for record: AssetRecord) throws -> [URL] {
+        let mediaURL = try resolvedURL(forRelativePath: record.relativePath, under: assetsURL)
+        let sidecars = try [record.eventTrackPath, record.thumbnailPath, record.peaksPath]
+            .compactMap { $0 }
+            .map { try resolvedURL(forRelativePath: $0, under: assetsURL) }
+        return [mediaURL, metadataURL(for: mediaURL)] + sidecars
+    }
+
+    private func referencingProjectIDs(for assetID: AssetID) async throws -> [ProjectID] {
+        do {
+            return try await database.read { db in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: "SELECT project_id FROM project_asset WHERE asset_id = ?",
+                    arguments: [assetID.rawValue]
+                )
+                return rows.map { ProjectID(rawValue: $0["project_id"]) }
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("find asset references")
+        }
+    }
+
+    private func restoreFiles(in receipt: TrashReceipt) throws {
+        for item in receipt.items.reversed() {
+            for file in item.movedFiles.reversed() {
+                guard FileManager.default.fileExists(atPath: file.trashedURL.path) else {
+                    throw LibraryError.assetFileMissing(file.trashedURL.path)
+                }
+                guard !FileManager.default.fileExists(atPath: file.originalURL.path) else {
+                    throw LibraryError.fileOperationFailed("restore destination already exists")
+                }
+                try FileManager.default.createDirectory(
+                    at: file.originalURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.moveItem(at: file.trashedURL, to: file.originalURL)
+            }
+        }
+    }
+
     private static func prepareLayout(at root: URL) throws {
         for directory in ["Inbox", "Assets", "Projects", "Exports"] {
             try FileManager.default.createDirectory(

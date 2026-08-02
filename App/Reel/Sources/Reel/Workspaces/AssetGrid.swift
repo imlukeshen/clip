@@ -1,4 +1,5 @@
 import AppKit
+import CoreModel
 import DesignSystem
 import LibraryStore
 import ReelAppCore
@@ -7,6 +8,10 @@ import SwiftUI
 struct AssetGrid: View {
     @Bindable var model: AppModel
     let assets: [AssetRecord]
+
+    @State private var gridWidth: CGFloat = 0
+    @State private var marqueeStart: CGPoint?
+    @State private var marqueeCurrent: CGPoint?
 
     private let columns = [
         GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 10)
@@ -19,20 +24,140 @@ struct AssetGrid: View {
                 body: "Drop files above or capture something new."
             )
         } else {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-                ForEach(assets) { asset in
-                    AssetCard(
-                        title: asset.displayName,
-                        metadata: metadata(for: asset),
-                        duration: duration(for: asset),
-                        state: model.selectedAssetID == asset.id.rawValue ? .selected : .normal,
-                        action: { model.selectedAssetID = asset.id.rawValue }
-                    ) {
-                        AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("\(model.selection.selected.count) selected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .opacity(model.selection.selected.isEmpty ? 0 : 1)
+                    Spacer()
+                    Button("Select all") {
+                        model.selection.selectAll()
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.selection.selected.count == assets.count)
+                }
+
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                    ForEach(assets) { asset in
+                        AssetCard(
+                            title: asset.displayName,
+                            metadata: metadata(for: asset),
+                            duration: duration(for: asset),
+                            state: model.selection.selected.contains(asset.id)
+                                ? .selected : .normal,
+                            action: {
+                                model.selectAsset(asset.id, modifiers: currentModifiers)
+                            }
+                        ) {
+                            AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
+                        }
+                        .contextMenu {
+                            Button("Move to Trash", role: .destructive) {
+                                if !model.selection.selected.contains(asset.id) {
+                                    model.selectAsset(asset.id)
+                                }
+                                model.requestTrashSelectedAssets()
+                            }
+                        }
                     }
                 }
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { gridWidth = proxy.size.width }
+                            .onChange(of: proxy.size.width) { _, width in gridWidth = width }
+                    }
+                }
+                .contentShape(Rectangle())
+                .overlay(alignment: .topLeading) {
+                    if let rect = marqueeRect {
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.12))
+                            .stroke(Color.accentColor, lineWidth: 1)
+                            .frame(width: rect.width, height: rect.height)
+                            .offset(x: rect.minX, y: rect.minY)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .simultaneousGesture(marqueeGesture)
+                .focusable()
+                .onMoveCommand(perform: moveSelection)
             }
+            .onAppear { model.selection.setItems(assetIDs) }
+            .onChange(of: assetIDs) { _, ids in model.selection.setItems(ids) }
         }
+    }
+
+    private var assetIDs: [AssetID] { assets.map(\.id) }
+
+    private var currentModifiers: ReelAppCore.EventModifiers {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        var result: ReelAppCore.EventModifiers = []
+        if flags.contains(.command) { result.insert(.command) }
+        if flags.contains(.shift) { result.insert(.shift) }
+        return result
+    }
+
+    private var marqueeRect: CGRect? {
+        guard let start = marqueeStart, let current = marqueeCurrent else { return nil }
+        return CGRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+    }
+
+    private var marqueeGesture: some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
+            .onChanged { value in
+                if marqueeStart == nil { marqueeStart = value.startLocation }
+                marqueeCurrent = value.location
+            }
+            .onEnded { _ in
+                if let rect = marqueeRect {
+                    model.selection.marquee(
+                        rect,
+                        in: calculatedLayout,
+                        additive: currentModifiers.contains(.command)
+                    )
+                }
+                marqueeStart = nil
+                marqueeCurrent = nil
+            }
+    }
+
+    private var calculatedLayout: ReelAppCore.GridLayout {
+        let spacing: CGFloat = 10
+        let count = max(1, Int((gridWidth + spacing) / (152 + spacing)))
+        let width = min(210, (gridWidth - CGFloat(count - 1) * spacing) / CGFloat(count))
+        let height = width / 1.6 + 58
+        var frames: [AssetID: CGRect] = [:]
+        for (index, id) in assetIDs.enumerated() {
+            let row = index / count
+            let column = index % count
+            frames[id] = CGRect(
+                x: CGFloat(column) * (width + spacing),
+                y: CGFloat(row) * (height + spacing),
+                width: width,
+                height: height
+            )
+        }
+        return ReelAppCore.GridLayout(frames: frames)
+    }
+
+    private func moveSelection(_ direction: MoveCommandDirection) {
+        let columns = max(1, Int((gridWidth + 10) / 162))
+        let offset: Int
+        switch direction {
+        case .left: offset = -1
+        case .right: offset = 1
+        case .up: offset = -columns
+        case .down: offset = columns
+        @unknown default: return
+        }
+        model.selection.move(by: offset, extending: currentModifiers.contains(.shift))
     }
 
     private func metadata(for asset: AssetRecord) -> String {

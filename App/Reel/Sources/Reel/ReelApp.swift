@@ -26,6 +26,26 @@ struct ReelApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
+        .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") { model.editor?.undo() ?? model.undoLibraryAction() }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(model.editor == nil && !model.undoManager.canUndo)
+                Button("Redo") { model.editor?.redo() ?? model.redoLibraryAction() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(model.editor == nil && !model.undoManager.canRedo)
+            }
+            CommandMenu("Assets") {
+                Button("Select All") { model.selection.selectAll() }
+                    .keyboardShortcut("a", modifiers: .command)
+                Button("Deselect All") { model.selection.deselectAll() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                Divider()
+                Button("Move to Trash") { model.requestTrashSelectedAssets() }
+                    .keyboardShortcut(.delete, modifiers: .command)
+                    .disabled(model.selection.selected.isEmpty)
+            }
+        }
 
         Settings {
             SettingsView(model: model)

@@ -11,6 +11,26 @@ struct MainWindow: View {
     var body: some View {
         content
             .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+            .alert(
+                "Move to Trash?",
+                isPresented: Binding(
+                    get: { model.pendingTrashConfirmation != nil },
+                    set: { if !$0 { model.cancelTrash() } }
+                )
+            ) {
+                Button("Cancel", role: .cancel, action: model.cancelTrash)
+                    .keyboardShortcut(.defaultAction)
+                Button("Move to Trash", role: .destructive, action: model.confirmTrash)
+            } message: {
+                Text(trashWarning)
+            }
+    }
+
+    private var trashWarning: String {
+        guard let confirmation = model.pendingTrashConfirmation else { return "" }
+        let projects = confirmation.projectNames.joined(separator: ", ")
+        let count = confirmation.assetIDs.count
+        return "\(count == 1 ? "This file is" : "These \(count) files are") used by: \(projects). The projects will show missing media until you undo or locate the files."
     }
 
     private var content: some View {
