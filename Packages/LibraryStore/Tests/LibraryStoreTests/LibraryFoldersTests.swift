@@ -94,7 +94,8 @@ private struct FolderTestTrashManager: FileTrashManaging {
     #expect(try await store.asset(id: id)?.id == id)
 
     let folderTrash = try await folders.trashFolder("launch")
-    #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Media/launch").path))
+    #expect(
+        !FileManager.default.fileExists(atPath: root.appendingPathComponent("Media/launch").path))
     try await folders.restoreFolder(folderTrash)
     #expect(try await store.asset(id: id)?.relativePath == "Media/launch/Recording.mov")
     #expect(try await store.projectsReferencing(assetIDs: [id]).map(\.name) == ["Stable Project"])

@@ -94,7 +94,8 @@ public final class SelectionModel {
 
     public func move(by offset: Int, extending: Bool) {
         guard !orderedIDs.isEmpty else { return }
-        let current = anchor.flatMap { orderedIDs.firstIndex(of: $0) }
+        let current =
+            anchor.flatMap { orderedIDs.firstIndex(of: $0) }
             ?? (offset >= 0 ? -1 : orderedIDs.count)
         let next = min(max(current + offset, 0), orderedIDs.count - 1)
         click(orderedIDs[next], modifiers: extending ? [.shift] : [])

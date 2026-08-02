@@ -43,7 +43,8 @@ struct PDFEditDocumentTests {
         ]
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
-        #expect(try decoder.decode(PDFEditDocument.self, from: encoder.encode(document)) == document)
+        #expect(
+            try decoder.decode(PDFEditDocument.self, from: encoder.encode(document)) == document)
         for patch in patches {
             #expect(try decoder.decode(PDFPatch.self, from: encoder.encode(patch)) == patch)
         }
@@ -54,7 +55,9 @@ struct PDFEditDocumentTests {
         let font = PDFFontDescriptor(postScriptName: "ABCDEF+Inter-Regular", isEmbedded: true)
         #expect(font.isSubset)
         #expect(font.warning(for: "Hello", observedCharacters: Set("Hello world")) == nil)
-        #expect(font.warning(for: "Total €", observedCharacters: Set("Total USD"))?.contains("€") == true)
+        #expect(
+            font.warning(for: "Total €", observedCharacters: Set("Total USD"))?.contains("€")
+                == true)
         #expect(!PDFFontDescriptor(postScriptName: "Inter-Regular").isSubset)
     }
 

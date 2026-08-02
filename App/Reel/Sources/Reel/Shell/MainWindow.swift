@@ -49,7 +49,8 @@ struct MainWindow: View {
         guard let confirmation = model.pendingTrashConfirmation else { return "" }
         let projects = confirmation.projectNames.joined(separator: ", ")
         let count = confirmation.assetIDs.count
-        return "\(count == 1 ? "This file is" : "These \(count) files are") used by: \(projects). The projects will show missing media until you undo or locate the files."
+        return
+            "\(count == 1 ? "This file is" : "These \(count) files are") used by: \(projects). The projects will show missing media until you undo or locate the files."
     }
 
     private var content: some View {

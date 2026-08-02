@@ -69,7 +69,8 @@ public struct ImageToolExecutor: Sendable {
             } else {
                 throw ImageToolExecutorError.invalidArguments("Provide aspect or rect.")
             }
-            return ImageToolResult(message: "Prepared the image crop.", patches: [.setGeometry(geometry)])
+            return ImageToolResult(
+                message: "Prepared the image crop.", patches: [.setGeometry(geometry)])
 
         case "addAnnotation":
             let arguments = try invocation.arguments.decode(AnnotationArguments.self)
@@ -82,7 +83,8 @@ public struct ImageToolExecutor: Sendable {
         case "suggestRedactions":
             let suggestions = try await suggester.suggestions(in: context.sourceURL)
             return ImageToolResult(
-                message: "Found \(suggestions.count) possible sensitive region\(suggestions.count == 1 ? "" : "s") on device.",
+                message:
+                    "Found \(suggestions.count) possible sensitive region\(suggestions.count == 1 ? "" : "s") on device.",
                 suggestions: suggestions
             )
 
@@ -96,7 +98,8 @@ public struct ImageToolExecutor: Sendable {
                 RedactionLayer(regions: selected.map(\.region), style: .pixelate(size: 12))
             )
             return ImageToolResult(
-                message: "Prepared \(selected.count) reviewed redaction\(selected.count == 1 ? "" : "s").",
+                message:
+                    "Prepared \(selected.count) reviewed redaction\(selected.count == 1 ? "" : "s").",
                 patches: [.addLayer(layer, atIndex: context.document.layers.count)]
             )
 
@@ -147,7 +150,8 @@ public struct ImageToolExecutor: Sendable {
         } else {
             let parts = aspect.split(separator: ":").compactMap { Double($0) }
             guard parts.count == 2, parts[0] > 0, parts[1] > 0 else {
-                throw ImageToolExecutorError.invalidArguments("Aspect must look like 16:9 or square.")
+                throw ImageToolExecutorError.invalidArguments(
+                    "Aspect must look like 16:9 or square.")
             }
             ratio = parts[0] / parts[1]
         }
@@ -175,7 +179,8 @@ public struct ImageToolExecutor: Sendable {
         case "ellipse": return .annotation(AnnotationLayer(kind: .ellipse, bounds: rect))
         case "text": return .text(TextLayer(text: arguments.text ?? "Text", frame: rect))
         case "highlight": return .highlight(HighlightLayer(regions: [rect]))
-        case "step": return .step(StepLayer(number: 1, position: CGPoint(x: rect.midX, y: rect.midY)))
+        case "step":
+            return .step(StepLayer(number: 1, position: CGPoint(x: rect.midX, y: rect.midY)))
         default:
             throw ImageToolExecutorError.invalidArguments("Unknown annotation type.")
         }

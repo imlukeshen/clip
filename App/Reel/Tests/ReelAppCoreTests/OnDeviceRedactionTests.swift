@@ -63,8 +63,8 @@ private func emailScreenshot() -> NSImage {
     return image
 }
 
-private extension NSImage {
-    func writePNG(to url: URL) throws {
+extension NSImage {
+    fileprivate func writePNG(to url: URL) throws {
         guard let tiff = tiffRepresentation,
             let bitmap = NSBitmapImageRep(data: tiff),
             let data = bitmap.representation(using: .png, properties: [:])

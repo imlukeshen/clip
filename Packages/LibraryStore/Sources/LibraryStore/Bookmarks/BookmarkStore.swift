@@ -84,7 +84,8 @@ public actor BookmarkStore {
             let values = try? url.resourceValues(
                 forKeys: [.isRegularFileKey, .fileResourceIdentifierKey]
             )
-            guard values?.isRegularFile == true, let identifier = values?.fileResourceIdentifier else {
+            guard values?.isRegularFile == true, let identifier = values?.fileResourceIdentifier
+            else {
                 continue
             }
             if String(describing: identifier) == expected { return url }

@@ -104,7 +104,10 @@ private func sensitiveKind(in text: String) -> RedactionSuggestionKind? {
     let patterns: [(String, RedactionSuggestionKind)] = [
         (#"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#, .email),
         (#"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, .ipAddress),
-        (#"(?i)\b(?:sk-[A-Z0-9]{12,}|AKIA[A-Z0-9]{16}|(?:api[_-]?key|token|secret)\s*[:=]\s*\S+)\b"#, .credential),
+        (
+            #"(?i)\b(?:sk-[A-Z0-9]{12,}|AKIA[A-Z0-9]{16}|(?:api[_-]?key|token|secret)\s*[:=]\s*\S+)\b"#,
+            .credential
+        ),
     ]
     let range = NSRange(text.startIndex..<text.endIndex, in: text)
     for (pattern, kind) in patterns {

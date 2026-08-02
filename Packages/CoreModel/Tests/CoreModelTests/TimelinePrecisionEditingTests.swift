@@ -109,12 +109,14 @@ struct TimelinePrecisionEditingTests {
         var edited = document
         let inverse = try edited.apply(patch)
 
-        #expect(edited.timeline.video.map(\.timelineStart) == [
-            .zero, RationalTime(seconds: 4), RationalTime(seconds: 6),
-        ])
-        #expect(edited.timeline.video.map(\.timelineDuration) == [
-            RationalTime(seconds: 4), RationalTime(seconds: 2), RationalTime(seconds: 4),
-        ])
+        #expect(
+            edited.timeline.video.map(\.timelineStart) == [
+                .zero, RationalTime(seconds: 4), RationalTime(seconds: 6),
+            ])
+        #expect(
+            edited.timeline.video.map(\.timelineDuration) == [
+                RationalTime(seconds: 4), RationalTime(seconds: 2), RationalTime(seconds: 4),
+            ])
         _ = try edited.apply(inverse)
         #expect(edited == document)
     }

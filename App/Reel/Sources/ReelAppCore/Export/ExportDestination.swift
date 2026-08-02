@@ -39,7 +39,8 @@ public struct ExportDestination: Codable, Sendable, Equatable {
                 remainder = remainder[remainder.index(after: close)...]
             }
         }
-        guard !subpathTemplate.hasPrefix("/"), !subpathTemplate.split(separator: "/").contains(".."),
+        guard !subpathTemplate.hasPrefix("/"),
+            !subpathTemplate.split(separator: "/").contains(".."),
             !filenameTemplate.isEmpty, !filenameTemplate.contains("/")
         else { throw ExportDestinationError.invalidPath }
     }

@@ -54,7 +54,8 @@ public actor LibraryFolders {
                     throw LibraryError.assetNotFound(id)
                 }
                 let source = root.appendingPathComponent(asset.relativePath)
-                let destination = uniqueFileURL(named: source.lastPathComponent, in: destinationFolder)
+                let destination = uniqueFileURL(
+                    named: source.lastPathComponent, in: destinationFolder)
                 guard source.standardizedFileURL != destination.standardizedFileURL else {
                     updated.append(asset)
                     continue
@@ -164,7 +165,10 @@ public actor LibraryFolders {
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-                .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+                .sorted {
+                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                        == .orderedAscending
+                }
                 .map { child in
                     let childPath = relative(child)
                     return try node(
@@ -209,7 +213,8 @@ public actor LibraryFolders {
     }
 
     private func folderURL(_ relativePath: String) throws -> URL {
-        guard !relativePath.hasPrefix("/"), !relativePath.split(separator: "/").contains("..") else {
+        guard !relativePath.hasPrefix("/"), !relativePath.split(separator: "/").contains("..")
+        else {
             throw LibraryError.invalidRelativePath(relativePath)
         }
         let url = relativePath.isEmpty ? media : media.appendingPathComponent(relativePath)

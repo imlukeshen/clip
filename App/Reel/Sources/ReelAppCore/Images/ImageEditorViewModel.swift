@@ -147,7 +147,10 @@ public final class ImageEditorViewModel {
         case .highlight:
             layer = .highlight(HighlightLayer(regions: [rect]))
         case .step:
-            let count = document.layers.count { if case .step = $0 { return true }; return false }
+            let count = document.layers.count {
+                if case .step = $0 { return true }
+                return false
+            }
             layer = .step(StepLayer(number: count + 1, position: end))
         case .redact:
             layer = .redaction(RedactionLayer(regions: [rect], style: .pixelate(size: 12)))
@@ -157,7 +160,9 @@ public final class ImageEditorViewModel {
             return
         }
         do {
-            try perform(.addLayer(layer, atIndex: document.layers.count), actionName: "Add \(layer.kindName)")
+            try perform(
+                .addLayer(layer, atIndex: document.layers.count),
+                actionName: "Add \(layer.kindName)")
             selectedLayerID = layer.id
         } catch {
             notice = "The layer could not be added."
@@ -261,7 +266,8 @@ public final class ImageEditorViewModel {
                 if !result.suggestions.isEmpty { redactionSuggestions = result.suggestions }
                 if let value = result.value { altText = value }
                 if !result.patches.isEmpty {
-                    try perform(result.patches, actionName: CommandRegistry.command(named: id)?.title ?? id)
+                    try perform(
+                        result.patches, actionName: CommandRegistry.command(named: id)?.title ?? id)
                 }
                 notice = result.message
             } catch {

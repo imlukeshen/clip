@@ -34,7 +34,8 @@ private struct TemporaryTrashManager: FileTrashManaging {
     try FileManager.default.createDirectory(at: assetDirectory, withIntermediateDirectories: true)
     let media = assetDirectory.appendingPathComponent("asset-trash.mov")
     let event = assetDirectory.appendingPathComponent("asset-trash.events.json")
-    let thumbnail = LibraryLayout.thumbnails(in: root).appendingPathComponent("asset-trash.thumb.heic")
+    let thumbnail = LibraryLayout.thumbnails(in: root).appendingPathComponent(
+        "asset-trash.thumb.heic")
     let peaks = LibraryLayout.peaks(in: root).appendingPathComponent("asset-trash.peaks.bin")
     try FileManager.default.createDirectory(
         at: LibraryLayout.thumbnails(in: root),

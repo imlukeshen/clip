@@ -103,7 +103,8 @@ public struct AssistantTurnRunner: Sendable {
             }
         }
         let patches = results.compactMap(\.patch)
-        let combinedPatch: GraphPatch? = patches.isEmpty
+        let combinedPatch: GraphPatch? =
+            patches.isEmpty
             ? nil
             : GraphPatch(
                 ops: patches.flatMap(\.ops),

@@ -34,6 +34,23 @@ Implemented milestones:
 - **M9 — Distribution:** hardened Developer ID and sandboxed App Store channels,
   notarized DMG and App Store Connect release automation, acknowledgements, and
   CI distribution/licence gates.
+- **Phase 2 editing:** Finder-safe trash and restore, a shared command registry,
+  multi-track precision editing, snapping, transitions, fades, and general
+  keyframes.
+- **Phase 2 workspaces:** nested folders and export destinations, a non-destructive
+  photo editor with local redaction tools, and a PDFium editor with page edits,
+  flattened export, font/subset analysis, local OCR, and layout-aware Markdown.
+
+## Run the app
+
+Build and launch a local Debug copy with:
+
+```bash
+make run
+```
+
+Reel opens a library picker on first launch. Choose a writable folder; Reel
+creates its managed `Media`, `Projects`, `Exports`, and `.reel` structure there.
 
 ## Test
 
@@ -50,6 +67,9 @@ Generate and build the native app with:
 ```bash
 make build
 ```
+
+Run the strict formatter gate with `make lint` and validate both distribution
+channels with `make distribution-check`.
 
 The checked-in FFmpeg framework targets Apple Silicon. Rebuild it from pinned,
 checksum-verified sources with `make ffmpeg`; validate its LGPL-only

@@ -110,7 +110,8 @@ public actor IngestPipeline {
         let folder = try inboxFolder()
         let fileExtension = url.pathExtension.lowercased()
         let isAlreadyInInbox = url.deletingLastPathComponent().standardizedFileURL == folder
-        let destination = isAlreadyInInbox
+        let destination =
+            isAlreadyInInbox
             ? url
             : uniqueDestination(for: url.lastPathComponent, in: folder)
         if !isAlreadyInInbox {
@@ -224,7 +225,8 @@ public actor IngestPipeline {
         let pathExtension = proposed.pathExtension
         var suffix = 2
         while true {
-            let name = pathExtension.isEmpty
+            let name =
+                pathExtension.isEmpty
                 ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(pathExtension)"
             let candidate = folder.appendingPathComponent(name)
             if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
@@ -273,8 +275,10 @@ public actor IngestPipeline {
         derivatives: DerivativePaths,
         removeDestination: Bool
     ) {
-        let urls = [removeDestination ? destination : nil, derivatives.thumbnail, derivatives.peaks]
-            .compactMap { $0 }
+        let urls = [
+            removeDestination ? destination : nil, derivatives.thumbnail, derivatives.peaks,
+        ]
+        .compactMap { $0 }
         for url in urls {
             do {
                 if FileManager.default.fileExists(atPath: url.path) {

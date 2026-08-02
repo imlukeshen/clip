@@ -223,7 +223,8 @@ public actor LibraryStore {
                 let boundary = assetsURL.path + "/"
                 let resolved = bookmarked.standardizedFileURL
                 if resolved.path.hasPrefix(boundary),
-                    resolved.path != root.appendingPathComponent(record.relativePath).standardizedFileURL.path
+                    resolved.path
+                        != root.appendingPathComponent(record.relativePath).standardizedFileURL.path
                 {
                     record.relativePath = relativePath(resolved)
                     record.displayName = resolved.lastPathComponent
@@ -653,7 +654,8 @@ extension LibraryStore {
             LibraryLayout.peaks(in: root),
             LibraryLayout.imageDocuments(in: root),
         ] {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
         }
     }
 

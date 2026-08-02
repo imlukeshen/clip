@@ -136,7 +136,8 @@ struct AssetGrid: View {
     private var assetIDs: [AssetID] { assets.map(\.id) }
 
     private func dragValue(for asset: AssetRecord) -> String {
-        let ids = model.selection.selected.contains(asset.id)
+        let ids =
+            model.selection.selected.contains(asset.id)
             ? model.selection.selected : Set([asset.id])
         return "assets:" + ids.map(\.rawValue).sorted().joined(separator: ",")
     }
@@ -265,8 +266,11 @@ private struct AssetList: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text(asset.kind.rawValue.capitalized).frame(width: 90, alignment: .leading)
                         Text(duration(asset)).frame(width: 80, alignment: .trailing)
-                        Text(ByteCountFormatter.string(fromByteCount: asset.byteSize, countStyle: .file))
-                            .frame(width: 90, alignment: .trailing)
+                        Text(
+                            ByteCountFormatter.string(
+                                fromByteCount: asset.byteSize, countStyle: .file)
+                        )
+                        .frame(width: 90, alignment: .trailing)
                         Text(asset.createdAt.formatted(date: .abbreviated, time: .omitted))
                             .frame(width: 120, alignment: .trailing)
                     }
@@ -282,10 +286,10 @@ private struct AssetList: View {
                 .buttonStyle(.plain)
                 .opacity(asset.isMissing ? 0.45 : 1)
                 .draggable(
-                    "assets:" + (
-                        model.selection.selected.contains(asset.id)
-                            ? model.selection.selected : Set([asset.id])
-                    ).map(\.rawValue).sorted().joined(separator: ",")
+                    "assets:"
+                        + (model.selection.selected.contains(asset.id)
+                        ? model.selection.selected : Set([asset.id])).map(\.rawValue).sorted()
+                        .joined(separator: ",")
                 )
                 .contextMenu {
                     if asset.isMissing {
@@ -293,11 +297,15 @@ private struct AssetList: View {
                         Divider()
                     }
                     Button("Reveal in Finder") {
-                        if !model.selection.selected.contains(asset.id) { model.selectAsset(asset.id) }
+                        if !model.selection.selected.contains(asset.id) {
+                            model.selectAsset(asset.id)
+                        }
                         model.revealSelectionInFinder()
                     }
                     Button("Move to Trash", role: .destructive) {
-                        if !model.selection.selected.contains(asset.id) { model.selectAsset(asset.id) }
+                        if !model.selection.selected.contains(asset.id) {
+                            model.selectAsset(asset.id)
+                        }
                         AppCommandRouter.run("asset.delete", in: model)
                     }
                 }

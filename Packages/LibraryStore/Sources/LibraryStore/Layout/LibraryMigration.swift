@@ -56,8 +56,9 @@ public enum LibraryMigration {
         let root = root.standardizedFileURL
         let legacyDatabase = root.appendingPathComponent("Library.sqlite")
         let legacyAssets = root.appendingPathComponent("Assets", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: legacyDatabase.path)
-            || FileManager.default.fileExists(atPath: legacyAssets.path)
+        guard
+            FileManager.default.fileExists(atPath: legacyDatabase.path)
+                || FileManager.default.fileExists(atPath: legacyAssets.path)
         else { return nil }
         guard !FileManager.default.fileExists(atPath: LibraryLayout.database(in: root).path) else {
             return nil
@@ -78,12 +79,14 @@ public enum LibraryMigration {
             var migrated = original
             migrated.relativePath = destinationMedia
 
-            moves.append(.init(sourceRelativePath: sourceMedia, destinationRelativePath: destinationMedia))
+            moves.append(
+                .init(sourceRelativePath: sourceMedia, destinationRelativePath: destinationMedia))
 
             if let event = original.eventTrackPath,
                 FileManager.default.fileExists(atPath: root.appendingPathComponent(event).path)
             {
-                let destination = "Media/Inbox/\((filename as NSString).deletingPathExtension).events.json"
+                let destination =
+                    "Media/Inbox/\((filename as NSString).deletingPathExtension).events.json"
                 migrated.eventTrackPath = destination
                 moves.append(.init(sourceRelativePath: event, destinationRelativePath: destination))
             }
@@ -92,7 +95,8 @@ public enum LibraryMigration {
             {
                 let destination = ".reel/thumbs/\(original.id.rawValue).thumb.heic"
                 migrated.thumbnailPath = destination
-                moves.append(.init(sourceRelativePath: thumbnail, destinationRelativePath: destination))
+                moves.append(
+                    .init(sourceRelativePath: thumbnail, destinationRelativePath: destination))
             }
             if let peaks = original.peaksPath,
                 FileManager.default.fileExists(atPath: root.appendingPathComponent(peaks).path)
@@ -102,7 +106,8 @@ public enum LibraryMigration {
                 moves.append(.init(sourceRelativePath: peaks, destinationRelativePath: destination))
             }
 
-            let legacyMetadata = sourceURL.deletingPathExtension().appendingPathExtension("asset.json")
+            let legacyMetadata = sourceURL.deletingPathExtension().appendingPathExtension(
+                "asset.json")
             if FileManager.default.fileExists(atPath: legacyMetadata.path) {
                 moves.append(
                     .init(
@@ -152,7 +157,8 @@ public enum LibraryMigration {
                     options: .atomic
                 )
             }
-            try updateDatabase(at: LibraryLayout.database(in: root), records: plan.records.map(\.migrated))
+            try updateDatabase(
+                at: LibraryLayout.database(in: root), records: plan.records.map(\.migrated))
             let manifest = LibraryMigrationManifest(executedAt: .now, plan: plan)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -216,11 +222,13 @@ public enum LibraryMigration {
     }
 
     private static func legacyRecords(at assets: URL) throws -> [AssetRecord] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: assets,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: assets,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        else { return [] }
         return try enumerator.compactMap { value in
             guard let url = value as? URL, url.lastPathComponent.hasSuffix(".asset.json") else {
                 return nil
@@ -254,7 +262,8 @@ public enum LibraryMigration {
 
     private static func validFilename(_ requested: String, fallback: String) -> String {
         let value = requested.trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = value.isEmpty || value.contains("/") || value == "." || value == ".."
+        let candidate =
+            value.isEmpty || value.contains("/") || value == "." || value == ".."
             ? fallback : value
         let requestedExtension = (candidate as NSString).pathExtension
         let fallbackExtension = (fallback as NSString).pathExtension
@@ -282,7 +291,8 @@ public enum LibraryMigration {
             LibraryLayout.inbox(in: root), LibraryLayout.metadata(in: root),
             LibraryLayout.thumbnails(in: root), LibraryLayout.peaks(in: root),
         ] {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
         }
     }
 
@@ -303,7 +313,8 @@ public enum LibraryMigration {
 
     private static func removeIfEmpty(_ url: URL) {
         guard let values = try? FileManager.default.contentsOfDirectory(atPath: url.path),
-            values.isEmpty else { return }
+            values.isEmpty
+        else { return }
         try? FileManager.default.removeItem(at: url)
     }
 }

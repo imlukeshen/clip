@@ -10,6 +10,12 @@ import Testing
         "reel-image-editor-\(UUID().uuidString).png"
     )
     defer { try? FileManager.default.removeItem(at: source) }
+    let tinyPNG = try #require(
+        Data(
+            base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    )
     try tinyPNG.write(to: source)
     let original = try ImageDocument(
         id: DocumentID(rawValue: "editor-test"),
@@ -41,7 +47,3 @@ import Testing
     #expect(editor.document.geometry.crop != original.geometry.crop)
     editor.stop()
 }
-
-private let tinyPNG = Data(base64Encoded:
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-)!

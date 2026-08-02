@@ -64,10 +64,12 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         sourceURL: URL,
         pixelSize: CGSize? = nil
     ) throws -> CGImage {
-        guard let source = CIImage(
-            contentsOf: sourceURL,
-            options: [.applyOrientationProperty: true]
-        ) else { throw ImageRenderError.unreadableSource }
+        guard
+            let source = CIImage(
+                contentsOf: sourceURL,
+                options: [.applyOrientationProperty: true]
+            )
+        else { throw ImageRenderError.unreadableSource }
         return try render(document, source: source, pixelSize: pixelSize)
     }
 
@@ -101,12 +103,14 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         format: ImageExportFormat
     ) throws {
         let image = try renderForExport(document, sourceURL: sourceURL)
-        guard let destination = CGImageDestinationCreateWithURL(
-            destinationURL as CFURL,
-            format.typeIdentifier as CFString,
-            1,
-            nil
-        ) else { throw ImageRenderError.exportFailed }
+        guard
+            let destination = CGImageDestinationCreateWithURL(
+                destinationURL as CFURL,
+                format.typeIdentifier as CFString,
+                1,
+                nil
+            )
+        else { throw ImageRenderError.exportFailed }
         CGImageDestinationAddImageAndMetadata(destination, image, nil, format.properties)
         guard CGImageDestinationFinalize(destination) else {
             throw ImageRenderError.exportFailed
@@ -165,12 +169,14 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             }
         }
 
-        guard let rendered = context.createCGImage(
-            image.cropped(to: bounds),
-            from: bounds,
-            format: .RGBA8,
-            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
-        ) else { throw ImageRenderError.renderFailed }
+        guard
+            let rendered = context.createCGImage(
+                image.cropped(to: bounds),
+                from: bounds,
+                format: .RGBA8,
+                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+            )
+        else { throw ImageRenderError.renderFailed }
         return rendered
     }
 
@@ -194,10 +200,12 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         let width = image.extent.width
         let height = image.extent.height
         if geometry.isFlippedHorizontally {
-            image = image.transformed(by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: width, ty: 0))
+            image = image.transformed(
+                by: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: width, ty: 0))
         }
         if geometry.isFlippedVertically {
-            image = image.transformed(by: CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: height))
+            image = image.transformed(
+                by: CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: height))
         }
         let orientationDegrees: Double
         switch orientation {
@@ -220,7 +228,8 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
                 )
             )
         }
-        let fit = min(bounds.width / image.extent.width, bounds.height / image.extent.height)
+        let fit =
+            min(bounds.width / image.extent.width, bounds.height / image.extent.height)
             * geometry.scale
         image = image.transformed(by: CGAffineTransform(scaleX: fit, y: fit))
         return image.transformed(
@@ -251,14 +260,18 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
                 if layer.fillColor != nil { context.fillEllipse(in: rect) }
                 context.strokeEllipse(in: rect)
             case .line, .arrow:
-                let start = layer.points.first?.renderPoint(in: bounds)
+                let start =
+                    layer.points.first?.renderPoint(in: bounds)
                     ?? CGPoint(x: rect.minX, y: rect.minY)
-                let end = layer.points.last?.renderPoint(in: bounds)
+                let end =
+                    layer.points.last?.renderPoint(in: bounds)
                     ?? CGPoint(x: rect.maxX, y: rect.maxY)
                 context.move(to: start)
                 context.addLine(to: end)
                 context.strokePath()
-                if layer.kind == .arrow { drawArrowhead(context, from: start, to: end, width: layer.strokeWidth) }
+                if layer.kind == .arrow {
+                    drawArrowhead(context, from: start, to: end, width: layer.strokeWidth)
+                }
             case .freehand:
                 guard let first = layer.points.first else { return }
                 context.move(to: first.renderPoint(in: bounds))
@@ -270,7 +283,8 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         }.composited(over: image)
     }
 
-    private func overlay(_ layer: TextLayer, over image: CIImage, bounds: CGRect) throws -> CIImage {
+    private func overlay(_ layer: TextLayer, over image: CIImage, bounds: CGRect) throws -> CIImage
+    {
         try vectorOverlay(bounds: bounds) { context in
             let frame = layer.frame.renderRect(in: bounds)
             let font = CTFontCreateWithName(layer.fontName as CFString, layer.fontSize, nil)
@@ -302,7 +316,8 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         }
     }
 
-    private func overlay(_ layer: StepLayer, over image: CIImage, bounds: CGRect) throws -> CIImage {
+    private func overlay(_ layer: StepLayer, over image: CIImage, bounds: CGRect) throws -> CIImage
+    {
         try vectorOverlay(bounds: bounds) { context in
             let center = layer.position.renderPoint(in: bounds)
             let rect = CGRect(
@@ -313,12 +328,14 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             )
             context.setFillColor(layer.fillColor.cgColor)
             context.fillEllipse(in: rect)
-            let font = CTFontCreateWithName("SF Pro Rounded Semibold" as CFString, layer.diameter * 0.52, nil)
+            let font = CTFontCreateWithName(
+                "SF Pro Rounded Semibold" as CFString, layer.diameter * 0.52, nil)
             let attributed = NSAttributedString(
                 string: String(layer.number),
                 attributes: [
                     kCTFontAttributeName as NSAttributedString.Key: font,
-                    kCTForegroundColorAttributeName as NSAttributedString.Key: layer.textColor.cgColor,
+                    kCTForegroundColorAttributeName as NSAttributedString.Key: layer.textColor
+                        .cgColor,
                 ]
             )
             let line = CTLineCreateWithAttributedString(attributed)
@@ -442,13 +459,14 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             ).cropped(to: bounds).transformed(
                 by: CGAffineTransform(translationX: shadow.offset.x, y: -shadow.offset.y)
             )
-            let shadowImage = CIImage(color: shadow.color.ciColor).cropped(to: bounds).applyingFilter(
-                "CIBlendWithMask",
-                parameters: [
-                    kCIInputBackgroundImageKey: transparent,
-                    kCIInputMaskImageKey: shadowMask,
-                ]
-            )
+            let shadowImage = CIImage(color: shadow.color.ciColor).cropped(to: bounds)
+                .applyingFilter(
+                    "CIBlendWithMask",
+                    parameters: [
+                        kCIInputBackgroundImageKey: transparent,
+                        kCIInputMaskImageKey: shadowMask,
+                    ]
+                )
             underlay = shadowImage.composited(over: background)
         }
         return clipped.composited(over: underlay)
@@ -471,15 +489,17 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
     ) throws -> CIImage {
         let width = Int(bounds.width)
         let height = Int(bounds.height)
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { throw ImageRenderError.renderFailed }
+        guard
+            let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else { throw ImageRenderError.renderFailed }
         draw(context)
         guard let image = context.makeImage() else { throw ImageRenderError.renderFailed }
         return CIImage(cgImage: image)

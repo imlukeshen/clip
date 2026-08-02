@@ -17,11 +17,27 @@ import Testing
                 bounds: CGRect(x: 0.08, y: 0.15, width: 0.27, height: 0.15)
             )
         ),
-        .text(TextLayer(id: LayerID(rawValue: "text"), text: "Reel", frame: CGRect(x: 0.5, y: 0.08, width: 0.4, height: 0.2), fontSize: 12)),
-        .highlight(HighlightLayer(id: LayerID(rawValue: "highlight"), regions: [CGRect(x: 0.05, y: 0.55, width: 0.2, height: 0.18)])),
-        .redaction(RedactionLayer(id: LayerID(rawValue: "redaction"), regions: [CGRect(x: 0.3, y: 0.55, width: 0.2, height: 0.2)], style: .pixelate(size: 4))),
-        .blur(BlurLayer(id: LayerID(rawValue: "blur"), regions: [CGRect(x: 0.55, y: 0.55, width: 0.18, height: 0.2)], radius: 3)),
-        .step(StepLayer(id: LayerID(rawValue: "step"), number: 1, position: CGPoint(x: 0.86, y: 0.68), diameter: 18)),
+        .text(
+            TextLayer(
+                id: LayerID(rawValue: "text"), text: "Reel",
+                frame: CGRect(x: 0.5, y: 0.08, width: 0.4, height: 0.2), fontSize: 12)),
+        .highlight(
+            HighlightLayer(
+                id: LayerID(rawValue: "highlight"),
+                regions: [CGRect(x: 0.05, y: 0.55, width: 0.2, height: 0.18)])),
+        .redaction(
+            RedactionLayer(
+                id: LayerID(rawValue: "redaction"),
+                regions: [CGRect(x: 0.3, y: 0.55, width: 0.2, height: 0.2)],
+                style: .pixelate(size: 4))),
+        .blur(
+            BlurLayer(
+                id: LayerID(rawValue: "blur"),
+                regions: [CGRect(x: 0.55, y: 0.55, width: 0.18, height: 0.2)], radius: 3)),
+        .step(
+            StepLayer(
+                id: LayerID(rawValue: "step"), number: 1, position: CGPoint(x: 0.86, y: 0.68),
+                diameter: 18)),
     ]
     let document = try ImageDocument(
         sourceAssetID: AssetID(rawValue: "source"),

@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate build test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
+.PHONY: bootstrap generate build run test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
@@ -9,6 +9,10 @@ generate:
 build: generate
 	xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Debug CODE_SIGNING_ALLOWED=NO build
 	xcodebuild -project Reel.xcodeproj -scheme Reel-AppStore -configuration AppStoreDebug CODE_SIGNING_ALLOWED=NO build
+
+run: generate
+	xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
+	open -n DerivedData/Build/Products/Debug/Reel.app
 
 test: test-packages deps shortcuts licence-audit
 

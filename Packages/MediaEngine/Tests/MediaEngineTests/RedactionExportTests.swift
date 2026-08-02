@@ -112,12 +112,14 @@ private func checkerboard(width: Int, height: Int) throws -> CGImage {
 }
 
 private func writeSourceWithSensitiveMetadata(_ image: CGImage, to url: URL) throws {
-    guard let destination = CGImageDestinationCreateWithURL(
-        url as CFURL,
-        UTType.jpeg.identifier as CFString,
-        1,
-        nil
-    ) else { throw ImageRenderError.exportFailed }
+    guard
+        let destination = CGImageDestinationCreateWithURL(
+            url as CFURL,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        )
+    else { throw ImageRenderError.exportFailed }
     let properties: [CFString: Any] = [
         kCGImagePropertyExifDictionary: [
             kCGImagePropertyExifUserComment: "unredacted-secret"

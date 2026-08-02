@@ -60,8 +60,10 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         self.kind = kind
         self.container = container
         self.codec = codec
-        self.createdAt = createdAt
-        self.importedAt = importedAt
+        // SQLite stores these as Unix-epoch doubles. Canonicalize at the model
+        // boundary so a write/read cycle preserves exact value identity.
+        self.createdAt = Self.databaseDate(createdAt)
+        self.importedAt = Self.databaseDate(importedAt)
         self.byteSize = byteSize
         self.contentHash = contentHash
         self.width = width
@@ -76,6 +78,10 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         self.thumbnailPath = thumbnailPath
         self.peaksPath = peaksPath
         self.ingestState = ingestState
-        self.missingSince = missingSince
+        self.missingSince = missingSince.map(Self.databaseDate)
+    }
+
+    private static func databaseDate(_ value: Date) -> Date {
+        Date(timeIntervalSince1970: value.timeIntervalSince1970)
     }
 }

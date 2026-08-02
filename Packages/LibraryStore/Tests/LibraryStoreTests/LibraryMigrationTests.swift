@@ -100,13 +100,16 @@ import Testing
 }
 
 private func relativeFilesystemSnapshot(_ root: URL) throws -> Set<String> {
-    guard let enumerator = FileManager.default.enumerator(
-        at: root,
-        includingPropertiesForKeys: [.isDirectoryKey],
-        options: []
-    ) else { return [] }
-    return Set(enumerator.compactMap { value in
-        guard let url = value as? URL else { return nil }
-        return String(url.path.dropFirst(root.path.count + 1))
-    })
+    guard
+        let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: []
+        )
+    else { return [] }
+    return Set(
+        enumerator.compactMap { value in
+            guard let url = value as? URL else { return nil }
+            return String(url.path.dropFirst(root.path.count + 1))
+        })
 }

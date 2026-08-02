@@ -204,7 +204,8 @@ private struct ImageCanvasView: View {
     }
 
     private func fittedRect(imageSize: CGSize, in container: CGSize) -> CGRect {
-        let scale = min(container.width / imageSize.width, container.height / imageSize.height) * 0.9
+        let scale =
+            min(container.width / imageSize.width, container.height / imageSize.height) * 0.9
         let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         return CGRect(
             x: (container.width - size.width) / 2,

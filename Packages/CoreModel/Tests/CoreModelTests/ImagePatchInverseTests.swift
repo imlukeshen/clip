@@ -96,7 +96,8 @@ private func randomLayer(id: String, random: inout ImageRandom) -> Layer {
     case 0: return .annotation(AnnotationLayer(id: layerID, kind: .arrow, bounds: rect))
     case 1: return .text(TextLayer(id: layerID, text: "Note", frame: rect))
     case 2: return .highlight(HighlightLayer(id: layerID, regions: [rect]))
-    case 3: return .redaction(RedactionLayer(id: layerID, regions: [rect], style: .pixelate(size: 12)))
+    case 3:
+        return .redaction(RedactionLayer(id: layerID, regions: [rect], style: .pixelate(size: 12)))
     case 4: return .blur(BlurLayer(id: layerID, regions: [rect]))
     case 5: return .padding(PaddingLayer(id: layerID, amount: 0.1))
     default: return .step(StepLayer(id: layerID, number: 1, position: CGPoint(x: 0.3, y: 0.4)))
