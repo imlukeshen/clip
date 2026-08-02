@@ -19,7 +19,7 @@ import Testing
         #expect(try await store.assets(kind: nil, limit: 100, offset: 0).count == 50)
     }
 
-    try FileManager.default.removeItem(at: root.appendingPathComponent("Library.sqlite"))
+    try FileManager.default.removeItem(at: LibraryLayout.database(in: root))
 
     let rebuilt = try await LibraryStore(root: root, bookmarks: bookmarks)
     try await rebuilt.rebuildIndex { _ in }
@@ -52,14 +52,14 @@ import Testing
 
 private func syntheticAsset(index: Int, root: URL) throws -> AssetRecord {
     let id = AssetID(rawValue: String(format: "asset-%03d", index))
-    let folder = root.appendingPathComponent("Assets/2026-08-01", isDirectory: true)
+    let folder = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let mediaURL = folder.appendingPathComponent("\(id.rawValue).mov")
     try Data("asset-\(index)".utf8).write(to: mediaURL)
     let createdAt = Date(timeIntervalSince1970: 1_700_000_000 + Double(index))
     return AssetRecord(
         id: id,
-        relativePath: "Assets/2026-08-01/\(id.rawValue).mov",
+        relativePath: "Media/Inbox/\(id.rawValue).mov",
         displayName: "Recording \(index).mov",
         kind: .video,
         container: "mov",
@@ -76,10 +76,10 @@ private func syntheticAsset(index: Int, root: URL) throws -> AssetRecord {
         hasAudio: true,
         preferredTransform: .object(["a": .number(1), "d": .number(1)]),
         eventTrackPath: index.isMultiple(of: 2)
-            ? "Assets/2026-08-01/\(id.rawValue).events.json" : nil,
+            ? "Media/Inbox/\(id.rawValue).events.json" : nil,
         eventAlignment: index.isMultiple(of: 2) ? .exact : nil,
-        thumbnailPath: "Assets/2026-08-01/\(id.rawValue).thumb.heic",
-        peaksPath: "Assets/2026-08-01/\(id.rawValue).peaks.bin",
+        thumbnailPath: ".reel/thumbs/\(id.rawValue).thumb.heic",
+        peaksPath: ".reel/peaks/\(id.rawValue).peaks.bin",
         ingestState: .ready
     )
 }

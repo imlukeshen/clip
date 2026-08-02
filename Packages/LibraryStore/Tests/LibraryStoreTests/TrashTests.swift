@@ -30,18 +30,26 @@ private struct TemporaryTrashManager: FileTrashManaging {
     )
 
     let id = AssetID(rawValue: "asset-trash")
-    let assetDirectory = root.appendingPathComponent("Assets/2026-08-02", isDirectory: true)
+    let assetDirectory = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: assetDirectory, withIntermediateDirectories: true)
     let media = assetDirectory.appendingPathComponent("asset-trash.mov")
     let event = assetDirectory.appendingPathComponent("asset-trash.events.json")
-    let thumbnail = assetDirectory.appendingPathComponent("asset-trash.thumb.heic")
-    let peaks = assetDirectory.appendingPathComponent("asset-trash.peaks.bin")
+    let thumbnail = LibraryLayout.thumbnails(in: root).appendingPathComponent("asset-trash.thumb.heic")
+    let peaks = LibraryLayout.peaks(in: root).appendingPathComponent("asset-trash.peaks.bin")
+    try FileManager.default.createDirectory(
+        at: LibraryLayout.thumbnails(in: root),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: LibraryLayout.peaks(in: root),
+        withIntermediateDirectories: true
+    )
     for url in [media, event, thumbnail, peaks] {
         try Data(url.lastPathComponent.utf8).write(to: url)
     }
     let record = AssetRecord(
         id: id,
-        relativePath: "Assets/2026-08-02/asset-trash.mov",
+        relativePath: "Media/Inbox/asset-trash.mov",
         displayName: "Demo.mov",
         kind: .video,
         createdAt: .now,
@@ -49,9 +57,9 @@ private struct TemporaryTrashManager: FileTrashManaging {
         byteSize: 10,
         contentHash: "trash-hash",
         duration: RationalTime(seconds: 2),
-        eventTrackPath: "Assets/2026-08-02/asset-trash.events.json",
-        thumbnailPath: "Assets/2026-08-02/asset-trash.thumb.heic",
-        peaksPath: "Assets/2026-08-02/asset-trash.peaks.bin",
+        eventTrackPath: "Media/Inbox/asset-trash.events.json",
+        thumbnailPath: ".reel/thumbs/asset-trash.thumb.heic",
+        peaksPath: ".reel/peaks/asset-trash.peaks.bin",
         ingestState: .ready
     )
     try await store.insert(record)

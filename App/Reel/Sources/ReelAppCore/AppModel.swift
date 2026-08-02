@@ -23,6 +23,8 @@ public final class AppModel {
     public let selection = SelectionModel()
     public let undoManager = UndoManager()
     public private(set) var pendingTrashConfirmation: TrashConfirmation?
+    public private(set) var pendingMigrationPlan: LibraryMigrationPlan?
+    public private(set) var canRevertMigration = false
     public var assistantDraft = ""
     public private(set) var assistantMessages: [AssistantMessage] = []
     public private(set) var pendingAssistantActions: [PendingAssistantAction] = []
@@ -104,11 +106,55 @@ public final class AppModel {
             }
             try await runtime.start()
             isWatching = true
+            canRevertMigration = LibraryMigration.canRevert(at: libraryRoot)
             clickTrackingState = await runtime.clickTrackingState()
             await refreshAssets()
+        } catch AppRuntimeError.migrationRequired(let plan) {
+            isWatching = false
+            pendingMigrationPlan = plan
         } catch {
             isWatching = false
             lastMessage = "The library could not be opened. Check the folder and try again."
+        }
+    }
+
+    public func confirmMigration() {
+        guard let plan = pendingMigrationPlan else { return }
+        pendingMigrationPlan = nil
+        Task {
+            do {
+                try await AppRuntime.migrate(plan, at: libraryRoot)
+                hasStarted = false
+                await start()
+                lastMessage = "Library upgraded. Revert remains available for 30 days."
+            } catch {
+                pendingMigrationPlan = plan
+                lastMessage = "The library upgrade could not be completed; no files were changed."
+            }
+        }
+    }
+
+    public func deferMigration() {
+        pendingMigrationPlan = nil
+        lastMessage = "The library was left unchanged. Reopen Reel when you're ready to upgrade."
+    }
+
+    public func revertLibraryMigration() {
+        guard canRevertMigration else { return }
+        Task {
+            let activeRuntime = runtime
+            runtime = nil
+            await activeRuntime?.stop()
+            do {
+                try await AppRuntime.revertMigration(at: libraryRoot)
+                canRevertMigration = false
+                assets = []
+                isWatching = false
+                lastMessage = "Migration reverted. Quit Reel before opening this library with v1."
+            } catch {
+                runtime = activeRuntime
+                lastMessage = "The migration could not be reverted."
+            }
         }
     }
 

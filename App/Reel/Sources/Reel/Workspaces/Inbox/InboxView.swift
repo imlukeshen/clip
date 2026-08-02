@@ -1,4 +1,5 @@
 import DesignSystem
+import LibraryStore
 import ReelAppCore
 import SwiftUI
 
@@ -33,7 +34,7 @@ private struct WatcherStatusStrip: View {
         StatusStrip {
             StatusItem(
                 model.isWatching ? "Watching" : "Opening library",
-                detail: model.libraryRoot.appendingPathComponent("Inbox").path(
+                detail: LibraryLayout.inbox(in: model.libraryRoot).path(
                     percentEncoded: false),
                 state: model.isWatching ? .ok : .pending
             )

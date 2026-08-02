@@ -107,26 +107,34 @@ public actor IngestPipeline {
         continuation.yield(.progress(url, 0.6))
 
         let assetID = AssetID.generate()
-        let folder = try assetFolder(for: Date())
+        let folder = try inboxFolder()
         let fileExtension = url.pathExtension.lowercased()
-        let destination = folder.appendingPathComponent(
-            "\(assetID.rawValue).\(fileExtension)"
-        )
-        do {
-            try FileManager.default.copyItem(at: url, to: destination)
-        } catch {
-            throw IngestError.unreadable(url, underlying: "file could not be imported")
+        let isAlreadyInInbox = url.deletingLastPathComponent().standardizedFileURL == folder
+        let destination = isAlreadyInInbox
+            ? url
+            : uniqueDestination(for: url.lastPathComponent, in: folder)
+        if !isAlreadyInInbox {
+            do {
+                try FileManager.default.copyItem(at: url, to: destination)
+            } catch {
+                throw IngestError.unreadable(url, underlying: "file could not be imported")
+            }
         }
         continuation.yield(.progress(url, 0.72))
 
         let generated: DerivativePaths
         do {
-            generated = try await derivatives.generate(
+            let staging = LibraryLayout.internalDirectory(in: libraryRoot)
+                .appendingPathComponent("staging/\(assetID.rawValue)", isDirectory: true)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let staged = try await derivatives.generate(
                 for: destination,
                 assetID: assetID,
-                destinationFolder: folder,
+                destinationFolder: staging,
                 probe: probed
             )
+            generated = try relocateDerivatives(staged, assetID: assetID)
+            try? FileManager.default.removeItem(at: staging)
         } catch {
             generated = .none
         }
@@ -161,11 +169,19 @@ public actor IngestPipeline {
         do {
             try await library.insert(record)
         } catch {
-            cleanupImportedFiles(destination: destination, derivatives: generated)
+            cleanupImportedFiles(
+                destination: destination,
+                derivatives: generated,
+                removeDestination: !isAlreadyInInbox
+            )
             throw error
         }
         guard let storedRecord = try await library.asset(id: record.id) else {
-            cleanupImportedFiles(destination: destination, derivatives: generated)
+            cleanupImportedFiles(
+                destination: destination,
+                derivatives: generated,
+                removeDestination: !isAlreadyInInbox
+            )
             throw IngestError.unreadable(
                 destination,
                 underlying: "imported asset was not indexed"
@@ -188,14 +204,8 @@ public actor IngestPipeline {
         }
     }
 
-    private func assetFolder(for date: Date) throws -> URL {
-        let dateName = date.formatted(
-            .iso8601.year().month().day().dateSeparator(.dash)
-        )
-        let folder = libraryRoot.appendingPathComponent(
-            "Assets/\(dateName)",
-            isDirectory: true
-        )
+    private func inboxFolder() throws -> URL {
+        let folder = LibraryLayout.inbox(in: libraryRoot)
         do {
             try FileManager.default.createDirectory(
                 at: folder,
@@ -205,6 +215,40 @@ public actor IngestPipeline {
         } catch {
             throw IngestError.unreadable(folder, underlying: "asset folder unavailable")
         }
+    }
+
+    private func uniqueDestination(for filename: String, in folder: URL) -> URL {
+        let proposed = folder.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: proposed.path) else { return proposed }
+        let stem = proposed.deletingPathExtension().lastPathComponent
+        let pathExtension = proposed.pathExtension
+        var suffix = 2
+        while true {
+            let name = pathExtension.isEmpty
+                ? "\(stem) \(suffix)" : "\(stem) \(suffix).\(pathExtension)"
+            let candidate = folder.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            suffix += 1
+        }
+    }
+
+    private func relocateDerivatives(
+        _ staged: DerivativePaths,
+        assetID: AssetID
+    ) throws -> DerivativePaths {
+        let thumbnail = try staged.thumbnail.map { source in
+            let destination = LibraryLayout.thumbnails(in: libraryRoot)
+                .appendingPathComponent("\(assetID.rawValue).thumb.heic")
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        let peaks = try staged.peaks.map { source in
+            let destination = LibraryLayout.peaks(in: libraryRoot)
+                .appendingPathComponent("\(assetID.rawValue).peaks.bin")
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        return DerivativePaths(thumbnail: thumbnail, peaks: peaks)
     }
 
     private func relativePath(_ url: URL) throws -> String {
@@ -224,8 +268,14 @@ public actor IngestPipeline {
         }
     }
 
-    private func cleanupImportedFiles(destination: URL, derivatives: DerivativePaths) {
-        for url in [destination, derivatives.thumbnail, derivatives.peaks].compactMap({ $0 }) {
+    private func cleanupImportedFiles(
+        destination: URL,
+        derivatives: DerivativePaths,
+        removeDestination: Bool
+    ) {
+        let urls = [removeDestination ? destination : nil, derivatives.thumbnail, derivatives.peaks]
+            .compactMap { $0 }
+        for url in urls {
             do {
                 if FileManager.default.fileExists(atPath: url.path) {
                     try FileManager.default.removeItem(at: url)

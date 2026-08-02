@@ -31,6 +31,11 @@ private struct SettingsContent: View {
                     .font(theme.type.numeric.font)
                     .textSelection(.enabled)
             }
+            if model.canRevertMigration {
+                Button("Revert library migration…", role: .destructive) {
+                    model.revertLibraryMigration()
+                }
+            }
             Section("Assistant") {
                 Picker("Provider", selection: providerBinding) {
                     Text("Local / compatible").tag(ProviderID.openAICompatible)

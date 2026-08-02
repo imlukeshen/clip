@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import DesignSystem
+import LibraryStore
 import ReelAppCore
 import SwiftUI
 
@@ -24,6 +25,20 @@ struct MainWindow: View {
             } message: {
                 Text(trashWarning)
             }
+            .sheet(item: migrationBinding) { plan in
+                MigrationPlanView(
+                    plan: plan,
+                    confirm: model.confirmMigration,
+                    cancel: model.deferMigration
+                )
+            }
+    }
+
+    private var migrationBinding: Binding<LibraryMigrationPlan?> {
+        Binding(
+            get: { model.pendingMigrationPlan },
+            set: { if $0 == nil { model.deferMigration() } }
+        )
     }
 
     private var trashWarning: String {
@@ -41,6 +56,48 @@ struct MainWindow: View {
             ) {
                 _ in model.refreshSystemAccess()
             }
+    }
+}
+
+private struct MigrationPlanView: View {
+    let plan: LibraryMigrationPlan
+    let confirm: () -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Upgrade your Reel library")
+                .font(.title2.weight(.semibold))
+            Text(
+                "Reel will give \(plan.records.count) assets readable filenames, move them into Media/Inbox, and hide generated previews in .reel. Asset IDs and projects will not change."
+            )
+            List(plan.moves.prefix(40), id: \.sourceRelativePath) { move in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(move.sourceRelativePath).font(.caption.monospaced())
+                    Text("→ \(move.destinationRelativePath)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(minHeight: 260)
+            if plan.moves.count > 40 {
+                Text("Plus \(plan.moves.count - 40) more moves")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("You can revert this migration from Settings for 30 days.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Not now", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Upgrade Library", action: confirm)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 680, height: 520)
     }
 }
 

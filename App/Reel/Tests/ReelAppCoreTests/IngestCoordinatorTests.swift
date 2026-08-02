@@ -12,7 +12,7 @@ import Testing
         isDirectory: true
     )
     defer { try? FileManager.default.removeItem(at: root) }
-    let inboxURL = root.appendingPathComponent("Inbox", isDirectory: true)
+    let inboxURL = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
     let bookmarks = BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
     let library = try await LibraryStore(root: root, bookmarks: bookmarks)

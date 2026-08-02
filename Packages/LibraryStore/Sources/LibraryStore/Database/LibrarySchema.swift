@@ -69,6 +69,12 @@ enum LibrarySchema {
                     """
             )
         }
+        migrator.registerMigration("v2-library-layout") { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO meta (key, value) VALUES ('schemaVersion', ?)",
+                arguments: [LibraryLayout.schemaVersion]
+            )
+        }
         try migrator.migrate(database)
     }
 }

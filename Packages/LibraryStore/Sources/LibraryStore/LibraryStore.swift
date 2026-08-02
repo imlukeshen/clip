@@ -33,7 +33,7 @@ public actor LibraryStore {
         let queue: DatabaseQueue
         do {
             queue = try DatabaseQueue(
-                path: normalizedRoot.appendingPathComponent("Library.sqlite").path,
+                path: LibraryLayout.database(in: normalizedRoot).path,
                 configuration: configuration
             )
             try LibrarySchema.migrate(queue)
@@ -60,9 +60,6 @@ public actor LibraryStore {
         guard FileManager.default.fileExists(atPath: mediaURL.path) else {
             throw LibraryError.assetFileMissing(asset.relativePath)
         }
-        guard mediaURL.deletingPathExtension().lastPathComponent == asset.id.rawValue else {
-            throw LibraryError.invalidRelativePath(asset.relativePath)
-        }
         if try await self.asset(id: asset.id) != nil {
             throw LibraryError.duplicateAsset(asset.id)
         }
@@ -72,7 +69,7 @@ public actor LibraryStore {
 
         do {
             try MetadataCodec.encode(asset).write(
-                to: metadataURL(for: mediaURL),
+                to: metadataURL(for: asset.id),
                 options: .atomic
             )
             try FileManager.default.setAttributes(
@@ -155,7 +152,6 @@ public actor LibraryStore {
         guard var asset = try await asset(id: track.assetID) else {
             throw LibraryError.assetNotFound(track.assetID)
         }
-        let mediaURL = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
         let eventRelativePath = asset.relativePath.deletingPathExtension + ".events.json"
         let eventURL = try resolvedURL(forRelativePath: eventRelativePath, under: assetsURL)
         asset.eventTrackPath = eventRelativePath
@@ -165,7 +161,7 @@ public actor LibraryStore {
         do {
             try MetadataCodec.encode(track).write(to: eventURL, options: .atomic)
             try MetadataCodec.encode(asset).write(
-                to: metadataURL(for: mediaURL),
+                to: metadataURL(for: asset.id),
                 options: .atomic
             )
         } catch {
@@ -505,8 +501,8 @@ extension LibraryStore {
         let mediaURL = try resolvedURL(forRelativePath: record.relativePath, under: assetsURL)
         let sidecars = try [record.eventTrackPath, record.thumbnailPath, record.peaksPath]
             .compactMap { $0 }
-            .map { try resolvedURL(forRelativePath: $0, under: assetsURL) }
-        return [mediaURL, metadataURL(for: mediaURL)] + sidecars
+            .map { try resolvedURL(forRelativePath: $0, under: root) }
+        return [mediaURL, metadataURL(for: record.id)] + sidecars
     }
 
     private func referencingProjectIDs(for assetID: AssetID) async throws -> [ProjectID] {
@@ -543,16 +539,19 @@ extension LibraryStore {
     }
 
     private static func prepareLayout(at root: URL) throws {
-        for directory in ["Inbox", "Assets", "Projects", "Exports"] {
-            try FileManager.default.createDirectory(
-                at: root.appendingPathComponent(directory, isDirectory: true),
-                withIntermediateDirectories: true
-            )
+        for directory in [
+            LibraryLayout.inbox(in: root),
+            root.appendingPathComponent("Projects", isDirectory: true),
+            LibraryLayout.metadata(in: root),
+            LibraryLayout.thumbnails(in: root),
+            LibraryLayout.peaks(in: root),
+        ] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }
 
     private var assetsURL: URL {
-        root.appendingPathComponent("Assets", isDirectory: true)
+        LibraryLayout.media(in: root)
     }
 
     private var projectsURL: URL {
@@ -571,14 +570,14 @@ extension LibraryStore {
         return candidate
     }
 
-    private func metadataURL(for mediaURL: URL) -> URL {
-        mediaURL.deletingPathExtension().appendingPathExtension("asset.json")
+    private func metadataURL(for assetID: AssetID) -> URL {
+        LibraryLayout.metadata(in: root).appendingPathComponent("\(assetID.rawValue).json")
     }
 
     private func assetRecordsOnDisk() throws -> [AssetRecord] {
         guard
             let enumerator = FileManager.default.enumerator(
-                at: assetsURL,
+                at: LibraryLayout.metadata(in: root),
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
             )
@@ -586,7 +585,7 @@ extension LibraryStore {
             return []
         }
         var records: [AssetRecord] = []
-        for case let url as URL in enumerator where url.lastPathComponent.hasSuffix(".asset.json") {
+        for case let url as URL in enumerator where url.pathExtension == "json" {
             do {
                 let record = try MetadataCodec.decode(
                     AssetRecord.self,

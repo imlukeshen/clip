@@ -16,7 +16,10 @@ public actor AppRuntime {
 
     public init(libraryRoot: URL) async throws {
         let root = libraryRoot.standardizedFileURL
-        let inboxURL = root.appendingPathComponent("Inbox", isDirectory: true)
+        if let plan = try LibraryMigration.plan(at: root) {
+            throw AppRuntimeError.migrationRequired(plan)
+        }
+        let inboxURL = LibraryLayout.inbox(in: root)
         try FileManager.default.createDirectory(
             at: inboxURL,
             withIntermediateDirectories: true
@@ -40,6 +43,18 @@ public actor AppRuntime {
                 _ = await clickTracking.associate(record, sourceURL: sourceURL)
             }
         )
+    }
+
+    public static func migrate(_ plan: LibraryMigrationPlan, at root: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try LibraryMigration.execute(plan, at: root)
+        }.value
+    }
+
+    public static func revertMigration(at root: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try LibraryMigration.revert(at: root)
+        }.value
     }
 
     public func start() async throws {
@@ -119,4 +134,8 @@ public actor AppRuntime {
         library.changes
     }
 
+}
+
+public enum AppRuntimeError: Error, Sendable {
+    case migrationRequired(LibraryMigrationPlan)
 }

@@ -8,12 +8,12 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let bookmarks = BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
     let assetID = AssetID(rawValue: "asset-events")
-    let folder = root.appendingPathComponent("Assets/2026-08-01", isDirectory: true)
+    let folder = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     try Data("video".utf8).write(to: folder.appendingPathComponent("asset-events.mov"))
     let record = AssetRecord(
         id: assetID,
-        relativePath: "Assets/2026-08-01/asset-events.mov",
+        relativePath: "Media/Inbox/asset-events.mov",
         displayName: "Recording.mov",
         kind: .video,
         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -42,11 +42,11 @@ import Testing
         try await store.insert(record)
         let updated = try await store.storeEventTrack(track)
         #expect(updated.eventAlignment == .estimated)
-        #expect(updated.eventTrackPath == "Assets/2026-08-01/asset-events.events.json")
+        #expect(updated.eventTrackPath == "Media/Inbox/asset-events.events.json")
         #expect(try await store.eventTrack(for: assetID) == track)
     }
 
-    try FileManager.default.removeItem(at: root.appendingPathComponent("Library.sqlite"))
+    try FileManager.default.removeItem(at: LibraryLayout.database(in: root))
     let rebuilt = try await LibraryStore(root: root, bookmarks: bookmarks)
     try await rebuilt.rebuildIndex { _ in }
 
