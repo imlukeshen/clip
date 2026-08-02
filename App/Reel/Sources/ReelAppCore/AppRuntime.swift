@@ -1,4 +1,6 @@
 import CaptureKit
+import ConvertKit
+import CoreModel
 import Foundation
 import LibraryStore
 
@@ -9,6 +11,7 @@ public actor AppRuntime {
     private let library: LibraryStore
     private let pipeline: IngestPipeline
     private let coordinator: IngestCoordinator
+    private let converter = Converter()
 
     public init(libraryRoot: URL) async throws {
         let root = libraryRoot.standardizedFileURL
@@ -47,6 +50,17 @@ public actor AppRuntime {
 
     public func assets() async throws -> [AssetRecord] {
         try await library.assets(kind: nil, limit: 500, offset: 0)
+    }
+
+    public func url(for assetID: AssetID) async throws -> URL {
+        try await library.url(for: assetID)
+    }
+
+    public func convert(
+        _ jobs: [(ConversionPlan, URL, URL)],
+        concurrency: Int = 2
+    ) async -> AsyncThrowingStream<BatchProgress, Error> {
+        await converter.convert(jobs, concurrency: concurrency)
     }
 
     public func changes() -> AsyncStream<LibraryChange> {

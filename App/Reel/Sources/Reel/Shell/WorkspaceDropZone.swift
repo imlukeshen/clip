@@ -18,7 +18,7 @@ struct WorkspaceDropZone: View {
             chooseFiles: { isPicking = true }
         )
         .dropDestination(for: URL.self) { urls, _ in
-            model.acceptDrop(urls)
+            accept(urls, source: .drop)
             return !urls.isEmpty
         } isTargeted: {
             isTargeted = $0
@@ -29,7 +29,7 @@ struct WorkspaceDropZone: View {
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
-                model.acceptPicker(urls)
+                accept(urls, source: .picker)
             }
         }
     }
@@ -51,6 +51,14 @@ struct WorkspaceDropZone: View {
         case .photo: "PNG, JPEG, HEIC, TIFF, WebP"
         case .pdf: "Held in the library until PDF editing lands"
         case .convert: "Video, images, audio"
+        }
+    }
+
+    private func accept(_ urls: [URL], source: IngestSource) {
+        if workspace == .convert {
+            model.enqueueForConversion(urls, source: source)
+        } else {
+            model.accept(urls, source: source)
         }
     }
 }

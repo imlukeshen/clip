@@ -1,4 +1,5 @@
 import CaptureKit
+import ConvertKit
 import Foundation
 import LibraryStore
 import Observation
@@ -13,6 +14,7 @@ public final class AppModel {
     public private(set) var libraryRoot: URL
     public private(set) var isWatching = false
     public private(set) var ingestCount = 0
+    public private(set) var conversionQueue: [ConversionQueueItem] = []
     public private(set) var lastMessage: String?
     public var selectedAssetID: String?
 
@@ -50,7 +52,7 @@ public final class AppModel {
         case .video: assets.count(where: { $0.kind == .video })
         case .photo: assets.count(where: { $0.kind == .image })
         case .pdf: assets.count(where: { $0.kind == .document })
-        case .convert: ingestCount
+        case .convert: conversionQueue.count
         }
     }
 
@@ -112,6 +114,138 @@ public final class AppModel {
         accept(urls, source: .picker)
     }
 
+    public var isConverting: Bool {
+        conversionQueue.contains { item in
+            if case .converting = item.status { return true }
+            return false
+        }
+    }
+
+    public var hasConvertibleItems: Bool {
+        conversionQueue.contains { item in
+            switch item.status {
+            case .waiting, .failed:
+                break
+            case .converting, .completed:
+                return false
+            }
+            if case .unsupported = item.plan.backend { return false }
+            return true
+        }
+    }
+
+    public func enqueueForConversion(_ urls: [URL], source: IngestSource) {
+        guard !urls.isEmpty else { return }
+        selectedWorkspace = .convert
+        ingestCount += urls.count
+
+        Task {
+            defer { ingestCount -= urls.count }
+            guard let runtime else {
+                lastMessage = "The library is still opening. Try the drop again in a moment."
+                return
+            }
+            for url in urls {
+                let hasSecurityScope =
+                    source == .picker
+                    && url.startAccessingSecurityScopedResource()
+                defer {
+                    if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
+                }
+                do {
+                    let asset = try await runtime.ingest(url, source: source)
+                    let inputURL = try await runtime.url(for: asset.id)
+                    if !conversionQueue.contains(where: { $0.asset.id == asset.id }) {
+                        conversionQueue.append(
+                            ConversionQueueItem(asset: asset, inputURL: inputURL)
+                        )
+                    }
+                } catch {
+                    lastMessage = "Couldn't add \(url.lastPathComponent) to the conversion queue."
+                }
+            }
+            await refreshAssets()
+        }
+    }
+
+    public func selectConversionTarget(_ target: TargetFormat, for id: UUID) {
+        guard let index = conversionQueue.firstIndex(where: { $0.id == id }) else { return }
+        if case .converting = conversionQueue[index].status { return }
+        conversionQueue[index].selectTarget(target)
+    }
+
+    public func removeConversion(_ id: UUID) {
+        guard let item = conversionQueue.first(where: { $0.id == id }) else { return }
+        if case .converting = item.status { return }
+        conversionQueue.removeAll { $0.id == id }
+    }
+
+    public func convertQueuedItems() {
+        guard !isConverting, let runtime else { return }
+
+        var jobs: [(ConversionPlan, URL, URL)] = []
+        var jobItems: [(id: UUID, output: URL)] = []
+        var reservedOutputs: Set<URL> = []
+        let exportFolder = libraryRoot.appendingPathComponent("Exports", isDirectory: true)
+
+        for index in conversionQueue.indices {
+            switch conversionQueue[index].status {
+            case .waiting, .failed:
+                break
+            case .converting, .completed:
+                continue
+            }
+            if case .unsupported(let reason) = conversionQueue[index].plan.backend {
+                conversionQueue[index].status = .failed(reason)
+                continue
+            }
+            let item = conversionQueue[index]
+            let output = uniqueOutputURL(
+                folder: exportFolder,
+                filename: item.outputFilename,
+                reserved: &reservedOutputs
+            )
+            conversionQueue[index].progress = 0
+            conversionQueue[index].status = .converting
+            jobs.append((item.plan, item.inputURL, output))
+            jobItems.append((item.id, output))
+        }
+        guard !jobs.isEmpty else { return }
+
+        Task {
+            do {
+                let stream = await runtime.convert(jobs, concurrency: 2)
+                var completedCount = 0
+                for try await update in stream {
+                    guard jobItems.indices.contains(update.itemIndex),
+                        let queueIndex = conversionQueue.firstIndex(
+                            where: { $0.id == jobItems[update.itemIndex].id }
+                        )
+                    else { continue }
+                    conversionQueue[queueIndex].progress = update.itemProgress
+                    if update.completed > completedCount {
+                        completedCount = update.completed
+                        conversionQueue[queueIndex].status = .completed(
+                            jobItems[update.itemIndex].output
+                        )
+                    }
+                }
+                lastMessage =
+                    "Converted \(completedCount) file\(completedCount == 1 ? "" : "s") to Exports."
+            } catch {
+                for item in jobItems {
+                    guard let index = conversionQueue.firstIndex(where: { $0.id == item.id }) else {
+                        continue
+                    }
+                    if case .converting = conversionQueue[index].status {
+                        conversionQueue[index].status = .failed(error.localizedDescription)
+                    }
+                }
+                lastMessage = "One or more conversions couldn't be completed."
+            }
+        }
+    }
+
     public func clearMessage() {
         lastMessage = nil
     }
@@ -122,6 +256,33 @@ public final class AppModel {
             assets = try await runtime.assets()
         } catch {
             lastMessage = "The library index could not be read. Reopen Reel to rebuild it."
+        }
+    }
+
+    private func uniqueOutputURL(
+        folder: URL,
+        filename: String,
+        reserved: inout Set<URL>
+    ) -> URL {
+        let proposed = folder.appendingPathComponent(filename)
+        if !FileManager.default.fileExists(atPath: proposed.path),
+            reserved.insert(proposed).inserted
+        {
+            return proposed
+        }
+        let stem = proposed.deletingPathExtension().lastPathComponent
+        let pathExtension = proposed.pathExtension
+        var suffix = 2
+        while true {
+            let candidate = folder.appendingPathComponent(
+                "\(stem)-\(suffix).\(pathExtension)"
+            )
+            if !FileManager.default.fileExists(atPath: candidate.path),
+                reserved.insert(candidate).inserted
+            {
+                return candidate
+            }
+            suffix += 1
         }
     }
 }

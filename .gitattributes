@@ -1,0 +1,2 @@
+Vendor/ffmpeg/ReelFFmpeg.xcframework/**/Versions/A/ReelFFmpeg filter=lfs diff=lfs merge=lfs -text
+Vendor/ffmpeg/ReelFFmpeg.xcframework/**/*.dylib filter=lfs diff=lfs merge=lfs -text

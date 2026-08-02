@@ -13,20 +13,33 @@ let package = Package(
         .package(path: "../../Packages/CoreModel"),
         .package(path: "../../Packages/LibraryStore"),
         .package(path: "../../Packages/CaptureKit"),
+        .package(path: "../../Packages/ConvertKit"),
         .package(path: "../../Packages/DesignSystem"),
     ],
     targets: [
         .target(
             name: "ReelAppCore",
-            dependencies: ["CoreModel", "LibraryStore", "CaptureKit", "DesignSystem"]
+            dependencies: [
+                "CoreModel",
+                "LibraryStore",
+                "CaptureKit",
+                "ConvertKit",
+                "DesignSystem",
+            ]
         ),
         .executableTarget(
             name: "Reel",
-            dependencies: ["ReelAppCore", "DesignSystem", "LibraryStore", "CaptureKit"]
+            dependencies: [
+                "ReelAppCore",
+                "DesignSystem",
+                "LibraryStore",
+                "CaptureKit",
+                "ConvertKit",
+            ]
         ),
         .testTarget(
             name: "ReelAppCoreTests",
-            dependencies: ["ReelAppCore", "CoreModel", "LibraryStore"]
+            dependencies: ["ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit"]
         ),
     ],
     swiftLanguageModes: [.v6]

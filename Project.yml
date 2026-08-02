@@ -21,6 +21,8 @@ packages:
     path: Packages/LibraryStore
   CaptureKit:
     path: Packages/CaptureKit
+  ConvertKit:
+    path: Packages/ConvertKit
 
 targets:
   Reel:
@@ -36,6 +38,7 @@ targets:
       - package: DesignSystem
       - package: LibraryStore
       - package: CaptureKit
+      - package: ConvertKit
     configFiles:
       Debug: App/Reel/Config/xcconfig/Debug.xcconfig
       Release: App/Reel/Config/xcconfig/Release.xcconfig

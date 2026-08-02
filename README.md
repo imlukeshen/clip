@@ -15,6 +15,9 @@ Implemented milestones:
 - **M3 — Shell and workspaces:** a launchable SwiftUI app, shared design tokens
   and components, type-routed drop zones, Inbox asset grid, and screenshot
   shortcuts read from the user's preferences with a truthful unavailable state.
+- **M4 — Conversion:** a pure conversion planner, remux, VideoToolbox, ImageIO,
+  and linked LGPL FFmpeg backends, plus a live-planned conversion queue with
+  backend badges and bounded batch execution.
 
 ## Test
 
@@ -29,3 +32,8 @@ Generate and build the native app with:
 ```bash
 make build
 ```
+
+The checked-in FFmpeg framework targets Apple Silicon. Rebuild it from pinned,
+checksum-verified sources with `make ffmpeg`; validate its LGPL-only
+configuration with `make licence-audit`. Third-party notices are collected in
+[`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).

@@ -1,0 +1,4 @@
+framework module ReelFFmpeg {
+    umbrella header "ReelFFmpeg.h"
+    export *
+}
