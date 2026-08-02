@@ -124,6 +124,37 @@ private struct ImageLayerInspector: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
+            Divider().overlay(theme.palette.line)
+            Text("On-device AI").font(theme.type.label.font)
+            Button("Suggest redactions") {
+                editor.runImageCommand("suggestRedactions")
+            }
+            .buttonStyle(ReelBorderedButtonStyle())
+            if !editor.redactionSuggestions.isEmpty {
+                ForEach(editor.redactionSuggestions) { suggestion in
+                    HStack {
+                        Text(suggestion.kind.rawValue.capitalized)
+                        Spacer()
+                        Text(suggestion.preview)
+                            .foregroundStyle(theme.palette.textTertiary)
+                    }
+                    .font(theme.type.caption.font)
+                }
+                Button("Apply reviewed suggestions") {
+                    editor.runImageCommand("applyRedactions")
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+            }
+            Button("Generate alt text") {
+                editor.runImageCommand("generateAltText")
+            }
+            .buttonStyle(.plain)
+            if let altText = editor.altText {
+                Text(altText)
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .textSelection(.enabled)
+            }
             Spacer()
         }
         .padding(14)

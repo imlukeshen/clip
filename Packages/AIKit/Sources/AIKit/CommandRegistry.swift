@@ -9,7 +9,7 @@ public struct CommandID: RawRepresentable, Codable, Sendable, Hashable, Expressi
 }
 
 public enum CommandCategory: String, Codable, Sendable, CaseIterable {
-    case asset, clip, effect, audio, timeline, file, view, app
+    case asset, clip, effect, audio, timeline, image, file, view, app
 }
 
 public enum AgentExposure: String, Codable, Sendable {
@@ -159,6 +159,27 @@ public enum CommandRegistry {
             "view.getFrame", "Get Frame", .view, kind: .confirm, exposure: .onDemand,
             required: ["at"], properties: ["at": number]),
         command(
+            "cropTo", "Crop Image", .image, exposure: .onDemand,
+            properties: ["aspect": string, "rect": rect]),
+        command(
+            "addAnnotation", "Add Image Annotation", .image, exposure: .onDemand,
+            required: ["type", "rect"],
+            properties: ["type": string, "rect": rect, "text": string]),
+        command(
+            "suggestRedactions", "Suggest Image Redactions", .image,
+            kind: .read, exposure: .onDemand),
+        command(
+            "applyRedactions", "Apply Suggested Redactions", .image, exposure: .onDemand,
+            required: ["suggestionIDs"], properties: ["suggestionIDs": array(string)]),
+        command(
+            "addPadding", "Add Image Padding", .image, exposure: .onDemand,
+            properties: ["amount": number, "color": object]),
+        command(
+            "generateAltText", "Generate Image Alt Text", .image,
+            kind: .read, exposure: .onDemand),
+        command(
+            "numberSteps", "Number Image Steps", .image, exposure: .onDemand),
+        command(
             "listCommands", "List Commands", .app, kind: .read, exposure: .always,
             properties: ["category": string, "query": string]),
         command(
@@ -199,6 +220,9 @@ public enum CommandRegistry {
         ["x": number, "y": number], required: ["x", "y"])
     private static let range: JSONValue = typedObject(
         ["start": number, "end": number], required: ["start", "end"])
+    private static let rect: JSONValue = typedObject(
+        ["x": number, "y": number, "width": number, "height": number],
+        required: ["x", "y", "width", "height"])
 
     private static func array(_ item: JSONValue) -> JSONValue {
         .object(["type": .string("array"), "items": item])

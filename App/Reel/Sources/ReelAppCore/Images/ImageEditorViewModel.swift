@@ -1,3 +1,4 @@
+import AIKit
 import CoreGraphics
 import CoreModel
 import Foundation
@@ -57,6 +58,8 @@ public final class ImageEditorViewModel {
     public private(set) var renderedImage: CGImage?
     public private(set) var isRendering = false
     public private(set) var notice: String?
+    public private(set) var redactionSuggestions: [RedactionSuggestion] = []
+    public private(set) var altText: String?
     public var selectedLayerID: LayerID?
     public var activeTool: ImageEditorTool = .select
     public let sourceURL: URL
@@ -97,17 +100,23 @@ public final class ImageEditorViewModel {
     }
 
     public func perform(_ patch: ImagePatch, actionName: String) throws {
+        try perform([patch], actionName: actionName)
+    }
+
+    public func perform(_ patches: [ImagePatch], actionName: String) throws {
+        guard !patches.isEmpty else { return }
         undoManager.beginUndoGrouping()
         defer { undoManager.endUndoGrouping() }
         var candidate = document
-        let inverse = try candidate.apply(patch)
+        var inverses: [ImagePatch] = []
+        for patch in patches { inverses.append(try candidate.apply(patch)) }
         document = candidate
         if let selectedLayerID,
             !document.layers.contains(where: { $0.id == selectedLayerID })
         {
             self.selectedLayerID = nil
         }
-        registerUndo(inverse, actionName: actionName)
+        registerUndo(Array(inverses.reversed()), actionName: actionName)
         undoManager.setActionName(actionName)
         persist()
         rebuild()
@@ -218,6 +227,49 @@ public final class ImageEditorViewModel {
         }
     }
 
+    public func runImageCommand(_ id: String) {
+        let arguments: JSONValue
+        switch id {
+        case "cropTo":
+            arguments = .object(["aspect": .string("16:9")])
+        case "addAnnotation":
+            arguments = .object([
+                "type": .string("arrow"),
+                "rect": .object([
+                    "x": .number(0.2), "y": .number(0.2),
+                    "width": .number(0.35), "height": .number(0.25),
+                ]),
+            ])
+        case "applyRedactions":
+            arguments = .object([
+                "suggestionIDs": .array(redactionSuggestions.map { .string($0.id) })
+            ])
+        default:
+            arguments = .object([:])
+        }
+        let context = ImageToolExecutionContext(
+            document: document,
+            sourceURL: sourceURL,
+            suggestions: redactionSuggestions
+        )
+        Task {
+            do {
+                let result = try await ImageToolExecutor().execute(
+                    ToolInvocation(callID: UUID().uuidString, name: id, arguments: arguments),
+                    context: context
+                )
+                if !result.suggestions.isEmpty { redactionSuggestions = result.suggestions }
+                if let value = result.value { altText = value }
+                if !result.patches.isEmpty {
+                    try perform(result.patches, actionName: CommandRegistry.command(named: id)?.title ?? id)
+                }
+                notice = result.message
+            } catch {
+                notice = "The image command could not be completed."
+            }
+        }
+    }
+
     public func export(to url: URL, format: ImageExportFormat) {
         let document = document
         let sourceURL = sourceURL
@@ -245,13 +297,14 @@ public final class ImageEditorViewModel {
         )
     }
 
-    private func registerUndo(_ patch: ImagePatch, actionName: String) {
+    private func registerUndo(_ patches: [ImagePatch], actionName: String) {
         undoManager.registerUndo(withTarget: self) { target in
             do {
                 var candidate = target.document
-                let redo = try candidate.apply(patch)
+                var redos: [ImagePatch] = []
+                for patch in patches { redos.append(try candidate.apply(patch)) }
                 target.document = candidate
-                target.registerUndo(redo, actionName: actionName)
+                target.registerUndo(Array(redos.reversed()), actionName: actionName)
                 target.undoManager.setActionName(actionName)
                 target.persist()
                 target.rebuild()

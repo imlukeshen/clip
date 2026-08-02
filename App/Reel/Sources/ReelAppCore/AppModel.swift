@@ -181,8 +181,13 @@ public final class AppModel {
             isCommandPalettePresented = false
             return
         }
+        if let imageEditor, CommandRegistry.command(id: id)?.category == .image {
+            imageEditor.runImageCommand(id.rawValue)
+            isCommandPalettePresented = false
+            return
+        }
         guard let editor else {
-            lastMessage = "Open a project to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
+            lastMessage = "Open a document to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
             return
         }
         switch id.rawValue {
