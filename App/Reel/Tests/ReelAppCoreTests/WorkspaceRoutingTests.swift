@@ -25,6 +25,27 @@ struct WorkspaceRoutingTests {
         #expect(Workspace.allCases.allSatisfy { $0.hasDropZone })
     }
 
+    @Test("Navigation commands keep the displayed workspace in sync")
+    @MainActor
+    func navigationCommands() {
+        let model = AppModel(
+            libraryRoot: FileManager.default.temporaryDirectory
+                .appendingPathComponent("reel-navigation-tests", isDirectory: true)
+        )
+        model.searchQuery = "launch"
+
+        AppCommandRouter.run("navigation.photo", in: model)
+        #expect(model.selectedWorkspace == .photo)
+        #expect(model.searchQuery == "launch")
+
+        AppCommandRouter.run("navigation.pdf", in: model)
+        #expect(model.selectedWorkspace == .pdf)
+
+        AppCommandRouter.run("navigation.convert", in: model)
+        #expect(model.selectedWorkspace == .convert)
+        #expect(model.searchQuery.isEmpty)
+    }
+
     @Test("Asset activation routes every editable media kind")
     func activationRoutes() {
         #expect(AssetActivationRoute(kind: .video) == .videoEditor)

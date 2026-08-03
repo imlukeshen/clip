@@ -7,35 +7,45 @@ struct ShortcutRow: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        HStack(spacing: 9) {
+        Group {
             if let guidance = model.shortcutRow.guidance {
-                Text(guidance)
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                if let settingsURL = model.shortcutRow.settingsURL {
-                    Link("Open settings", destination: settingsURL)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(guidance)
                         .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.accent)
-                }
-            } else {
-                ForEach(model.shortcutRow.items) { item in
-                    HStack(spacing: 6) {
-                        Text(item.title)
+                        .foregroundStyle(theme.palette.textTertiary)
+                        .lineLimit(2)
+                    if let settingsURL = model.shortcutRow.settingsURL {
+                        Link("Open settings", destination: settingsURL)
                             .font(theme.type.caption.font)
-                            .foregroundStyle(theme.palette.textTertiary)
-                        if let display = item.display {
-                            KbdChip(display)
-                        } else {
-                            KbdChip("Disabled", state: .disabled)
-                        }
+                            .foregroundStyle(theme.palette.accent)
                     }
                 }
-                Button("Re-detect") {
-                    model.refreshShortcuts()
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    ForEach(model.shortcutRow.items) { item in
+                        HStack(spacing: 6) {
+                            Text(item.title)
+                                .font(theme.type.caption.font)
+                                .foregroundStyle(theme.palette.textTertiary)
+                                .lineLimit(2)
+                            if let display = item.display {
+                                KbdChip(display)
+                            } else {
+                                KbdChip("Disabled", state: .disabled)
+                            }
+                        }
+                    }
+                    Button("Re-detect") {
+                        model.refreshShortcuts()
+                    }
+                    .buttonStyle(.plain)
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.accent)
                 }
-                .buttonStyle(.plain)
-                .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.accent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

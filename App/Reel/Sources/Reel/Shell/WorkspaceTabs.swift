@@ -15,7 +15,7 @@ struct WorkspaceTabs: View {
                     badge: badge(for: workspace),
                     isActive: model.selectedWorkspace == workspace
                 ) {
-                    model.selectedWorkspace = workspace
+                    model.showWorkspace(workspace)
                 }
             }
             Spacer()

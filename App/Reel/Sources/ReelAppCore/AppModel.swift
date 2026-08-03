@@ -10,7 +10,7 @@ import PDFEngine
 @MainActor
 @Observable
 public final class AppModel {
-    public var selectedWorkspace: Workspace = .inbox
+    public private(set) var selectedWorkspace: Workspace = .inbox
     public var searchQuery = ""
     public private(set) var searchFocusRequest = 0
     public private(set) var assets: [AssetRecord] = []
@@ -171,8 +171,21 @@ public final class AppModel {
         }
     }
 
+    public func showWorkspace(_ workspace: Workspace) {
+        let workspaceChanged = selectedWorkspace != workspace
+        closeOpenEditors()
+        selectedWorkspace = workspace
+        if workspace == .convert {
+            clearSearch()
+        }
+        if workspaceChanged {
+            selection.deselectAll()
+        }
+    }
+
     public func selectFolder(_ path: String?) {
         if isSearching { clearSearch() }
+        closeOpenEditors()
         guard selectedFolderPath != path || selectedWorkspace != .inbox else { return }
         folderBackHistory.append(selectedFolderPath)
         folderForwardHistory.removeAll()
@@ -183,6 +196,7 @@ public final class AppModel {
 
     public func navigateBack() {
         guard let destination = folderBackHistory.popLast() else { return }
+        closeOpenEditors()
         folderForwardHistory.append(selectedFolderPath)
         selectedFolderPath = destination
         selectedWorkspace = .inbox
@@ -191,6 +205,7 @@ public final class AppModel {
 
     public func navigateForward() {
         guard let destination = folderForwardHistory.popLast() else { return }
+        closeOpenEditors()
         folderBackHistory.append(selectedFolderPath)
         selectedFolderPath = destination
         selectedWorkspace = .inbox
@@ -429,7 +444,7 @@ public final class AppModel {
 
     public func accept(_ urls: [URL], source: IngestSource) {
         guard !urls.isEmpty else { return }
-        selectedWorkspace = WorkspaceRouter.destination(for: urls[0])
+        showWorkspace(WorkspaceRouter.destination(for: urls[0]))
         ingestCount += urls.count
 
         Task {
@@ -470,7 +485,7 @@ public final class AppModel {
         case .photoEditor: openImageEditor(for: id)
         case .pdfEditor: openPDFEditor(for: id)
         case .none:
-            selectedWorkspace = .convert
+            showWorkspace(.convert)
             lastMessage = "Audio files are available in Convert."
         }
     }
@@ -547,7 +562,7 @@ public final class AppModel {
 
     public func enqueueForConversion(_ urls: [URL], source: IngestSource) {
         guard !urls.isEmpty else { return }
-        selectedWorkspace = .convert
+        showWorkspace(.convert)
         ingestCount += urls.count
 
         Task {
@@ -880,6 +895,12 @@ public final class AppModel {
     public func closePDFEditor() {
         pdfEditor?.stop()
         pdfEditor = nil
+    }
+
+    private func closeOpenEditors() {
+        closeEditor()
+        closeImageEditor()
+        closePDFEditor()
     }
 
     private func refreshAssets() async {

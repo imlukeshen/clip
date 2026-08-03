@@ -65,7 +65,8 @@ struct Titlebar: View {
     }
 
     private var isBrowsing: Bool {
-        model.editor == nil && model.imageEditor == nil && model.pdfEditor == nil
+        model.selectedWorkspace != .convert && model.editor == nil && model.imageEditor == nil
+            && model.pdfEditor == nil
     }
 
     private var searchField: some View {
@@ -137,11 +138,11 @@ struct Titlebar: View {
                     Text("Recent")
                 }
             }
-        } else if let editor = model.imageEditor {
+        } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
             Text("Images  ›  \(editor.sourceURL.lastPathComponent)")
-        } else if let editor = model.editor {
+        } else if model.selectedWorkspace == .video, let editor = model.editor {
             Text("Projects  ›  \(editor.document.name)")
-        } else if let editor = model.pdfEditor {
+        } else if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
             Text("Documents  ›  \(editor.document.title)")
         } else {
             Text(model.selectedWorkspace.title)

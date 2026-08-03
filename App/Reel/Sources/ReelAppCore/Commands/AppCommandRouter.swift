@@ -76,19 +76,19 @@ public enum AppCommandRouter {
             model.isCommandPalettePresented = true
             return .completed
         case "navigation.inbox":
-            model.selectedWorkspace = .inbox
+            model.showWorkspace(.inbox)
             return .completed
         case "navigation.video":
-            model.selectedWorkspace = .video
+            model.showWorkspace(.video)
             return .completed
         case "navigation.photo":
-            model.selectedWorkspace = .photo
+            model.showWorkspace(.photo)
             return .completed
         case "navigation.pdf":
-            model.selectedWorkspace = .pdf
+            model.showWorkspace(.pdf)
             return .completed
         case "navigation.convert":
-            model.selectedWorkspace = .convert
+            model.showWorkspace(.convert)
             return .completed
         case "edit.undo":
             if let editor = model.imageEditor {

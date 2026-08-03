@@ -11,11 +11,11 @@ struct UnifiedInspector: View {
 
     var body: some View {
         Group {
-            if let editor = model.pdfEditor {
+            if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
                 PDFLayerInspector(editor: editor)
-            } else if let editor = model.imageEditor {
+            } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
                 ImageLayerInspector(editor: editor)
-            } else if let editor = model.editor {
+            } else if model.selectedWorkspace == .video, let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
             } else {
                 libraryInspector

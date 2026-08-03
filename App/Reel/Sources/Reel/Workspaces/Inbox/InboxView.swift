@@ -90,8 +90,7 @@ private struct WatcherStatusStrip: View {
         StatusStrip {
             StatusItem(
                 model.isWatching ? "Watching" : "Opening library",
-                detail: LibraryLayout.inbox(in: model.libraryRoot).path(
-                    percentEncoded: false),
+                detail: "Inbox folder",
                 state: model.isWatching ? .ok : .pending
             )
             StatusItem("Clipboard", state: model.isWatching ? .ok : .pending)
@@ -105,10 +104,10 @@ private struct WatcherStatusStrip: View {
             StatusItem("Checking click track", state: .pending)
         case .enabled(let seconds):
             StatusItem("Click track", detail: "\(seconds)s buffer", state: .ok)
-        case .disabled(let reason):
+        case .disabled:
             StatusItem(
-                "Click track off",
-                detail: reason,
+                "Click tracking",
+                detail: "Accessibility required",
                 state: .pending,
                 actionTitle: "Grant access",
                 action: model.requestClickTrackingAccess

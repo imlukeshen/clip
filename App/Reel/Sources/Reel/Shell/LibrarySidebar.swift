@@ -30,19 +30,19 @@ struct LibrarySidebar: View {
                         icon: "video",
                         count: model.assetCount(for: .video),
                         selected: model.selectedWorkspace == .video
-                    ) { model.selectedWorkspace = .video }
+                    ) { model.showWorkspace(.video) }
                     smartRow(
                         "Photos",
                         icon: "photo",
                         count: model.assetCount(for: .photo),
                         selected: model.selectedWorkspace == .photo
-                    ) { model.selectedWorkspace = .photo }
+                    ) { model.showWorkspace(.photo) }
                     smartRow(
                         "PDFs",
                         icon: "doc.richtext",
                         count: model.assetCount(for: .pdf),
                         selected: model.selectedWorkspace == .pdf
-                    ) { model.selectedWorkspace = .pdf }
+                    ) { model.showWorkspace(.pdf) }
 
                     HStack {
                         SectionLabel(model.isSearching ? "Matching folders" : "Folders")
@@ -127,23 +127,43 @@ struct LibrarySidebar: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).frame(width: 16)
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(
+                        selected ? theme.palette.accent : theme.palette.textSecondary
+                    )
+                    .frame(width: 18)
                 Text(title)
+                    .font(theme.type.label.font)
+                    .foregroundStyle(
+                        selected ? theme.palette.textPrimary : theme.palette.textSecondary
+                    )
                 Spacer()
                 if let count, count > 0 {
                     Text("\(count)")
                         .font(theme.type.numeric.font)
-                        .foregroundStyle(theme.palette.textTertiary)
+                        .foregroundStyle(
+                            selected ? theme.palette.accent : theme.palette.textTertiary
+                        )
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 32)
+            .padding(.horizontal, 10)
+            .frame(height: 36)
             .background(selected ? theme.palette.accentDim : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .leading) {
+                if selected {
+                    Capsule()
+                        .fill(theme.palette.accent)
+                        .frame(width: 3, height: 18)
+                        .padding(.leading, 2)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func searchFolderRow(_ folder: FolderNode) -> some View {
@@ -187,6 +207,10 @@ private struct FolderTreeRow: View {
     @State private var newFolderValue = ""
     @State private var isHovered = false
 
+    private var isSelected: Bool {
+        model.selectedWorkspace == .inbox && model.selectedFolderPath == node.id
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
@@ -212,7 +236,7 @@ private struct FolderTreeRow: View {
                         Image(
                             systemName: node.id == "Inbox"
                                 ? "tray"
-                                : (model.selectedFolderPath == node.id ? "folder.fill" : "folder")
+                                : (isSelected ? "folder.fill" : "folder")
                         )
                         Text(node.name).lineLimit(1)
                         Spacer()
@@ -225,7 +249,7 @@ private struct FolderTreeRow: View {
                     .padding(.horizontal, 6)
                     .frame(height: 28)
                     .background(
-                        model.selectedFolderPath == node.id
+                        isSelected
                             ? theme.palette.accentDim
                             : (isHovered ? theme.palette.surfaceRaised : Color.clear)
                     )
@@ -234,6 +258,7 @@ private struct FolderTreeRow: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { isHovered = $0 }
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
             .padding(.leading, CGFloat(depth) * 13)
             .draggable("folder:\(node.id)")
