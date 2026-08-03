@@ -6,8 +6,8 @@ cd "$ROOT_DIR"
 
 xcodegen generate >/dev/null
 
-direct_settings="$(xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Release -showBuildSettings 2>/dev/null)"
-store_settings="$(xcodebuild -project Reel.xcodeproj -scheme Reel-AppStore -configuration AppStoreRelease -showBuildSettings 2>/dev/null)"
+direct_settings="$(xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Release -showBuildSettings 2>/dev/null)"
+store_settings="$(xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreRelease -showBuildSettings 2>/dev/null)"
 
 require_setting() {
     local settings="$1"

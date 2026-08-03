@@ -1,13 +1,13 @@
 # Third-party acknowledgements
 
-Reel's conversion framework includes the following dynamically linked
+Clip's conversion framework includes the following dynamically linked
 components. The complete corresponding source is available from the linked
 upstream release and can be rebuilt with [`Scripts/build-ffmpeg.sh`](Scripts/build-ffmpeg.sh).
 
 ## FFmpeg 7.1.2
 
 Copyright © the FFmpeg developers. Licensed under the GNU Lesser General Public
-License 2.1 or later. Reel's build disables GPL and nonfree components and does
+License 2.1 or later. Clip's build disables GPL and nonfree components and does
 not include x264 or x265.
 
 - Source: <https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz>

@@ -1,11 +1,11 @@
 # Distribution
 
-Reel has two generated macOS release channels:
+Clip has two generated macOS release channels:
 
-- `Reel` / `Release` is an arm64 Developer ID build with the hardened runtime
+- `Clip` / `Release` is an arm64 Developer ID build with the hardened runtime
   and no App Sandbox. It is exported into a DMG, submitted with `notarytool`,
   and stapled before publication.
-- `Reel-AppStore` / `AppStoreRelease` is an arm64 Apple Distribution build with
+- `Clip-AppStore` / `AppStoreRelease` is an arm64 Apple Distribution build with
   App Sandbox, user-selected file access, app-scoped bookmarks, and outbound
   network access. Its export destination is App Store Connect upload.
 
@@ -16,7 +16,7 @@ and their export plists. `make release` performs the real release and requires:
 - `NOTARY_KEY`: path to an App Store Connect API `.p8` key.
 - `NOTARY_KEY_ID`: key ID.
 - `NOTARY_ISSUER`: issuer UUID.
-- `RELEASE_VERSION`: a `v`-prefixed release version; `REEL_RELEASE_DIR` is optional.
+- `RELEASE_VERSION`: a `v`-prefixed release version; `CLIP_RELEASE_DIR` is optional.
 
 The tag workflow imports a protected P12 containing the Developer ID Application
 and Apple Distribution identities, materializes the API key, runs all tests,

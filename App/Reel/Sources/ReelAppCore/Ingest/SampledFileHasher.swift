@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Computes Reel's O(1) first-edge, last-edge, and byte-size SHA-256 fingerprint.
+/// Computes Clip's O(1) first-edge, last-edge, and byte-size SHA-256 fingerprint.
 public enum SampledFileHasher {
     private static let sampleSize = 1_024 * 1_024
 

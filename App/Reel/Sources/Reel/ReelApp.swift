@@ -5,7 +5,7 @@ import ReelAppCore
 import SwiftUI
 
 @main
-struct ReelApp: App {
+struct ClipApp: App {
     @State private var model: AppModel
 
     init() {

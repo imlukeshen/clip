@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why Reel cannot truthfully display the user's screenshot shortcuts.
+/// Why Clip cannot truthfully display the user's screenshot shortcuts.
 public enum UnavailableReason: Sendable, Equatable {
     case sandboxed
     case missingDomain

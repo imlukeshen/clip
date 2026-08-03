@@ -179,7 +179,7 @@ struct AssetGrid: View {
         } else {
             EmptyState(
                 headline: "Nothing here yet",
-                body: "Drop files above or choose files to add them to Reel."
+                body: "Drop files above or choose files to add them to Clip."
             )
         }
     }

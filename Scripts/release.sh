@@ -2,9 +2,9 @@
 set -euo pipefail
 
 readonly ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-readonly BUILD_DIR="${REEL_RELEASE_DIR:-$ROOT_DIR/ReleaseBuild}"
-readonly DIRECT_ARCHIVE="$BUILD_DIR/Reel-Direct.xcarchive"
-readonly STORE_ARCHIVE="$BUILD_DIR/Reel-AppStore.xcarchive"
+readonly BUILD_DIR="${CLIP_RELEASE_DIR:-${REEL_RELEASE_DIR:-$ROOT_DIR/ReleaseBuild}}"
+readonly DIRECT_ARCHIVE="$BUILD_DIR/Clip-Direct.xcarchive"
+readonly STORE_ARCHIVE="$BUILD_DIR/Clip-AppStore.xcarchive"
 readonly DIRECT_EXPORT="$BUILD_DIR/direct"
 readonly ARTIFACTS="$BUILD_DIR/artifacts"
 
@@ -29,8 +29,8 @@ readonly MARKETING_VERSION="${VERSION#v}"
 readonly BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}"
 
 xcodebuild archive \
-    -project Reel.xcodeproj \
-    -scheme Reel \
+    -project Clip.xcodeproj \
+    -scheme Clip \
     -configuration Release \
     -destination 'generic/platform=macOS' \
     -archivePath "$DIRECT_ARCHIVE" \
@@ -47,12 +47,12 @@ xcodebuild -exportArchive \
     -authenticationKeyID "$NOTARY_KEY_ID" \
     -authenticationKeyIssuerID "$NOTARY_ISSUER"
 
-readonly DIRECT_APP="$DIRECT_EXPORT/Reel.app"
+readonly DIRECT_APP="$DIRECT_EXPORT/Clip.app"
 codesign --verify --deep --strict --verbose=2 "$DIRECT_APP"
 spctl --assess --type execute --verbose=2 "$DIRECT_APP" || true
 
-readonly DMG="$ARTIFACTS/Reel-$VERSION.dmg"
-hdiutil create -volname Reel -srcfolder "$DIRECT_APP" -ov -format UDZO "$DMG"
+readonly DMG="$ARTIFACTS/Clip-$VERSION.dmg"
+hdiutil create -volname Clip -srcfolder "$DIRECT_APP" -ov -format UDZO "$DMG"
 xcrun notarytool submit "$DMG" \
     --key "$NOTARY_KEY" \
     --key-id "$NOTARY_KEY_ID" \
@@ -63,8 +63,8 @@ xcrun stapler validate "$DMG"
 shasum -a 256 "$DMG" > "$DMG.sha256"
 
 xcodebuild archive \
-    -project Reel.xcodeproj \
-    -scheme Reel-AppStore \
+    -project Clip.xcodeproj \
+    -scheme Clip-AppStore \
     -configuration AppStoreRelease \
     -destination 'generic/platform=macOS' \
     -archivePath "$STORE_ARCHIVE" \

@@ -7,12 +7,12 @@ generate:
 	xcodegen generate
 
 build: generate
-	xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Debug CODE_SIGNING_ALLOWED=NO build
-	xcodebuild -project Reel.xcodeproj -scheme Reel-AppStore -configuration AppStoreDebug CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreDebug CODE_SIGNING_ALLOWED=NO build
 
 run: generate
-	xcodebuild -project Reel.xcodeproj -scheme Reel -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
-	open -n DerivedData/Build/Products/Debug/Reel.app
+	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
+	open -n DerivedData/Build/Products/Debug/Clip.app
 
 test: test-packages deps shortcuts licence-audit
 
@@ -55,4 +55,4 @@ release:
 	Scripts/release.sh
 
 clean:
-	rm -rf Reel.xcodeproj DerivedData
+	rm -rf Clip.xcodeproj Reel.xcodeproj DerivedData

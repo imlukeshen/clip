@@ -71,10 +71,10 @@ private struct MigrationPlanView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Upgrade your Reel library")
+            Text("Upgrade your Clip library")
                 .font(.title2.weight(.semibold))
             Text(
-                "Reel will give \(plan.records.count) assets readable filenames, move them into Media/Inbox, and hide generated previews in .reel. Asset IDs and projects will not change."
+                "Clip will give \(plan.records.count) assets readable filenames, move them into Media/Inbox, and hide generated previews in .reel. Asset IDs and projects will not change."
             )
             List(plan.moves.prefix(40), id: \.sourceRelativePath) { move in
                 VStack(alignment: .leading, spacing: 3) {

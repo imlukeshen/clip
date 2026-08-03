@@ -14,7 +14,7 @@ struct InboxView: View {
                 title: model.isSearching ? "Search" : model.currentFolderName,
                 subtitle: model.isSearching
                     ? "\(model.searchResultDescription) matching “\(model.searchQuery)”."
-                    : "Captures are added automatically while Reel is open. Pre-session files aren’t imported."
+                    : "Captures are added automatically while Clip is open. Pre-session files aren’t imported."
             )
             if model.isSearching {
                 searchResults

@@ -82,14 +82,25 @@ public final class AppModel {
         let movies =
             FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return movies.appendingPathComponent("Reel", isDirectory: true)
+        return preferredAppDirectory(in: movies)
     }
 
     public static var sandboxLibraryRoot: URL {
         let support =
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return support.appendingPathComponent("Reel", isDirectory: true)
+        return preferredAppDirectory(in: support)
+    }
+
+    static func preferredAppDirectory(in parent: URL) -> URL {
+        let current = parent.appendingPathComponent("Clip", isDirectory: true)
+        let legacy = parent.appendingPathComponent("Reel", isDirectory: true)
+        if FileManager.default.fileExists(atPath: current.path)
+            || !FileManager.default.fileExists(atPath: legacy.path)
+        {
+            return current
+        }
+        return legacy
     }
 
     public var visibleAssets: [AssetRecord] {
@@ -437,7 +448,7 @@ public final class AppModel {
 
     public func deferMigration() {
         pendingMigrationPlan = nil
-        lastMessage = "The library was left unchanged. Reopen Reel when you're ready to upgrade."
+        lastMessage = "The library was left unchanged. Reopen Clip when you're ready to upgrade."
     }
 
     public func revertLibraryMigration() {
@@ -451,7 +462,7 @@ public final class AppModel {
                 canRevertMigration = false
                 assets = []
                 isWatching = false
-                lastMessage = "Migration reverted. Quit Reel before opening this library with v1."
+                lastMessage = "Migration reverted. Quit Clip before opening this library with v1."
             } catch {
                 runtime = activeRuntime
                 lastMessage = "The migration could not be reverted."
@@ -490,7 +501,7 @@ public final class AppModel {
                 lastMessage = "Watching \(status.url.lastPathComponent) for new captures."
             } catch {
                 isCaptureDirectoryWatched = false
-                lastMessage = "Reel couldn't access that capture folder."
+                lastMessage = "Clip couldn't access that capture folder."
             }
         }
     }
@@ -566,7 +577,7 @@ public final class AppModel {
                     )
                 }
             } catch {
-                lastMessage = "Reel couldn't check whether those files are in a project."
+                lastMessage = "Clip couldn't check whether those files are in a project."
             }
         }
     }
@@ -963,7 +974,7 @@ public final class AppModel {
             assets = try await runtime.assets()
             await refreshFolderTree()
         } catch {
-            lastMessage = "The library index could not be read. Reopen Reel to rebuild it."
+            lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
         }
     }
 
@@ -1019,7 +1030,7 @@ public final class AppModel {
             undoManager.setActionName("Move to Trash")
             lastMessage = ids.count == 1 ? "Moved to Trash" : "Moved \(ids.count) items to Trash"
         } catch {
-            lastMessage = "Reel couldn't move the selected files to Trash."
+            lastMessage = "Clip couldn't move the selected files to Trash."
         }
     }
 
@@ -1039,7 +1050,7 @@ public final class AppModel {
             undoManager.setActionName("Move to Trash")
             lastMessage = ids.count == 1 ? "Restored from Trash" : "Restored \(ids.count) items"
         } catch {
-            lastMessage = "Reel couldn't restore the files. They may have been removed from Trash."
+            lastMessage = "Clip couldn't restore the files. They may have been removed from Trash."
         }
     }
 

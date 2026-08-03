@@ -1,6 +1,6 @@
 import Foundation
 
-/// A complete, deterministic, non-destructive Reel edit graph.
+/// A complete, deterministic, non-destructive Clip edit graph.
 public struct ProjectDocument: Codable, Sendable, Equatable {
     public static let currentSchemaVersion = 2
 

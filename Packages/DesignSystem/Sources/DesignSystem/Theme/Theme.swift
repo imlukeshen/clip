@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Reel's complete visual token set.
+/// Clip's complete visual token set.
 public struct Theme: Sendable {
     public struct Palette: Sendable {
         public let surfaceBase: Color

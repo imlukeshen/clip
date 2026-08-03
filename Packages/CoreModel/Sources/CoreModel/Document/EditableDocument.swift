@@ -1,7 +1,7 @@
 /// Marker for an invertible mutation accepted by an editable document.
 public protocol DocumentPatch: Codable, Sendable, Equatable {}
 
-/// The shared mutation contract for every non-destructive Reel document.
+/// The shared mutation contract for every non-destructive Clip document.
 public protocol EditableDocument: Codable, Sendable, Equatable {
     associatedtype Patch: DocumentPatch
 

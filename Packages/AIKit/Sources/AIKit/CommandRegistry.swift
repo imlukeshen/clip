@@ -70,7 +70,7 @@ public struct CommandDefinition: Command, Sendable, Equatable, Identifiable {
     }
 }
 
-/// The single capability catalog for Reel's user and assistant surfaces.
+/// The single capability catalog for Clip's user and assistant surfaces.
 public enum CommandRegistry {
     public static let all: [CommandDefinition] = [
         command(

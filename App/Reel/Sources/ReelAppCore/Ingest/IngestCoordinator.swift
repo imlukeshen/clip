@@ -53,7 +53,7 @@ public actor IngestCoordinator {
                 try await inbox.start()
                 startedInboxes.append(inbox)
             } catch {
-                // Additional system capture locations are best-effort. The Reel Inbox remains
+                // Additional system capture locations are best-effort. The Clip Inbox remains
                 // available when a sandbox or stale preference blocks another directory.
             }
         }

@@ -1,6 +1,6 @@
-# Reel
+# Clip
 
-Reel is a local-first screen demo editor for macOS. This repository is being
+Clip is a local-first screen demo editor for macOS. This repository is being
 implemented milestone-by-milestone from the supplied design specification.
 
 Implemented milestones:
@@ -49,7 +49,7 @@ Build and launch a local Debug copy with:
 make run
 ```
 
-Reel opens a library picker on first launch. Choose a writable folder; Reel
+Clip opens a library picker on first launch. Choose a writable folder; Clip
 creates its managed `Media`, `Projects`, `Exports`, and `.reel` structure there.
 
 ## Test

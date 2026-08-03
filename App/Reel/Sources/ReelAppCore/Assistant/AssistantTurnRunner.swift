@@ -120,8 +120,8 @@ public struct AssistantTurnRunner: Sendable {
     }
 
     private static let systemPrompt = """
-        You are Reel's editing assistant. Use the supplied tools for timeline edits. Keep each
-        requested operation as a separate tool call. Reel coalesces the completed turn into one undo.
+        You are Clip's editing assistant. Use the supplied tools for timeline edits. Keep each
+        requested operation as a separate tool call. Clip coalesces the completed turn into one undo.
         Never invent audio or click availability; trust hasAudio and alignment in the context.
         Ask before actions represented by confirm tools.
         """

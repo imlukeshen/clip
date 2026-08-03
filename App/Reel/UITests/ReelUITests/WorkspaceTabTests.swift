@@ -9,7 +9,7 @@ final class WorkspaceTabTests: XCTestCase {
         let workspaceNames = ["inbox", "video", "photo", "pdf", "convert"]
         XCTAssertTrue(
             app.buttons["workspace-tab-inbox"].waitForExistence(timeout: 10),
-            "Reel did not expose its workspace tabs"
+            "Clip did not expose its workspace tabs"
         )
 
         for iteration in 0..<50 {

@@ -37,7 +37,7 @@ struct ConvertView: View {
             } else {
                 ConversionQueue(model: model)
                 HStack {
-                    Text("Outputs are saved to Reel/Exports")
+                    Text("Outputs are saved to your library’s Exports folder")
                         .font(theme.type.caption.font)
                         .foregroundStyle(theme.palette.textTertiary)
                     Spacer()

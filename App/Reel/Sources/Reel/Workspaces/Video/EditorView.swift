@@ -433,7 +433,9 @@ private struct ExportDestinationSheet: View {
                         Button(folder.path) { baseFolder = folder }
                     }
                     Divider()
-                    Button("Reel Media") { baseFolder = LibraryLayout.media(in: model.libraryRoot) }
+                    Button("Library Media") {
+                        baseFolder = LibraryLayout.media(in: model.libraryRoot)
+                    }
                     Button("Choose…", action: chooseFolder)
                 }
                 .frame(maxWidth: 320)
@@ -653,7 +655,7 @@ struct EditorInspector: View {
             SectionLabel("Project context")
             Text("\(editor.document.timeline.video.count) clips · \(durationText)")
                 .foregroundStyle(theme.palette.textSecondary)
-            Text("Ask Reel to trim, split, zoom, restyle, or caption this edit.")
+            Text("Ask Clip to trim, split, zoom, restyle, or caption this edit.")
                 .foregroundStyle(theme.palette.textTertiary)
         }
         .font(theme.type.caption.font)
@@ -661,7 +663,7 @@ struct EditorInspector: View {
 
     private var chatComposer: some View {
         HStack(alignment: .bottom, spacing: 7) {
-            TextField("Ask Reel…", text: $model.assistantDraft, axis: .vertical)
+            TextField("Ask Clip…", text: $model.assistantDraft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .onSubmit { model.sendAssistantMessage() }

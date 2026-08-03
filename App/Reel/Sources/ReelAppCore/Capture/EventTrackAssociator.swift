@@ -48,7 +48,7 @@ public actor EventTrackAssociator {
         }
         return .disabled(
             reason:
-                "Accessibility access is off. Reel still imports normally, but auto-zoom is unavailable."
+                "Accessibility access is off. Clip still imports normally, but auto-zoom is unavailable."
         )
     }
 

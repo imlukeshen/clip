@@ -1,6 +1,6 @@
 import Foundation
 
-/// Color spaces supported by a Reel project.
+/// Color spaces supported by a Clip project.
 public enum ColorSpaceTag: String, Codable, Sendable {
     case sRGB
     case displayP3

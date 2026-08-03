@@ -19,6 +19,6 @@ xcodebuild -create-xcframework \
 ```
 
 Its install name is rewritten from `./libpdfium.dylib` to
-`@rpath/libpdfium.dylib` so SwiftPM test bundles and Reel can embed it safely.
+`@rpath/libpdfium.dylib` so SwiftPM test bundles and Clip can embed it safely.
 
 The complete license set from the binary archive is retained in `licenses/`.

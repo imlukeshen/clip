@@ -11,7 +11,7 @@ public struct RationalTime: Codable, Sendable, Hashable, Comparable {
     /// The timestamp in canonical ticks.
     public var value: Int64
 
-    /// The serialized timescale. Reel always normalizes this to 90,000.
+    /// The serialized timescale. Clip always normalizes this to 90,000.
     public private(set) var timescale: Int32
 
     /// Creates a timestamp, normalizing values expressed at another timescale.
@@ -69,7 +69,7 @@ public struct RationalTime: Codable, Sendable, Hashable, Comparable {
         case timescale
     }
 
-    /// Decodes and normalizes a timestamp to Reel's canonical timescale.
+    /// Decodes and normalizes a timestamp to Clip's canonical timescale.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedValue = try container.decode(Int64.self, forKey: .value)
@@ -84,7 +84,7 @@ public struct RationalTime: Codable, Sendable, Hashable, Comparable {
         self.init(value: decodedValue, timescale: decodedTimescale)
     }
 
-    /// Encodes a timestamp using Reel's canonical timescale.
+    /// Encodes a timestamp using Clip's canonical timescale.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(value, forKey: .value)
