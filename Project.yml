@@ -42,6 +42,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.video
+        NSDesktopFolderUsageDescription: Reel watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.
         NSSpeechRecognitionUsageDescription: Reel uses on-device speech recognition to generate captions for your clips.
     dependencies:
       - package: ReelAppCore

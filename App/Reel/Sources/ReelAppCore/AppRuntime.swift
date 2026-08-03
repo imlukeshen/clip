@@ -4,17 +4,31 @@ import CoreModel
 import Foundation
 import LibraryStore
 
+public struct CaptureDirectoryStatus: Sendable, Equatable {
+    public var url: URL
+    public var isWatching: Bool
+
+    public init(url: URL, isWatching: Bool) {
+        self.url = url
+        self.isWatching = isWatching
+    }
+}
+
 /// Owns the long-lived local services used by the application shell.
 public actor AppRuntime {
     public let libraryRoot: URL
 
+    private static let captureBookmarkKey = "capture-directory"
+
     private let library: LibraryStore
+    private let bookmarks: BookmarkStore
     private let folders: LibraryFolders
     private let pipeline: IngestPipeline
     private let coordinator: IngestCoordinator
     private let converter = Converter()
     private let clickTracking: EventTrackAssociator
     private let libraryWatcher: LibraryRootWatcher
+    private var captureDirectory: URL
 
     public init(
         libraryRoot: URL,
@@ -30,18 +44,35 @@ public actor AppRuntime {
             withIntermediateDirectories: true
         )
         let bookmarks = BookmarkStore()
+        let savedCaptureDirectory = try? await bookmarks.resolve(key: Self.captureBookmarkKey)
+        let preferredCaptureDirectory = Self.preferredCaptureDirectory(
+            saved: savedCaptureDirectory
+        )
+        let captureDirectory = preferredCaptureDirectory.url
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
-        let captureDirectories = Self.captureDirectories(libraryInbox: inboxURL)
-        let inboxes = captureDirectories.map { InboxWatcher(url: $0, bookmarks: bookmarks) }
+        let captureDirectories = Self.captureDirectories(
+            libraryInbox: inboxURL,
+            captureDirectory: captureDirectory,
+            captureUsesSecurityScope: preferredCaptureDirectory.usesSecurityScope
+        )
+        let inboxes = captureDirectories.map {
+            InboxWatcher(
+                url: $0.url,
+                bookmarks: bookmarks,
+                usesSecurityScope: $0.usesSecurityScope
+            )
+        }
         let pasteboard = PasteboardWatcher()
         let clickTracking = EventTrackAssociator(library: library)
 
         self.libraryRoot = root
         self.library = library
+        self.bookmarks = bookmarks
         self.folders = LibraryFolders(root: root, library: library)
         self.pipeline = pipeline
         self.clickTracking = clickTracking
+        self.captureDirectory = captureDirectory
         self.libraryWatcher = LibraryRootWatcher(url: LibraryLayout.media(in: root)) {
             Task { await library.refreshLocations() }
         }
@@ -56,24 +87,38 @@ public actor AppRuntime {
         )
     }
 
-    private static func captureDirectories(libraryInbox: URL) -> [URL] {
-        let systemCaptureDirectory: URL
+    private static func preferredCaptureDirectory(
+        saved: URL?
+    ) -> (url: URL, usesSecurityScope: Bool) {
         #if DEBUG
             if let override = ProcessInfo.processInfo.environment["REEL_CAPTURE_SOURCE"],
                 !override.isEmpty
             {
-                systemCaptureDirectory = URL(fileURLWithPath: override, isDirectory: true)
-            } else {
-                systemCaptureDirectory = SystemCaptureDestination.current()
+                return (
+                    URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL,
+                    false
+                )
             }
-        #else
-            systemCaptureDirectory = SystemCaptureDestination.current()
         #endif
+        if let saved {
+            return (saved.standardizedFileURL, true)
+        }
+        return (SystemCaptureDestination.current(), false)
+    }
 
+    private static func captureDirectories(
+        libraryInbox: URL,
+        captureDirectory: URL,
+        captureUsesSecurityScope: Bool
+    ) -> [(url: URL, usesSecurityScope: Bool)] {
         var seen: Set<String> = []
-        return [libraryInbox, systemCaptureDirectory].compactMap { directory in
+        return [
+            (libraryInbox, false),
+            (captureDirectory, captureUsesSecurityScope),
+        ].compactMap { directory, usesSecurityScope in
             let standardized = directory.standardizedFileURL
-            return seen.insert(standardized.path).inserted ? standardized : nil
+            return seen.insert(standardized.path).inserted
+                ? (standardized, usesSecurityScope) : nil
         }
     }
 
@@ -89,16 +134,34 @@ public actor AppRuntime {
         }.value
     }
 
-    public func start() async throws {
+    public func start() async throws -> CaptureDirectoryStatus {
         await library.refreshLocations()
         libraryWatcher.start()
         _ = await clickTracking.start()
         do {
-            try await coordinator.start()
+            let activeDirectories = try await coordinator.start()
+            return CaptureDirectoryStatus(
+                url: captureDirectory,
+                isWatching: activeDirectories.contains(captureDirectory)
+            )
         } catch {
             await clickTracking.stop()
             throw error
         }
+    }
+
+    public func grantCaptureDirectoryAccess(_ url: URL) async throws -> CaptureDirectoryStatus {
+        let standardized = url.standardizedFileURL
+        try await bookmarks.store(standardized, key: Self.captureBookmarkKey)
+        let bookmarked = try await bookmarks.resolve(key: Self.captureBookmarkKey)
+        let watcher = InboxWatcher(
+            url: bookmarked,
+            bookmarks: bookmarks,
+            usesSecurityScope: true
+        )
+        try await coordinator.addInbox(watcher)
+        captureDirectory = bookmarked
+        return CaptureDirectoryStatus(url: bookmarked, isWatching: true)
     }
 
     public func stop() async {

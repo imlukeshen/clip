@@ -77,7 +77,7 @@ import Testing
         pasteboard: PasteboardWatcher(),
         didIngest: { record, url in await probe.record(record, url: url) }
     )
-    try await coordinator.start()
+    let activeDirectories = try await coordinator.start()
 
     let recording = systemCaptureURL.appendingPathComponent("Screen Recording.mov")
     try Data(repeating: 0x32, count: 4_096).write(to: recording)
@@ -89,6 +89,52 @@ import Testing
     #expect(await probe.count == 1)
     #expect(await probe.lastURL == recording.standardizedFileURL)
     #expect(await probe.lastRecord?.relativePath == "Media/Inbox/Screen Recording.mov")
+    #expect(Set(activeDirectories) == Set([inboxURL, systemCaptureURL]))
+}
+
+@Test func inboxCoordinatorCanAddACaptureFolderWhileRunning() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "reel-granted-capture-tests-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let inboxURL = LibraryLayout.inbox(in: root)
+    let grantedCaptureURL = root.appendingPathComponent("Granted Captures", isDirectory: true)
+    try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: grantedCaptureURL,
+        withIntermediateDirectories: true
+    )
+    let bookmarks = BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    let library = try await LibraryStore(root: root, bookmarks: bookmarks)
+    let pipeline = IngestPipeline(
+        library: library,
+        libraryRoot: root,
+        probe: CoordinatorFixtureProbe(),
+        derivatives: CoordinatorFixtureDerivatives()
+    )
+    let probe = AssociationProbe()
+    let coordinator = IngestCoordinator(
+        pipeline: pipeline,
+        inbox: InboxWatcher(url: inboxURL, bookmarks: bookmarks, extensions: ["mov"]),
+        pasteboard: PasteboardWatcher(),
+        didIngest: { record, url in await probe.record(record, url: url) }
+    )
+    try await coordinator.start()
+    try await coordinator.addInbox(
+        InboxWatcher(url: grantedCaptureURL, bookmarks: bookmarks, extensions: ["mov"])
+    )
+
+    let recording = grantedCaptureURL.appendingPathComponent("Granted Recording.mov")
+    try Data(repeating: 0x33, count: 4_096).write(to: recording)
+    for _ in 0..<40 where await probe.count == 0 {
+        try await Task.sleep(for: .milliseconds(100))
+    }
+    await coordinator.stop()
+
+    #expect(await probe.count == 1)
+    #expect(await probe.lastURL == recording.standardizedFileURL)
+    #expect(await probe.lastRecord?.relativePath == "Media/Inbox/Granted Recording.mov")
 }
 
 private actor AssociationProbe {

@@ -7,8 +7,12 @@ import LibraryStore
 public actor InboxWatcher {
     private let url: URL
     private let bookmarks: BookmarkStore
+    private let usesSecurityScope: Bool
     private let collector: InboxEventCollector
     private var source: DispatchSourceFileSystemObject?
+
+    /// The directory observed by this watcher.
+    public nonisolated let directoryURL: URL
 
     /// A stream of newly observed candidate files.
     public nonisolated let events: AsyncStream<URL>
@@ -17,14 +21,18 @@ public actor InboxWatcher {
     public init(
         url: URL,
         bookmarks: BookmarkStore,
+        usesSecurityScope: Bool = false,
         extensions: Set<String> = ["mov", "mp4", "png", "jpg", "jpeg", "heic", "tiff"]
     ) {
         let stream = AsyncStream<URL>.makeStream()
-        self.url = url.standardizedFileURL
+        let standardizedURL = url.standardizedFileURL
+        self.url = standardizedURL
         self.bookmarks = bookmarks
+        self.usesSecurityScope = usesSecurityScope
+        self.directoryURL = standardizedURL
         self.events = stream.stream
         self.collector = InboxEventCollector(
-            url: url.standardizedFileURL,
+            url: standardizedURL,
             extensions: Set(extensions.map { $0.lowercased() }),
             continuation: stream.continuation
         )
@@ -45,8 +53,15 @@ public actor InboxWatcher {
             throw CaptureError.inboxUnavailable(url.path)
         }
 
-        let descriptor = open(url.path, O_EVTONLY)
+        let didStartSecurityScope = usesSecurityScope && url.startAccessingSecurityScopedResource()
+        guard !usesSecurityScope || didStartSecurityScope else {
+            throw CaptureError.inboxUnavailable(url.path)
+        }
+
+        let watchedURL = url
+        let descriptor = open(watchedURL.path, O_EVTONLY)
         guard descriptor >= 0 else {
+            if didStartSecurityScope { url.stopAccessingSecurityScopedResource() }
             throw CaptureError.inboxUnavailable(url.path)
         }
 
@@ -69,6 +84,7 @@ public actor InboxWatcher {
         }
         source.setCancelHandler {
             close(descriptor)
+            if didStartSecurityScope { watchedURL.stopAccessingSecurityScopedResource() }
         }
         self.source = source
         source.resume()

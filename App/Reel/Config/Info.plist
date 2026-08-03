@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Reel watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Reel uses on-device speech recognition to generate captions for your clips.</string>
 </dict>

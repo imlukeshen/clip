@@ -1,3 +1,4 @@
+import AppKit
 import DesignSystem
 import LibraryStore
 import ReelAppCore
@@ -96,13 +97,44 @@ private struct WatcherStatusStrip: View {
 
     var body: some View {
         StatusStrip {
-            StatusItem(
-                model.isWatching ? "Watching" : "Opening library",
-                detail: model.isWatching ? "This session only" : "Inbox folder",
-                state: model.isWatching ? .ok : .pending
-            )
+            captureStatus
             StatusItem("Clipboard", state: model.isWatching ? .ok : .pending)
             clickTrackingStatus
+        }
+    }
+
+    @ViewBuilder private var captureStatus: some View {
+        if !model.isWatching {
+            StatusItem("Opening library", detail: "Capture folder", state: .pending)
+        } else if model.isCaptureDirectoryWatched {
+            StatusItem(
+                "Watching captures",
+                detail: "\(model.captureDirectory.lastPathComponent) · this session",
+                state: .ok
+            )
+        } else {
+            StatusItem(
+                "Capture access",
+                detail: model.captureDirectory.lastPathComponent,
+                state: .pending,
+                actionTitle: "Choose folder",
+                action: chooseCaptureFolder
+            )
+        }
+    }
+
+    private func chooseCaptureFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.directoryURL = model.captureDirectory
+        panel.message = "Choose the folder macOS uses for screenshots and screen recordings."
+        panel.prompt = "Watch Folder"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.grantCaptureDirectoryAccess(url)
         }
     }
 

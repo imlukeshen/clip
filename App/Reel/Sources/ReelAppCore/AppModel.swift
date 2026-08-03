@@ -32,6 +32,8 @@ public final class AppModel {
     public private(set) var pdfEditor: PDFEditorViewModel?
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
+    public private(set) var captureDirectory = SystemCaptureDestination.current()
+    public private(set) var isCaptureDirectoryWatched = false
     public let selection = SelectionModel()
     public let undoManager = UndoManager()
     public private(set) var pendingTrashConfirmation: TrashConfirmation?
@@ -162,8 +164,10 @@ public final class AppModel {
                     await self?.refreshAssets()
                 }
             }
-            try await runtime.start()
+            let captureStatus = try await runtime.start()
             isWatching = true
+            captureDirectory = captureStatus.url
+            isCaptureDirectoryWatched = captureStatus.isWatching
             canRevertMigration = LibraryMigration.canRevert(at: libraryRoot)
             clickTrackingState = await runtime.clickTrackingState()
             await refreshAssets()
@@ -471,6 +475,24 @@ public final class AppModel {
     public func requestClickTrackingAccess() {
         EventTapRecorder.requestAuthorization()
         refreshSystemAccess()
+    }
+
+    public func grantCaptureDirectoryAccess(_ url: URL) {
+        guard let runtime else {
+            lastMessage = "The library is still opening. Try again in a moment."
+            return
+        }
+        Task {
+            do {
+                let status = try await runtime.grantCaptureDirectoryAccess(url)
+                captureDirectory = status.url
+                isCaptureDirectoryWatched = status.isWatching
+                lastMessage = "Watching \(status.url.lastPathComponent) for new captures."
+            } catch {
+                isCaptureDirectoryWatched = false
+                lastMessage = "Reel couldn't access that capture folder."
+            }
+        }
     }
 
     public func accept(_ urls: [URL], source: IngestSource) {
