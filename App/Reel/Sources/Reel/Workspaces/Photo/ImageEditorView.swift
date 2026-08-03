@@ -10,15 +10,18 @@ struct ImageEditorView: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: ImageEditorViewModel
+    @State private var zoomLevel = 1.0
 
     var body: some View {
         VStack(spacing: 0) {
             editorHeader
             Divider().overlay(theme.palette.line)
+            toolOptionsBar
+            Divider().overlay(theme.palette.line)
             HStack(spacing: 0) {
                 toolRail
                 Divider().overlay(theme.palette.line)
-                ImageCanvasView(editor: editor)
+                ImageCanvasView(editor: editor, zoomLevel: $zoomLevel)
             }
         }
         .background(theme.palette.surfaceBase)
@@ -35,87 +38,255 @@ struct ImageEditorView: View {
     }
 
     private var editorHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 11) {
             Button {
                 model.closeImageEditor()
             } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(ReelIconButtonStyle())
-            .help("Close Image Editor")
+            .help("Back to Photos")
+
+            Image(systemName: "photo")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(theme.palette.textSecondary)
+                .frame(width: 30, height: 30)
+                .background(theme.palette.surfaceRaised)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+                )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(editor.sourceURL.deletingPathExtension().lastPathComponent)
                     .font(theme.type.label.font)
-                Text(editor.isRendering ? "Updating preview…" : "Saved locally")
-                    .font(theme.type.caption.font)
+                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(editor.isRendering ? theme.palette.click : theme.palette.success)
+                        .frame(width: 5, height: 5)
+                    Text(
+                        editor.isRendering
+                            ? "Updating preview…"
+                            : "\(editor.document.canvas.width) × \(editor.document.canvas.height) · Saved"
+                    )
+                    .font(theme.type.micro.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                }
             }
-            Spacer()
-            Button {
-                editor.undo()
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 2) {
+                Button {
+                    editor.undo()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .disabled(!editor.undoManager.canUndo)
+                .help("Undo")
+
+                Button {
+                    editor.redo()
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .disabled(!editor.undoManager.canRedo)
+                .help("Redo")
             }
-            .buttonStyle(ReelIconButtonStyle())
-            .disabled(!editor.undoManager.canUndo)
-            .help("Undo")
-            Button {
-                editor.redo()
-            } label: {
-                Image(systemName: "arrow.uturn.forward")
+
+            Button(action: export) {
+                Label("Export", systemImage: "square.and.arrow.up")
             }
-            .buttonStyle(ReelIconButtonStyle())
-            .disabled(!editor.undoManager.canRedo)
-            .help("Redo")
-            Button("Export…", action: export)
-                .buttonStyle(ReelBorderedButtonStyle())
+            .buttonStyle(ReelProminentButtonStyle())
         }
         .padding(.horizontal, 14)
-        .frame(height: 48)
+        .frame(height: 54)
         .background(theme.palette.surfacePanel)
+    }
+
+    private var toolOptionsBar: some View {
+        HStack(spacing: 10) {
+            Label(editor.activeTool.title, systemImage: editor.activeTool.symbol)
+                .font(theme.type.label.font)
+                .foregroundStyle(theme.palette.textPrimary)
+
+            Rectangle()
+                .fill(theme.palette.line)
+                .frame(width: theme.metrics.hairline, height: 18)
+
+            Text(editor.activeTool.guidance)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .lineLimit(1)
+
+            Spacer(minLength: 10)
+            toolControls
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(theme.palette.surfacePanel.opacity(0.96))
+    }
+
+    @ViewBuilder private var toolControls: some View {
+        switch editor.activeTool {
+        case .select:
+            HStack(spacing: 5) {
+                Button {
+                    editor.duplicateSelectedLayer()
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.selectedLayer == nil)
+
+                Button {
+                    editor.removeSelectedLayer()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .disabled(editor.selectedLayer == nil)
+                .help("Delete Selected Layer")
+            }
+
+        case .crop:
+            HStack(spacing: 6) {
+                Menu {
+                    Button("Freeform") { editor.stageCrop(aspectRatio: nil) }
+                    Button("Square") { editor.stageCrop(aspectRatio: 1) }
+                    Button("16:9") { editor.stageCrop(aspectRatio: 16.0 / 9.0) }
+                    Button("4:3") { editor.stageCrop(aspectRatio: 4.0 / 3.0) }
+                    Button("3:2") { editor.stageCrop(aspectRatio: 3.0 / 2.0) }
+                } label: {
+                    Label("Aspect", systemImage: "aspectratio")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Button("Reset") { editor.resetCrop() }
+                    .buttonStyle(ReelBorderedButtonStyle())
+
+                if editor.pendingCrop != nil {
+                    Button("Cancel") { editor.cancelPendingCrop() }
+                        .buttonStyle(ReelBorderedButtonStyle())
+                    Button("Apply") { editor.applyPendingCrop() }
+                        .buttonStyle(ReelProminentButtonStyle())
+                }
+            }
+
+        case .arrow, .box, .ellipse, .freehand:
+            HStack(spacing: 8) {
+                editorColorPicker
+                Text("Size")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                Slider(value: $editor.strokeWidth, in: 1...18, step: 1)
+                    .frame(width: 92)
+                Text("\(Int(editor.strokeWidth)) px")
+                    .font(theme.type.numeric.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .frame(width: 34, alignment: .trailing)
+            }
+
+        case .text, .highlight, .step:
+            HStack(spacing: 7) {
+                Text("Color")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                editorColorPicker
+            }
+
+        case .redact:
+            Picker("Style", selection: $editor.redactionMode) {
+                ForEach(ImageRedactionMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 220)
+
+        case .blur:
+            HStack(spacing: 8) {
+                Text("Strength")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                Slider(value: $editor.blurRadius, in: 4...48, step: 2)
+                    .frame(width: 110)
+                Text("\(Int(editor.blurRadius))")
+                    .font(theme.type.numeric.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .frame(width: 22, alignment: .trailing)
+            }
+
+        case .padding:
+            Button {
+                editor.addPadding()
+            } label: {
+                Label("Add Background", systemImage: "plus")
+            }
+            .buttonStyle(ReelProminentButtonStyle())
+
+        case .eyedropper:
+            EmptyView()
+        }
+    }
+
+    private var editorColorPicker: some View {
+        ColorPicker("Color", selection: activeColorBinding, supportsOpacity: false)
+            .labelsHidden()
+            .frame(width: 26)
+    }
+
+    private var activeColorBinding: Binding<Color> {
+        Binding(
+            get: { Color(editorRGBA: editor.activeColor) },
+            set: { editor.activeColor = $0.editorRGBA }
+        )
     }
 
     private var toolRail: some View {
         ScrollView {
-            VStack(spacing: 5) {
-                ForEach(ImageEditorTool.allCases) { tool in
-                    Button {
-                        editor.activate(tool)
-                    } label: {
-                        VStack(spacing: 3) {
+            VStack(spacing: 7) {
+                ForEach(Array(ImageEditorTool.grouped.enumerated()), id: \.offset) { index, group in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(theme.palette.line)
+                            .frame(width: 24, height: theme.metrics.hairline)
+                            .padding(.vertical, 1)
+                    }
+                    ForEach(group) { tool in
+                        Button {
+                            editor.activate(tool)
+                        } label: {
                             Image(systemName: tool.symbol)
                                 .font(.system(size: 15, weight: .medium))
-                            Text(tool.title)
-                                .font(.system(size: 8.5, weight: .medium))
-                                .lineLimit(1)
+                                .frame(width: 38, height: 34)
+                                .contentShape(Rectangle())
                         }
-                        .frame(width: 50, height: 43)
-                        .contentShape(Rectangle())
+                        .buttonStyle(ReelIconButtonStyle(isActive: editor.activeTool == tool))
+                        .overlay(alignment: .leading) {
+                            if editor.activeTool == tool {
+                                Capsule()
+                                    .fill(theme.palette.accent)
+                                    .frame(width: 2, height: 18)
+                                    .offset(x: -4)
+                            }
+                        }
+                        .help("\(tool.title) — \(tool.guidance)")
+                        .accessibilityLabel(tool.title)
                     }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .foregroundStyle(
-                        editor.activeTool == tool
-                            ? theme.palette.accent : theme.palette.textSecondary
-                    )
-                    .background(
-                        editor.activeTool == tool
-                            ? theme.palette.accentDim : Color.clear
-                    )
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: theme.metrics.radius.control,
-                            style: .continuous
-                        )
-                    )
-                    .animation(.easeOut(duration: 0.18), value: editor.activeTool)
-                    .help(tool.title)
                 }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 5)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 62)
+        .scrollIndicators(.never)
+        .frame(width: 56)
         .background(theme.palette.surfacePanel)
     }
 
@@ -140,109 +311,546 @@ struct ImageEditorView: View {
 private struct ImageCanvasView: View {
     @Environment(\.theme) private var theme
     @Bindable var editor: ImageEditorViewModel
-    @State private var gestureStart: CGPoint?
-    @State private var gestureCurrent: CGPoint?
+    @Binding var zoomLevel: Double
+    @State private var draftPoints: [CGPoint] = []
+    @State private var movingLayerID: LayerID?
+    @State private var selectionTranslation = CGPoint.zero
+    @State private var magnificationStart = 1.0
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                Color.black.opacity(0.22)
-                if let rendered = editor.renderedImage {
-                    let rect = fittedRect(
-                        imageSize: CGSize(width: rendered.width, height: rendered.height),
-                        in: proxy.size
-                    )
-                    Image(decorative: rendered, scale: 1)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .overlay(alignment: .topLeading) {
-                            if let draft = draftRect(in: rect) {
-                                Rectangle()
-                                    .fill(theme.palette.accentDim)
-                                    .stroke(
-                                        theme.palette.accent,
-                                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
-                                    )
-                                    .frame(width: draft.width, height: draft.height)
-                                    .offset(x: draft.minX - rect.minX, y: draft.minY - rect.minY)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                    if editor.isRendering {
-                        ProgressView().controlSize(.small)
+            if let rendered = editor.renderedImage {
+                let fit = fittedSize(
+                    imageSize: CGSize(width: rendered.width, height: rendered.height),
+                    in: proxy.size
+                )
+                let artboardSize = CGSize(
+                    width: fit.width * zoomLevel,
+                    height: fit.height * zoomLevel
+                )
+                let workspaceSize = CGSize(
+                    width: max(proxy.size.width, artboardSize.width + 128),
+                    height: max(proxy.size.height, artboardSize.height + 128)
+                )
+
+                ScrollView([.horizontal, .vertical]) {
+                    ZStack {
+                        CanvasBackdrop()
+                        artboard(rendered, size: artboardSize)
+                            .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
                     }
-                } else {
-                    ProgressView("Rendering image…")
+                    .frame(width: workspaceSize.width, height: workspaceSize.height)
+                }
+                .scrollIndicators(.never)
+                .background(theme.palette.surfaceSunken)
+                .simultaneousGesture(magnificationGesture)
+                .overlay(alignment: .topTrailing) {
+                    canvasInfoBadge
+                        .padding(12)
+                }
+                .overlay(alignment: .bottom) {
+                    zoomControls
+                        .padding(.bottom, 14)
+                }
+            } else {
+                ZStack {
+                    theme.palette.surfaceSunken
+                    ProgressView("Preparing canvas…")
+                        .controlSize(.small)
+                        .foregroundStyle(theme.palette.textSecondary)
                 }
             }
-            .contentShape(Rectangle())
-            .gesture(drawGesture(in: proxy.size))
+        }
+        .onDeleteCommand { editor.removeSelectedLayer() }
+        .onExitCommand {
+            if editor.pendingCrop != nil {
+                editor.cancelPendingCrop()
+            } else {
+                editor.activate(.select)
+            }
+        }
+        .onMoveCommand { direction in
+            guard editor.activeTool == .select else { return }
+            let amount: CGFloat = 0.005
+            switch direction {
+            case .left: editor.moveSelectedLayer(by: CGPoint(x: -amount, y: 0))
+            case .right: editor.moveSelectedLayer(by: CGPoint(x: amount, y: 0))
+            case .up: editor.moveSelectedLayer(by: CGPoint(x: 0, y: -amount))
+            case .down: editor.moveSelectedLayer(by: CGPoint(x: 0, y: amount))
+            @unknown default: break
+            }
         }
     }
 
-    private func drawGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 2)
+    private func artboard(_ image: CGImage, size: CGSize) -> some View {
+        ZStack {
+            Checkerboard()
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .interpolation(.high)
+
+            if editor.activeTool == .crop, let crop = editor.pendingCrop {
+                CropOverlay(crop: crop)
+            } else {
+                draftOverlay
+                selectionOverlay
+            }
+
+            if editor.isRendering {
+                Color.black.opacity(0.08)
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(9)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.38), radius: 26, y: 12)
+        .contentShape(Rectangle())
+        .gesture(interactionGesture(in: size))
+    }
+
+    @ViewBuilder private var draftOverlay: some View {
+        if !draftPoints.isEmpty {
+            GeometryReader { proxy in
+                Canvas { context, size in
+                    let color = Color(editorRGBA: editor.activeColor).opacity(0.9)
+                    let rect = pixelBounds(for: draftPoints, in: size)
+                    switch editor.activeTool {
+                    case .freehand, .arrow:
+                        var path = Path()
+                        if let first = draftPoints.first {
+                            path.move(to: pixelPoint(first, in: size))
+                            for point in draftPoints.dropFirst() {
+                                path.addLine(to: pixelPoint(point, in: size))
+                            }
+                            context.stroke(
+                                path,
+                                with: .color(color),
+                                style: StrokeStyle(
+                                    lineWidth: editor.strokeWidth,
+                                    lineCap: .round,
+                                    lineJoin: .round
+                                )
+                            )
+                        }
+                    case .ellipse:
+                        context.stroke(
+                            Path(ellipseIn: rect),
+                            with: .color(color),
+                            lineWidth: editor.strokeWidth
+                        )
+                    case .step:
+                        let center = draftPoints.last.map { pixelPoint($0, in: size) } ?? .zero
+                        let badge = CGRect(
+                            x: center.x - 15, y: center.y - 15, width: 30, height: 30)
+                        context.fill(Path(ellipseIn: badge), with: .color(color))
+                    case .highlight:
+                        context.fill(Path(rect), with: .color(color.opacity(0.3)))
+                    case .redact, .blur:
+                        context.fill(Path(rect), with: .color(.black.opacity(0.28)))
+                        context.stroke(
+                            Path(rect),
+                            with: .color(.white.opacity(0.72)),
+                            style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                        )
+                    default:
+                        context.stroke(
+                            Path(rect),
+                            with: .color(color),
+                            lineWidth: max(editor.strokeWidth, 1)
+                        )
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder private var selectionOverlay: some View {
+        if editor.activeTool == .select, let layer = editor.selectedLayer {
+            GeometryReader { proxy in
+                let normalized = layer.editorBounds(canvas: editor.document.canvas)
+                let rect = CGRect(
+                    x: normalized.minX * proxy.size.width + selectionTranslation.x
+                        * proxy.size.width,
+                    y: normalized.minY * proxy.size.height + selectionTranslation.y
+                        * proxy.size.height,
+                    width: max(normalized.width * proxy.size.width, 12),
+                    height: max(normalized.height * proxy.size.height, 12)
+                ).insetBy(dx: -4, dy: -4)
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(
+                            theme.palette.accent,
+                            style: StrokeStyle(lineWidth: 1.25, dash: [5, 3])
+                        )
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                    ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
+                        Circle()
+                            .fill(theme.palette.surfacePanel)
+                            .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1.25))
+                            .frame(width: 7, height: 7)
+                            .position(point)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func interactionGesture(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
-                guard drawsLayer else { return }
-                if gestureStart == nil { gestureStart = value.startLocation }
-                gestureCurrent = value.location
+                let start = normalized(value.startLocation, in: size)
+                let current = normalized(value.location, in: size)
+                switch editor.activeTool {
+                case .select:
+                    if movingLayerID == nil {
+                        editor.selectLayer(at: start)
+                        movingLayerID = editor.selectedLayerID
+                    }
+                    selectionTranslation = CGPoint(
+                        x: value.translation.width / size.width,
+                        y: value.translation.height / size.height
+                    )
+                case .crop:
+                    editor.stageCrop(normalizedRect(from: start, to: current))
+                case .freehand:
+                    if draftPoints.isEmpty { draftPoints = [start] }
+                    if let last = draftPoints.last,
+                        hypot(
+                            (current.x - last.x) * size.width,
+                            (current.y - last.y) * size.height
+                        ) > 1.5
+                    {
+                        draftPoints.append(current)
+                    }
+                case .padding, .eyedropper:
+                    break
+                default:
+                    draftPoints = [start, current]
+                }
             }
             .onEnded { value in
                 defer {
-                    gestureStart = nil
-                    gestureCurrent = nil
+                    draftPoints = []
+                    movingLayerID = nil
+                    selectionTranslation = .zero
                 }
-                guard drawsLayer, let rendered = editor.renderedImage else { return }
-                let rect = fittedRect(
-                    imageSize: CGSize(width: rendered.width, height: rendered.height),
-                    in: size
-                )
-                let start = normalized(value.startLocation, in: rect)
-                let end = normalized(value.location, in: rect)
-                editor.commitGesture(from: start, to: end)
+                let start = normalized(value.startLocation, in: size)
+                let end = normalized(value.location, in: size)
+                switch editor.activeTool {
+                case .select:
+                    guard movingLayerID != nil,
+                        hypot(value.translation.width, value.translation.height) > 2
+                    else { return }
+                    editor.moveSelectedLayer(
+                        by: CGPoint(
+                            x: value.translation.width / size.width,
+                            y: value.translation.height / size.height
+                        )
+                    )
+                case .crop, .padding:
+                    break
+                case .eyedropper:
+                    editor.sampleColor(at: end)
+                case .freehand:
+                    editor.commitGesture(points: draftPoints + [end])
+                default:
+                    editor.commitGesture(points: [start, end])
+                }
             }
     }
 
-    private var drawsLayer: Bool {
-        ![.select, .crop, .padding, .eyedropper].contains(editor.activeTool)
+    private var magnificationGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                zoomLevel = min(max(magnificationStart * value, 0.25), 4)
+            }
+            .onEnded { _ in magnificationStart = zoomLevel }
     }
 
-    private func fittedRect(imageSize: CGSize, in container: CGSize) -> CGRect {
-        let scale =
-            min(container.width / imageSize.width, container.height / imageSize.height) * 0.9
-        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-        return CGRect(
-            x: (container.width - size.width) / 2,
-            y: (container.height - size.height) / 2,
-            width: size.width,
-            height: size.height
+    private var canvasInfoBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+            Text("\(editor.document.canvas.width) × \(editor.document.canvas.height)")
+        }
+        .font(theme.type.numeric.font)
+        .foregroundStyle(theme.palette.textSecondary)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 9)
+        .background(theme.palette.surfacePanel.opacity(0.94))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule().strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+        }
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: 5) {
+            Button {
+                setZoom(zoomLevel - 0.25)
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+
+            Slider(value: $zoomLevel, in: 0.25...4)
+                .frame(width: 112)
+                .onChange(of: zoomLevel) { _, value in magnificationStart = value }
+
+            Button {
+                setZoom(zoomLevel + 0.25)
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+
+            Text("\(Int((zoomLevel * 100).rounded()))%")
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .frame(width: 42, alignment: .trailing)
+
+            Button("Fit") { setZoom(1) }
+                .buttonStyle(ReelPlainButtonStyle())
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .padding(.horizontal, 4)
+        }
+        .padding(5)
+        .background(theme.palette.surfacePanel.opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+    }
+
+    private func setZoom(_ value: Double) {
+        withAnimation(.smooth(duration: 0.2)) {
+            zoomLevel = min(max(value, 0.25), 4)
+            magnificationStart = zoomLevel
+        }
+    }
+
+    private func fittedSize(imageSize: CGSize, in container: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let available = CGSize(
+            width: max(container.width - 112, 120),
+            height: max(container.height - 112, 120)
         )
+        let scale = min(available.width / imageSize.width, available.height / imageSize.height)
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
     }
 
-    private func normalized(_ point: CGPoint, in rect: CGRect) -> CGPoint {
+    private func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
         CGPoint(
-            x: min(max((point.x - rect.minX) / rect.width, 0), 1),
-            y: min(max((point.y - rect.minY) / rect.height, 0), 1)
+            x: min(max(point.x / size.width, 0), 1),
+            y: min(max(point.y / size.height, 0), 1)
         )
     }
 
-    private func draftRect(in imageRect: CGRect) -> CGRect? {
-        guard let start = gestureStart, let current = gestureCurrent else { return nil }
-        let clippedStart = CGPoint(
-            x: min(max(start.x, imageRect.minX), imageRect.maxX),
-            y: min(max(start.y, imageRect.minY), imageRect.maxY)
+    private func normalizedRect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
         )
-        let clippedCurrent = CGPoint(
-            x: min(max(current.x, imageRect.minX), imageRect.maxX),
-            y: min(max(current.y, imageRect.minY), imageRect.maxY)
-        )
-        return CGRect(
-            x: min(clippedStart.x, clippedCurrent.x),
-            y: min(clippedStart.y, clippedCurrent.y),
-            width: abs(clippedCurrent.x - clippedStart.x),
-            height: abs(clippedCurrent.y - clippedStart.y)
+    }
+
+    private func pixelPoint(_ point: CGPoint, in size: CGSize) -> CGPoint {
+        CGPoint(x: point.x * size.width, y: point.y * size.height)
+    }
+
+    private func pixelBounds(for points: [CGPoint], in size: CGSize) -> CGRect {
+        guard let first = points.first else { return .zero }
+        return points.dropFirst().reduce(CGRect(origin: pixelPoint(first, in: size), size: .zero)) {
+            result, point in
+            result.union(CGRect(origin: pixelPoint(point, in: size), size: .zero))
+        }
+    }
+}
+
+private struct CanvasBackdrop: View {
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Canvas { context, size in
+            let spacing: CGFloat = 24
+            for x in stride(from: spacing / 2, through: size.width, by: spacing) {
+                for y in stride(from: spacing / 2, through: size.height, by: spacing) {
+                    let dot = CGRect(x: x - 0.65, y: y - 0.65, width: 1.3, height: 1.3)
+                    context.fill(Path(ellipseIn: dot), with: .color(theme.palette.lineStrong))
+                }
+            }
+        }
+        .background(theme.palette.surfaceSunken)
+    }
+}
+
+private struct Checkerboard: View {
+    var body: some View {
+        Canvas { context, size in
+            context.fill(
+                Path(CGRect(origin: .zero, size: size)), with: .color(.white.opacity(0.12)))
+            let cell: CGFloat = 12
+            for row in 0...Int(ceil(size.height / cell)) {
+                for column in 0...Int(ceil(size.width / cell))
+                where (row + column).isMultiple(of: 2) {
+                    let rect = CGRect(
+                        x: CGFloat(column) * cell,
+                        y: CGFloat(row) * cell,
+                        width: cell,
+                        height: cell
+                    )
+                    context.fill(Path(rect), with: .color(.black.opacity(0.08)))
+                }
+            }
+        }
+    }
+}
+
+private struct CropOverlay: View {
+    @Environment(\.theme) private var theme
+    let crop: CGRect
+
+    var body: some View {
+        GeometryReader { proxy in
+            let rect = CGRect(
+                x: crop.minX * proxy.size.width,
+                y: crop.minY * proxy.size.height,
+                width: crop.width * proxy.size.width,
+                height: crop.height * proxy.size.height
+            )
+            Canvas { context, size in
+                var outside = Path()
+                outside.addRect(CGRect(origin: .zero, size: size))
+                outside.addRect(rect)
+                context.fill(
+                    outside,
+                    with: .color(.black.opacity(0.52)),
+                    style: FillStyle(eoFill: true)
+                )
+                context.stroke(Path(rect), with: .color(.white.opacity(0.92)), lineWidth: 1)
+                var guides = Path()
+                guides.move(to: CGPoint(x: rect.minX + rect.width / 3, y: rect.minY))
+                guides.addLine(to: CGPoint(x: rect.minX + rect.width / 3, y: rect.maxY))
+                guides.move(to: CGPoint(x: rect.minX + rect.width * 2 / 3, y: rect.minY))
+                guides.addLine(to: CGPoint(x: rect.minX + rect.width * 2 / 3, y: rect.maxY))
+                guides.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height / 3))
+                guides.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height / 3))
+                guides.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 2 / 3))
+                guides.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 2 / 3))
+                context.stroke(guides, with: .color(.white.opacity(0.35)), lineWidth: 0.5)
+            }
+            ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
+                Circle()
+                    .fill(.white)
+                    .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1))
+                    .frame(width: 8, height: 8)
+                    .position(point)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+extension ImageEditorTool {
+    fileprivate static let grouped: [[ImageEditorTool]] = [
+        [.select, .crop],
+        [.arrow, .box, .ellipse, .freehand, .text, .highlight, .step],
+        [.redact, .blur],
+        [.padding, .eyedropper],
+    ]
+
+    fileprivate var guidance: String {
+        switch self {
+        case .select: "Click a layer to select it, then drag to move it."
+        case .crop: "Drag a crop area or choose an aspect ratio, then Apply."
+        case .arrow: "Drag from the start point toward what you want to call out."
+        case .box: "Drag around an area to draw a box."
+        case .ellipse: "Drag around an area to draw an ellipse."
+        case .freehand: "Draw directly on the screenshot."
+        case .text: "Click or drag to add text, then edit it in the inspector."
+        case .highlight: "Drag over an area to highlight it."
+        case .step: "Click once to place the next numbered step."
+        case .redact: "Drag over sensitive content to permanently flatten it on export."
+        case .blur: "Drag over an area to blur it."
+        case .padding: "Add a polished background frame around the screenshot."
+        case .eyedropper: "Click the screenshot to sample a color."
+        }
+    }
+}
+
+extension Layer {
+    fileprivate func editorBounds(canvas: ImageCanvas) -> CGRect {
+        let bounds: CGRect
+        switch self {
+        case .annotation(let value): bounds = value.bounds
+        case .text(let value): bounds = value.frame
+        case .highlight(let value): bounds = value.regions.editorUnion
+        case .redaction(let value): bounds = value.regions.editorUnion
+        case .blur(let value): bounds = value.regions.editorUnion
+        case .padding: bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        case .step(let value):
+            let diameter = CGFloat(value.diameter) / CGFloat(min(canvas.width, canvas.height))
+            bounds = CGRect(
+                x: value.position.x - diameter / 2,
+                y: value.position.y - diameter / 2,
+                width: diameter,
+                height: diameter
+            )
+        }
+        return bounds.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+    }
+}
+
+extension Array where Element == CGRect {
+    fileprivate var editorUnion: CGRect {
+        guard let first else { return .zero }
+        return dropFirst().reduce(first) { $0.union($1) }
+    }
+}
+
+extension CGRect {
+    fileprivate var handlePoints: [CGPoint] {
+        [
+            CGPoint(x: minX, y: minY),
+            CGPoint(x: maxX, y: minY),
+            CGPoint(x: minX, y: maxY),
+            CGPoint(x: maxX, y: maxY),
+        ]
+    }
+}
+
+extension Color {
+    fileprivate init(editorRGBA color: RGBA) {
+        self.init(.sRGB, red: color.r, green: color.g, blue: color.b, opacity: color.a)
+    }
+
+    fileprivate var editorRGBA: RGBA {
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else {
+            return RGBA(r: 1, g: 0.29, b: 0.25, a: 1)
+        }
+        return RGBA(
+            r: Double(color.redComponent),
+            g: Double(color.greenComponent),
+            b: Double(color.blueComponent),
+            a: Double(color.alphaComponent)
         )
     }
 }

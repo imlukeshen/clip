@@ -840,6 +840,7 @@ public final class AppModel {
                 let imageEditor = ImageEditorViewModel(
                     document: document,
                     sourceURL: sourceURL,
+                    sourceCanvas: ImageCanvas(width: width, height: height),
                     persisting: { document in
                         try await runtime.saveImageDocument(document)
                     }
