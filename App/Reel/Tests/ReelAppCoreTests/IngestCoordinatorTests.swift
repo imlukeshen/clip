@@ -6,7 +6,7 @@ import Testing
 
 @testable import ReelAppCore
 
-@Test func inboxCoordinatorRunsTheSharedPostIngestAssociationPath() async throws {
+@Test func inboxCoordinatorImportsOnlyCapturesFromTheActiveSession() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "reel-coordinator-tests-\(UUID().uuidString)",
         isDirectory: true
@@ -30,6 +30,8 @@ import Testing
         pasteboard: PasteboardWatcher(),
         didIngest: { record, url in await probe.record(record, url: url) }
     )
+    let staleSource = inboxURL.appendingPathComponent("Before Launch.mov")
+    try Data(repeating: 0x30, count: 4_096).write(to: staleSource)
     try await coordinator.start()
 
     let source = inboxURL.appendingPathComponent("System Recording.mov")

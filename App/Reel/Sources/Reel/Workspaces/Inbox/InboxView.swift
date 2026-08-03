@@ -13,7 +13,7 @@ struct InboxView: View {
                 title: model.isSearching ? "Search" : model.currentFolderName,
                 subtitle: model.isSearching
                     ? "\(model.searchResultDescription) matching “\(model.searchQuery)”."
-                    : "Capture with the screenshot shortcuts you already have set. Files land here on their own."
+                    : "Captures are added automatically while Reel is open. Pre-session files aren’t imported."
             )
             if model.isSearching {
                 searchResults
@@ -98,7 +98,7 @@ private struct WatcherStatusStrip: View {
         StatusStrip {
             StatusItem(
                 model.isWatching ? "Watching" : "Opening library",
-                detail: "Inbox folder",
+                detail: model.isWatching ? "This session only" : "Inbox folder",
                 state: model.isWatching ? .ok : .pending
             )
             StatusItem("Clipboard", state: model.isWatching ? .ok : .pending)

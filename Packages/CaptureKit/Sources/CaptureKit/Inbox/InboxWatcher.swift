@@ -34,7 +34,11 @@ public actor InboxWatcher {
         source?.cancel()
     }
 
-    /// Starts watching and performs an initial catch-up scan.
+    /// Starts watching from a fresh session baseline.
+    ///
+    /// Files already present are deliberately ignored. Only captures that arrive while the
+    /// watcher is active are emitted, so reopening the app never imports captures made while it
+    /// was closed.
     public func start() async throws {
         guard source == nil else { return }
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -68,7 +72,7 @@ public actor InboxWatcher {
         }
         self.source = source
         source.resume()
-        await collector.scan()
+        await collector.prime()
         _ = bookmarks
     }
 
@@ -76,6 +80,7 @@ public actor InboxWatcher {
     public func stop() async {
         source?.cancel()
         source = nil
+        await collector.deactivate()
     }
 }
 
@@ -84,6 +89,7 @@ private actor InboxEventCollector {
     private let extensions: Set<String>
     private let continuation: AsyncStream<URL>.Continuation
     private var seen: Set<URL> = []
+    private var isActive = false
 
     init(
         url: URL,
@@ -99,7 +105,24 @@ private actor InboxEventCollector {
         continuation.finish()
     }
 
+    func prime() {
+        seen.formUnion(candidates())
+        isActive = true
+    }
+
     func scan() {
+        guard isActive else { return }
+        let candidates = candidates()
+        for candidate in candidates where seen.insert(candidate).inserted {
+            continuation.yield(candidate)
+        }
+    }
+
+    func deactivate() {
+        isActive = false
+    }
+
+    private func candidates() -> [URL] {
         let files: [URL]
         do {
             files = try FileManager.default.contentsOfDirectory(
@@ -108,19 +131,18 @@ private actor InboxEventCollector {
                 options: [.skipsHiddenFiles]
             )
         } catch {
-            return
+            return []
         }
 
-        let candidates = files.filter { candidate in
+        return files.compactMap { candidate in
             let name = candidate.lastPathComponent
-            return !name.hasPrefix(".")
-                && !name.hasSuffix(".download")
-                && !name.hasSuffix(".tmp")
-                && extensions.contains(candidate.pathExtension.lowercased())
+            guard
+                !name.hasPrefix(".")
+                    && !name.hasSuffix(".download")
+                    && !name.hasSuffix(".tmp")
+                    && extensions.contains(candidate.pathExtension.lowercased())
+            else { return nil }
+            return candidate.standardizedFileURL
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-        for candidate in candidates where seen.insert(candidate.standardizedFileURL).inserted {
-            continuation.yield(candidate.standardizedFileURL)
-        }
     }
 }
