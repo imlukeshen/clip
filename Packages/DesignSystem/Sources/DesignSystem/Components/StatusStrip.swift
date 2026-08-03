@@ -64,7 +64,7 @@ public struct StatusItem: View {
             }
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
             }

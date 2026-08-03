@@ -41,7 +41,7 @@ struct ImageEditorView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelIconButtonStyle())
             .help("Close Image Editor")
 
             VStack(alignment: .leading, spacing: 2) {
@@ -57,7 +57,7 @@ struct ImageEditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .help("Undo")
             Button {
@@ -65,7 +65,7 @@ struct ImageEditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.forward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .help("Redo")
             Button("Export…", action: export)
@@ -93,7 +93,7 @@ struct ImageEditorView: View {
                         .frame(width: 50, height: 43)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                     .foregroundStyle(
                         editor.activeTool == tool
                             ? theme.palette.accent : theme.palette.textSecondary
@@ -103,6 +103,7 @@ struct ImageEditorView: View {
                             ? theme.palette.accentDim : Color.clear
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .animation(.easeOut(duration: 0.18), value: editor.activeTool)
                     .help(tool.title)
                 }
             }

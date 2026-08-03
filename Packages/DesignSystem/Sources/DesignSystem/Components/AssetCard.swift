@@ -107,7 +107,7 @@ public struct AssetCard<Thumbnail: View>: View {
                     .padding(9)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
                     openAction?()
@@ -115,7 +115,7 @@ public struct AssetCard<Thumbnail: View>: View {
             )
             if case .failed = state, let retry {
                 Button("Retry", action: retry)
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelIconButtonStyle())
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
                     .padding(.horizontal, 9)

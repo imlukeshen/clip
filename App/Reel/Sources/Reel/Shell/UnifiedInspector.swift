@@ -116,7 +116,7 @@ private struct PDFLayerInspector: View {
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 5))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(ReelPlainButtonStyle())
                         }
                     }
                 }
@@ -149,7 +149,7 @@ private struct PDFLayerInspector: View {
             }
             if editor.selectedLayer != nil {
                 Button("Delete edit", role: .destructive) { editor.removeSelectedLayer() }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(ReelPlainButtonStyle())
             }
             Divider().overlay(theme.palette.line)
             Text("Fonts on source page").font(theme.type.label.font)
@@ -247,7 +247,7 @@ private struct ImageLayerInspector: View {
                     Spacer()
                     Button("Delete", role: .destructive) { editor.removeLayer(id) }
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(ReelPlainButtonStyle())
                 Text("All image edits are non-destructive. The source asset remains unchanged.")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
@@ -276,7 +276,7 @@ private struct ImageLayerInspector: View {
             Button("Generate alt text") {
                 editor.runImageCommand("generateAltText")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             if let altText = editor.altText {
                 Text(altText)
                     .font(theme.type.caption.font)
@@ -296,7 +296,7 @@ private struct ImageLayerInspector: View {
                 Image(systemName: layer.isVisible ? "eye" : "eye.slash")
                     .frame(width: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             Button {
                 editor.selectLayer(layer.id)
             } label: {
@@ -305,14 +305,14 @@ private struct ImageLayerInspector: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             Button {
                 editor.toggleLock(layer.id)
             } label: {
                 Image(systemName: layer.isLocked ? "lock.fill" : "lock.open")
                     .frame(width: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
         }
         .font(theme.type.caption.font)
         .padding(.horizontal, 7)

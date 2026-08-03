@@ -70,7 +70,7 @@ struct InboxView: View {
                                     )
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(ReelPlainButtonStyle())
                     }
                 }
             }

@@ -42,7 +42,7 @@ struct ShortcutRow: View {
                     Button("Re-detect") {
                         model.refreshShortcuts()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
                 }

@@ -57,7 +57,9 @@ public struct WorkspaceTab: View {
                     .frame(height: 1.5)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReelPlainButtonStyle())
+        .animation(.easeOut(duration: 0.18), value: isActive)
+        .animation(.easeOut(duration: 0.18), value: isHovered)
         .onHover { isHovered = $0 }
         .accessibilityIdentifier("workspace-tab-\(title.lowercased())")
         .accessibilityValue(isActive ? "selected" : "unselected")

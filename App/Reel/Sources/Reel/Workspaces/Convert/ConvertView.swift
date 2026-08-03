@@ -44,7 +44,7 @@ struct ConvertView: View {
                     Button(model.isConverting ? "Converting…" : "Convert") {
                         model.convertQueuedItems()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ReelProminentButtonStyle())
                     .tint(theme.palette.accent)
                     .disabled(model.isConverting || !model.hasConvertibleItems)
                 }
@@ -135,7 +135,7 @@ private struct ConversionQueueRow: View {
                 Image(systemName: "xmark")
                     .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .foregroundStyle(theme.palette.textTertiary)
             .disabled(isConverting)
             .accessibilityLabel("Remove \(item.asset.displayName)")

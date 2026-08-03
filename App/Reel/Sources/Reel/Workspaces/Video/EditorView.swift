@@ -68,7 +68,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .help("Back to video library")
 
             Text(editor.document.name)
@@ -97,7 +97,7 @@ struct EditorView: View {
             } label: {
                 Label(targetedTrackName, systemImage: "scope")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .help("Cycle targeted video track")
 
             if editor.isExporting {
@@ -105,14 +105,14 @@ struct EditorView: View {
                     .progressViewStyle(.linear)
                     .frame(width: 80)
                 Button("Cancel") { editor.cancelExport() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
             } else {
                 Button {
                     showsExportSheet = true
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .fixedSize()
             }
 
@@ -121,7 +121,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             .help("Undo")
@@ -131,7 +131,7 @@ struct EditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.forward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
@@ -218,14 +218,14 @@ struct EditorView: View {
                 } label: {
                     Image(systemName: editor.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .keyboardShortcut(.space, modifiers: [])
                 Button {
                     editor.shuttleBackward()
                 } label: {
                     Image(systemName: "backward.fill")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .keyboardShortcut("j", modifiers: [])
                 Button {
                     editor.shuttlePause()
@@ -233,21 +233,21 @@ struct EditorView: View {
                     Image(systemName: "pause.fill")
                         .frame(width: 18)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .keyboardShortcut("k", modifiers: [])
                 Button {
                     editor.shuttleForward()
                 } label: {
                     Image(systemName: "forward.fill")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .keyboardShortcut("l", modifiers: [])
                 Button("I") { editor.setInPoint() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                     .keyboardShortcut("i", modifiers: [])
                     .help("Set In point")
                 Button("O") { editor.setOutPoint() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                     .keyboardShortcut("o", modifiers: [])
                     .help("Set Out point")
                 Spacer()
@@ -481,7 +481,6 @@ private struct SavedExportPreference: Codable {
 }
 
 private struct ToolButton: View {
-    @Environment(\.theme) private var theme
     let systemName: String
     let help: String
     var isActive = false
@@ -492,11 +491,8 @@ private struct ToolButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .frame(width: 30, height: 28)
-                .background(isActive ? theme.palette.accentDim : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(isActive ? theme.palette.accent : theme.palette.textSecondary)
+        .buttonStyle(ReelIconButtonStyle(isActive: isActive))
         .disabled(isDisabled)
         .help(help)
     }
@@ -586,7 +582,7 @@ struct EditorInspector: View {
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .foregroundStyle(theme.palette.accent)
             .disabled(isSendDisabled)
         }
@@ -747,7 +743,7 @@ struct EditorInspector: View {
                                 } label: {
                                     Image(systemName: "diamond")
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(ReelPlainButtonStyle())
                                 .foregroundStyle(theme.palette.accent)
                                 .help("Add keyframe at playhead")
                             }
@@ -756,7 +752,7 @@ struct EditorInspector: View {
                             } label: {
                                 Image(systemName: "trash")
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(ReelPlainButtonStyle())
                             .foregroundStyle(theme.palette.textTertiary)
                         }
                     }
@@ -826,7 +822,7 @@ private struct PendingActionCard: View {
                 Button("Apply") { model.approveAssistantAction(action.id) }
                     .buttonStyle(ReelBorderedButtonStyle())
                 Button("Skip") { model.rejectAssistantAction(action.id) }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
             }
         }
         .padding(9)
@@ -847,7 +843,7 @@ private struct EffectButton: View {
 
     var body: some View {
         Button(title, action: action)
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .font(theme.type.micro.font)
             .foregroundStyle(theme.palette.textSecondary)
             .padding(.vertical, 4)
@@ -876,7 +872,7 @@ private struct KeyframeSlider: View {
                 Button(action: addKeyframe) {
                     Image(systemName: hasKeyframe ? "diamond.fill" : "diamond")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .foregroundStyle(theme.palette.accent)
                 .help("Set keyframe at playhead")
             }

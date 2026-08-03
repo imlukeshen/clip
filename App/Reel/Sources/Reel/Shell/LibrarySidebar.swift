@@ -53,7 +53,7 @@ struct LibrarySidebar: View {
                         } label: {
                             Image(systemName: "folder.badge.plus")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(ReelPlainButtonStyle())
                         .help("New folder")
                     }
                     .padding(.top, 18)
@@ -160,9 +160,10 @@ struct LibrarySidebar: View {
                         .padding(.leading, 2)
                 }
             }
+            .animation(.easeOut(duration: 0.18), value: selected)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReelPlainButtonStyle())
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
@@ -192,7 +193,7 @@ struct LibrarySidebar: View {
             .frame(height: 38)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReelPlainButtonStyle())
     }
 }
 
@@ -225,7 +226,7 @@ private struct FolderTreeRow: View {
                         .font(.system(size: 9, weight: .semibold))
                         .frame(width: 13, height: 26)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ReelPlainButtonStyle())
                 } else {
                     Color.clear.frame(width: 13, height: 26)
                 }
@@ -254,9 +255,11 @@ private struct FolderTreeRow: View {
                             : (isHovered ? theme.palette.surfaceRaised : Color.clear)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .animation(.easeOut(duration: 0.18), value: isSelected)
+                    .animation(.easeOut(duration: 0.16), value: isHovered)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ReelPlainButtonStyle())
                 .onHover { isHovered = $0 }
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }

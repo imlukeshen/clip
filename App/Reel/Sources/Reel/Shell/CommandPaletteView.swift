@@ -55,7 +55,7 @@ struct CommandPaletteView: View {
                             .frame(height: 46)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(ReelPlainButtonStyle())
                     }
                 }
                 .padding(6)

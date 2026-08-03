@@ -97,7 +97,7 @@ private struct PDFEditorView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .help("Back to PDF library")
             Text(editor.document.title)
                 .font(theme.type.label.font)
@@ -125,7 +125,7 @@ private struct PDFEditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             Button {
@@ -133,7 +133,7 @@ private struct PDFEditorView: View {
             } label: {
                 Image(systemName: "arrow.uturn.forward")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
@@ -171,7 +171,7 @@ private struct PDFEditorView: View {
                     Image(systemName: "trash")
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .padding(.bottom, 10)
         }
         .frame(width: 124)
@@ -323,7 +323,7 @@ private struct PDFPageThumbnail: View {
                     .foregroundStyle(theme.palette.textSecondary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReelPlainButtonStyle())
     }
 
     @ViewBuilder private var preview: some View {
@@ -338,7 +338,6 @@ private struct PDFPageThumbnail: View {
 }
 
 private struct PDFToolButton: View {
-    @Environment(\.theme) private var theme
     let systemName: String
     let help: String
     var isActive = false
@@ -348,11 +347,8 @@ private struct PDFToolButton: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .frame(width: 30, height: 28)
-                .background(isActive ? theme.palette.accentDim : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(isActive ? theme.palette.accent : theme.palette.textSecondary)
+        .buttonStyle(ReelIconButtonStyle(isActive: isActive))
         .help(help)
     }
 }

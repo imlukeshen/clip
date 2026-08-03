@@ -55,7 +55,7 @@ struct AssetGrid: View {
             } label: {
                 Image(systemName: "checkmark.circle")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ReelPlainButtonStyle())
             .disabled(model.selection.selected.count == assets.count)
             .help("Select all")
             Divider().frame(height: 18)
@@ -355,7 +355,7 @@ private struct AssetListRow: View {
             .background(rowBackground)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ReelPlainButtonStyle())
         .simultaneousGesture(
             TapGesture(count: 2).onEnded {
                 model.activateAsset(asset.id)
