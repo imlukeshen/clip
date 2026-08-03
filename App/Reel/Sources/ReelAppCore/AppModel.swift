@@ -528,7 +528,7 @@ public final class AppModel {
 
     public func activateAsset(_ id: AssetID) {
         guard let asset = assets.first(where: { $0.id == id }) else { return }
-        selection.click(id)
+        selection.selectOnly(id)
         guard !asset.isMissing else {
             lastMessage = "Locate this missing file before opening it."
             return

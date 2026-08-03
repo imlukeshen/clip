@@ -67,9 +67,19 @@ public final class SelectionModel {
             }
             anchor = id
         } else {
-            selected = [id]
-            anchor = id
+            if selected.contains(id) {
+                selected.remove(id)
+                anchor = orderedIDs.first(where: selected.contains)
+            } else {
+                selected = [id]
+                anchor = id
+            }
         }
+    }
+
+    public func selectOnly(_ id: AssetID) {
+        selected = [id]
+        anchor = id
     }
 
     public func selectAll() {

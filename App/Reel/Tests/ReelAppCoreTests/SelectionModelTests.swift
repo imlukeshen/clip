@@ -10,6 +10,10 @@ import Testing
     selection.setItems(ids)
 
     selection.click(ids[1])
+    selection.click(ids[1])
+    #expect(selection.selected.isEmpty)
+
+    selection.click(ids[1])
     selection.click(ids[3], modifiers: [.command])
     #expect(selection.selected == [ids[1], ids[3]])
 

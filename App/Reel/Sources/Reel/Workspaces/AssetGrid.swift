@@ -164,6 +164,7 @@ struct AssetGrid: View {
         }
         .simultaneousGesture(marqueeGesture)
         .focusable()
+        .focusEffectDisabled()
         .onMoveCommand(perform: moveSelection)
     }
 
@@ -310,6 +311,7 @@ private struct AssetList: View {
             }
         }
         .focusable()
+        .focusEffectDisabled()
         .onMoveCommand { direction in
             let offset: Int
             switch direction {
