@@ -128,25 +128,36 @@ struct Titlebar: View {
         .font(theme.type.body.font)
         .padding(.horizontal, 12)
         .frame(width: isSearchFocused ? 464 : 420, height: 34)
-        .background {
+        .contentShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
-                .fill(
-                    isSearchFocused || isSearchHovered
-                        ? theme.palette.surfacePanel : theme.palette.surfaceRaised
-                )
-                .overlay {
-                    LinearGradient(
-                        colors: [.white.opacity(0.035), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
+        )
+        .onTapGesture {
+            isSearchFocused = true
+        }
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+                    .fill(
+                        isSearchFocused || isSearchHovered
+                            ? theme.palette.surfacePanel : theme.palette.surfaceRaised
                     )
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: theme.metrics.radius.input,
-                            style: .continuous
+                    .overlay {
+                        LinearGradient(
+                            colors: [.white.opacity(0.035), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
-                    )
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: theme.metrics.radius.input,
+                                style: .continuous
+                            )
+                        )
+                    }
+                OutsideClickMonitor(isActive: isSearchFocused) {
+                    isSearchFocused = false
                 }
+            }
         }
         .clipShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
