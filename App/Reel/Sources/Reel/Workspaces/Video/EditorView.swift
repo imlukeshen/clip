@@ -170,7 +170,7 @@ struct EditorView: View {
                 editor.splitAtPlayhead()
             }
             .keyboardShortcut("k", modifiers: [.command, .shift])
-            ToolButton(systemName: "delete.forward", help: "Ripple delete (⇧⌫)") {
+            ToolButton(systemName: "delete.forward", help: "Ripple delete (Shift-Delete)") {
                 editor.rippleDeleteSelected()
             }
             .keyboardShortcut(.delete, modifiers: .shift)

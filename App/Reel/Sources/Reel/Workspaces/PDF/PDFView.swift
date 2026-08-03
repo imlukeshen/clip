@@ -21,24 +21,27 @@ struct PDFView: View {
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceHeader(
-                title: "PDF",
-                subtitle:
-                    "Edit pages, add text and markup, export Markdown, and OCR scans locally."
+                title: model.isSearching ? "PDF search" : "PDF",
+                subtitle: model.isSearching
+                    ? "Documents matching “\(model.searchQuery)”."
+                    : "Edit pages, add text and markup, export Markdown, and OCR scans locally."
             )
-            WorkspaceDropZone(model: model, workspace: .pdf)
-            HStack(spacing: theme.metrics.spacing.sm) {
-                Button("Open editor") {
-                    guard let selectedPDF else { return }
-                    model.openPDFEditor(for: selectedPDF.id)
+            if !model.isSearching {
+                WorkspaceDropZone(model: model, workspace: .pdf)
+                HStack(spacing: theme.metrics.spacing.sm) {
+                    Button("Open editor") {
+                        guard let selectedPDF else { return }
+                        model.openPDFEditor(for: selectedPDF.id)
+                    }
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(selectedPDF == nil)
+                    Text("PDFium · local")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textTertiary)
                 }
-                .buttonStyle(ReelBorderedButtonStyle())
-                .disabled(selectedPDF == nil)
-                Text("PDFium · local")
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
+                .padding(.top, 18)
             }
-            .padding(.top, 18)
-            SectionLabel("Documents")
+            SectionLabel(model.isSearching ? "Results" : "Documents")
                 .padding(.top, 28)
                 .padding(.bottom, 11)
             AssetGrid(

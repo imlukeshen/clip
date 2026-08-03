@@ -16,6 +16,7 @@ public struct AssetCard<Thumbnail: View>: View {
     private let duration: String?
     private let state: AssetCardState
     private let action: () -> Void
+    private let openAction: (() -> Void)?
     private let retry: (() -> Void)?
     private let thumbnail: Thumbnail
 
@@ -25,6 +26,7 @@ public struct AssetCard<Thumbnail: View>: View {
         duration: String? = nil,
         state: AssetCardState = .normal,
         action: @escaping () -> Void,
+        openAction: (() -> Void)? = nil,
         retry: (() -> Void)? = nil,
         @ViewBuilder thumbnail: () -> Thumbnail
     ) {
@@ -33,6 +35,7 @@ public struct AssetCard<Thumbnail: View>: View {
         self.duration = duration
         self.state = state
         self.action = action
+        self.openAction = openAction
         self.retry = retry
         self.thumbnail = thumbnail()
     }
@@ -44,6 +47,28 @@ public struct AssetCard<Thumbnail: View>: View {
                     ZStack(alignment: .bottomTrailing) {
                         thumbnail
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay(alignment: .topLeading) {
+                                if case .selected = state {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, theme.palette.accent)
+                                        .font(.system(size: 17))
+                                        .padding(7)
+                                }
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if isHovered, openAction != nil {
+                                    Label("Open", systemImage: "arrow.up.forward.app")
+                                        .labelStyle(.iconOnly)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.white)
+                                        .padding(6)
+                                        .background(.black.opacity(0.6))
+                                        .clipShape(Circle())
+                                        .padding(7)
+                                        .help("Double-click to open")
+                                }
+                            }
                         if let duration {
                             Text(duration)
                                 .font(theme.type.numeric.font)
@@ -83,6 +108,11 @@ public struct AssetCard<Thumbnail: View>: View {
                 }
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    openAction?()
+                }
+            )
             if case .failed = state, let retry {
                 Button("Retry", action: retry)
                     .buttonStyle(.plain)
@@ -92,13 +122,19 @@ public struct AssetCard<Thumbnail: View>: View {
                     .padding(.bottom, 9)
             }
         }
-        .background(isHovered ? theme.palette.surfaceRaised : theme.palette.surfacePanel)
+        .background(
+            state.isSelected
+                ? theme.palette.accentDim
+                : (isHovered ? theme.palette.surfaceRaised : theme.palette.surfacePanel)
+        )
         .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card))
         .overlay {
             RoundedRectangle(cornerRadius: theme.metrics.radius.card)
                 .strokeBorder(borderColor, lineWidth: theme.metrics.hairline)
         }
+        .shadow(color: .black.opacity(isHovered ? 0.16 : 0.06), radius: isHovered ? 8 : 3, y: 2)
         .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(metadata)")
     }
@@ -109,6 +145,13 @@ public struct AssetCard<Thumbnail: View>: View {
         case .failed: theme.palette.danger
         case .normal, .ingesting: Color.clear
         }
+    }
+}
+
+extension AssetCardState {
+    fileprivate var isSelected: Bool {
+        if case .selected = self { return true }
+        return false
     }
 }
 

@@ -19,29 +19,32 @@ struct VideoView: View {
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
             WorkspaceHeader(
-                title: "Video",
-                subtitle:
-                    "Stitch clips, trim, zoom on clicks, and export. Originals are never rewritten."
+                title: model.isSearching ? "Video search" : "Video",
+                subtitle: model.isSearching
+                    ? "Videos matching “\(model.searchQuery)”."
+                    : "Stitch clips, trim, zoom on clicks, and export. Originals are never rewritten."
             )
-            WorkspaceDropZone(model: model, workspace: .video)
-            HStack(spacing: theme.metrics.spacing.sm) {
-                Button("Open editor") {
-                    guard let selectedAssetID = model.selectedAssetID else { return }
-                    model.openEditor(for: AssetID(rawValue: selectedAssetID))
+            if !model.isSearching {
+                WorkspaceDropZone(model: model, workspace: .video)
+                HStack(spacing: theme.metrics.spacing.sm) {
+                    Button("Open editor") {
+                        guard let selectedAssetID = model.selectedAssetID else { return }
+                        model.openEditor(for: AssetID(rawValue: selectedAssetID))
+                    }
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(selectedVideo == nil)
+                    Chip("Trim silence") {}
+                        .disabled(true)
+                    Chip("Zoom on clicks") {}
+                        .disabled(true)
+                    Chip("Add captions") {}
+                        .disabled(true)
+                    Chip("Background padding") {}
+                        .disabled(true)
                 }
-                .buttonStyle(ReelBorderedButtonStyle())
-                .disabled(selectedVideo == nil)
-                Chip("Trim silence") {}
-                    .disabled(true)
-                Chip("Zoom on clicks") {}
-                    .disabled(true)
-                Chip("Add captions") {}
-                    .disabled(true)
-                Chip("Background padding") {}
-                    .disabled(true)
+                .padding(.top, 18)
             }
-            .padding(.top, 18)
-            SectionLabel("Projects")
+            SectionLabel(model.isSearching ? "Results" : "Videos")
                 .padding(.top, 28)
                 .padding(.bottom, 11)
             AssetGrid(

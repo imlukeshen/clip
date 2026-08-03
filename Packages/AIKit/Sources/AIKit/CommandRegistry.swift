@@ -92,6 +92,9 @@ public enum CommandRegistry {
             "asset.deselectAll", "Deselect All", .asset,
             shortcut: .init("a", modifiers: ["command", "shift"]), exposure: .onDemand),
         command(
+            "asset.search", "Search Library", .asset,
+            shortcut: .init("f"), kind: .confirm, exposure: .onDemand),
+        command(
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,
             properties: ["assetIDs": array(string)]),

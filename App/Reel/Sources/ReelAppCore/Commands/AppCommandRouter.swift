@@ -12,7 +12,7 @@ public enum AppCommandRouter {
     public static let menuCommandIDs: [CommandID] = [
         "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
         "navigation.pdf", "navigation.convert", "edit.undo", "edit.redo", "asset.selectAll",
-        "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete",
+        "asset.deselectAll", "asset.search", "asset.quickLook", "asset.reveal", "asset.delete",
         "timeline.toggleSnapping", "timeline.rippleDelete", "timeline.roll", "timeline.slip",
         "timeline.slide", "timeline.razorTool", "timeline.shuttleBackward",
         "timeline.shuttlePause", "timeline.shuttleForward", "timeline.setIn",
@@ -40,6 +40,10 @@ public enum AppCommandRouter {
         case "asset.selectAll":
             return model.visibleAssets.isEmpty
                 ? .unavailable(reason: "This view contains no assets.") : .available
+        case "asset.search":
+            return model.editor == nil && model.imageEditor == nil && model.pdfEditor == nil
+                ? .available
+                : .unavailable(reason: "Close the editor before searching the library.")
         case "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete":
             return model.selection.selected.isEmpty
                 ? .unavailable(reason: "No assets are selected.") : .available
@@ -110,6 +114,9 @@ public enum AppCommandRouter {
         case "asset.deselectAll":
             model.selection.deselectAll()
             return .selectionChanged
+        case "asset.search":
+            model.focusSearch()
+            return .completed
         case "asset.delete":
             model.requestTrashSelectedAssets()
             return .requestedConfirmation

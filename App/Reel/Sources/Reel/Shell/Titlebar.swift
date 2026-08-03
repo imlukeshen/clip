@@ -5,6 +5,7 @@ import SwiftUI
 struct Titlebar: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -23,19 +24,9 @@ struct Titlebar: View {
                 .font(theme.type.label.font)
 
             Spacer()
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .accessibilityHidden(true)
-                TextField("Search", text: $model.searchQuery)
-                    .textFieldStyle(.plain)
+            if isBrowsing {
+                searchField
             }
-            .font(theme.type.label.font)
-            .foregroundStyle(theme.palette.textTertiary)
-            .padding(.vertical, 5)
-            .padding(.horizontal, 9)
-            .frame(width: 190)
-            .background(theme.palette.surfacePanel)
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
 
             Button {
                 AppCommandRouter.run("app.commandPalette", in: model)
@@ -53,16 +44,6 @@ struct Titlebar: View {
             .clipShape(RoundedRectangle(cornerRadius: 5))
             .help("Command Palette")
 
-            if model.selectedWorkspace == .inbox {
-                Picker("View", selection: $model.browserViewMode) {
-                    Image(systemName: "square.grid.2x2").tag(BrowserViewMode.grid)
-                    Image(systemName: "list.bullet").tag(BrowserViewMode.list)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 68)
-            }
-
             Button {
                 model.isInspectorVisible.toggle()
             } label: {
@@ -78,6 +59,61 @@ struct Titlebar: View {
         .padding(.horizontal, 16)
         .frame(height: 42)
         .background(theme.palette.surfaceBase)
+        .onChange(of: model.searchFocusRequest) { _, _ in
+            if isBrowsing { isSearchFocused = true }
+        }
+    }
+
+    private var isBrowsing: Bool {
+        model.editor == nil && model.imageEditor == nil && model.pdfEditor == nil
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(
+                    isSearchFocused ? theme.palette.accent : theme.palette.textTertiary
+                )
+                .accessibilityHidden(true)
+            TextField("Search media and folders", text: $model.searchQuery)
+                .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+                .onExitCommand {
+                    if model.isSearching {
+                        model.clearSearch()
+                    } else {
+                        isSearchFocused = false
+                    }
+                }
+            if model.isSearching {
+                Button(action: model.clearSearch) {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.palette.textTertiary)
+                .help("Clear search")
+            } else {
+                HStack(spacing: 2) {
+                    Image(systemName: "command")
+                    Text("F")
+                }
+                .font(theme.type.micro.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            }
+        }
+        .font(theme.type.label.font)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .frame(width: 300)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control)
+                .strokeBorder(
+                    isSearchFocused ? theme.palette.accentLine : theme.palette.line,
+                    lineWidth: 1
+                )
+        }
     }
 
     @ViewBuilder private var breadcrumb: some View {
@@ -105,6 +141,8 @@ struct Titlebar: View {
             Text("Images  ›  \(editor.sourceURL.lastPathComponent)")
         } else if let editor = model.editor {
             Text("Projects  ›  \(editor.document.name)")
+        } else if let editor = model.pdfEditor {
+            Text("Documents  ›  \(editor.document.title)")
         } else {
             Text(model.selectedWorkspace.title)
         }

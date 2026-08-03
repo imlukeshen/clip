@@ -1,5 +1,6 @@
 import AIKit
 import CaptureKit
+import Foundation
 import ReelAppCore
 import SwiftUI
 
@@ -10,10 +11,18 @@ struct ReelApp: App {
     init() {
         #if APPSTORE_BUILD
             let shortcutReader = ShortcutReader(sandboxed: true)
-            let libraryRoot = AppModel.sandboxLibraryRoot
+            let defaultLibraryRoot = AppModel.sandboxLibraryRoot
         #else
             let shortcutReader = ShortcutReader(sandboxed: false)
-            let libraryRoot = AppModel.defaultLibraryRoot
+            let defaultLibraryRoot = AppModel.defaultLibraryRoot
+        #endif
+        #if DEBUG
+            let libraryRoot =
+                ProcessInfo.processInfo.environment["REEL_LIBRARY_ROOT"]
+                .map { URL(fileURLWithPath: $0, isDirectory: true) }
+                ?? defaultLibraryRoot
+        #else
+            let libraryRoot = defaultLibraryRoot
         #endif
         _model = State(
             initialValue: AppModel(libraryRoot: libraryRoot, shortcutReader: shortcutReader)
@@ -69,6 +78,14 @@ struct ReelApp: App {
                 )
             }
             CommandMenu("Assets") {
+                Button(commandTitle("asset.search")) {
+                    AppCommandRouter.run("asset.search", in: model)
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(
+                    model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
+                )
+                Divider()
                 Button(commandTitle("asset.selectAll")) {
                     AppCommandRouter.run("asset.selectAll", in: model)
                 }

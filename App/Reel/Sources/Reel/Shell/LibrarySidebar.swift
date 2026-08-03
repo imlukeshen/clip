@@ -16,16 +16,36 @@ struct LibrarySidebar: View {
                 VStack(alignment: .leading, spacing: 3) {
                     SectionLabel("Library")
                         .padding(.bottom, 5)
-                    smartRow("Recent", icon: "clock", selected: model.selectedFolderPath == nil) {
+                    smartRow(
+                        "All Media",
+                        icon: "square.stack.3d.up",
+                        count: model.assets.count,
+                        selected: model.selectedWorkspace == .inbox
+                            && model.selectedFolderPath == nil
+                    ) {
                         model.selectFolder(nil)
                     }
-                    smartRow("Recordings", icon: "video") { model.selectedWorkspace = .video }
-                    smartRow("Screenshots", icon: "photo") { model.selectedWorkspace = .photo }
-                    smartRow("Projects", icon: "film.stack") { model.selectedWorkspace = .video }
-                    smartRow("Documents", icon: "doc") { model.selectedWorkspace = .pdf }
+                    smartRow(
+                        "Videos",
+                        icon: "video",
+                        count: model.assetCount(for: .video),
+                        selected: model.selectedWorkspace == .video
+                    ) { model.selectedWorkspace = .video }
+                    smartRow(
+                        "Photos",
+                        icon: "photo",
+                        count: model.assetCount(for: .photo),
+                        selected: model.selectedWorkspace == .photo
+                    ) { model.selectedWorkspace = .photo }
+                    smartRow(
+                        "PDFs",
+                        icon: "doc.richtext",
+                        count: model.assetCount(for: .pdf),
+                        selected: model.selectedWorkspace == .pdf
+                    ) { model.selectedWorkspace = .pdf }
 
                     HStack {
-                        SectionLabel("Media")
+                        SectionLabel(model.isSearching ? "Matching folders" : "Folders")
                         Spacer()
                         Button {
                             newFolderName = ""
@@ -39,7 +59,19 @@ struct LibrarySidebar: View {
                     .padding(.top, 18)
                     .padding(.bottom, 5)
 
-                    if let root = model.folderTree {
+                    if model.isSearching {
+                        if model.matchingFolders.isEmpty {
+                            Text("No matching folders")
+                                .font(theme.type.caption.font)
+                                .foregroundStyle(theme.palette.textTertiary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                        } else {
+                            ForEach(model.matchingFolders.prefix(8)) { folder in
+                                searchFolderRow(folder)
+                            }
+                        }
+                    } else if let root = model.folderTree {
                         ForEach(root.children ?? []) { node in
                             FolderTreeRow(node: node, model: model, depth: 0)
                         }
@@ -52,8 +84,9 @@ struct LibrarySidebar: View {
 
             Spacer(minLength: 0)
             smartRow(
-                "Convert  \(model.assetCount(for: .convert))",
+                "Convert",
                 icon: "arrow.left.arrow.right",
+                count: model.assetCount(for: .convert),
                 selected: model.selectedWorkspace == .convert
             ) {
                 AppCommandRouter.run("navigation.convert", in: model)
@@ -71,7 +104,7 @@ struct LibrarySidebar: View {
             .foregroundStyle(theme.palette.textTertiary)
             .padding(12)
         }
-        .frame(width: 240)
+        .frame(width: 252)
         .background(theme.palette.surfacePanel)
         .alert("New Folder", isPresented: $showsNewFolder) {
             TextField("Folder name", text: $newFolderName)
@@ -89,6 +122,7 @@ struct LibrarySidebar: View {
     private func smartRow(
         _ title: String,
         icon: String,
+        count: Int? = nil,
         selected: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -97,11 +131,45 @@ struct LibrarySidebar: View {
                 Image(systemName: icon).frame(width: 16)
                 Text(title)
                 Spacer()
+                if let count, count > 0 {
+                    Text("\(count)")
+                        .font(theme.type.numeric.font)
+                        .foregroundStyle(theme.palette.textTertiary)
+                }
             }
             .padding(.horizontal, 8)
-            .frame(height: 30)
+            .frame(height: 32)
             .background(selected ? theme.palette.accentDim : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func searchFolderRow(_ folder: FolderNode) -> some View {
+        Button {
+            model.selectFolder(folder.id)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .frame(width: 16)
+                    .foregroundStyle(theme.palette.accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(folder.name).lineLimit(1)
+                    Text(folder.id)
+                        .font(theme.type.micro.font)
+                        .foregroundStyle(theme.palette.textTertiary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if folder.assetCount > 0 {
+                    Text("\(folder.assetCount)")
+                        .font(theme.type.numeric.font)
+                        .foregroundStyle(theme.palette.textTertiary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 38)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -117,6 +185,7 @@ private struct FolderTreeRow: View {
     @State private var renameValue = ""
     @State private var showsNewFolder = false
     @State private var newFolderValue = ""
+    @State private var isHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -140,7 +209,11 @@ private struct FolderTreeRow: View {
                     model.selectFolder(node.id)
                 } label: {
                     HStack(spacing: 7) {
-                        Image(systemName: node.id == "Inbox" ? "tray" : "folder")
+                        Image(
+                            systemName: node.id == "Inbox"
+                                ? "tray"
+                                : (model.selectedFolderPath == node.id ? "folder.fill" : "folder")
+                        )
                         Text(node.name).lineLimit(1)
                         Spacer()
                         if node.assetCount > 0 {
@@ -153,12 +226,14 @@ private struct FolderTreeRow: View {
                     .frame(height: 28)
                     .background(
                         model.selectedFolderPath == node.id
-                            ? theme.palette.accentDim : Color.clear
+                            ? theme.palette.accentDim
+                            : (isHovered ? theme.palette.surfaceRaised : Color.clear)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { isHovered = $0 }
             }
             .padding(.leading, CGFloat(depth) * 13)
             .draggable("folder:\(node.id)")

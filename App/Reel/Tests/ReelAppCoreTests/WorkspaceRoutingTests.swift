@@ -1,3 +1,6 @@
+import CoreModel
+import Foundation
+import LibraryStore
 import Testing
 
 @testable import ReelAppCore
@@ -20,5 +23,63 @@ struct WorkspaceRoutingTests {
     @Test("Every workspace declares a leading drop zone")
     func everyWorkspaceAcceptsDrops() {
         #expect(Workspace.allCases.allSatisfy { $0.hasDropZone })
+    }
+
+    @Test("Asset activation routes every editable media kind")
+    func activationRoutes() {
+        #expect(AssetActivationRoute(kind: .video) == .videoEditor)
+        #expect(AssetActivationRoute(kind: .image) == .photoEditor)
+        #expect(AssetActivationRoute(kind: .document) == .pdfEditor)
+        #expect(AssetActivationRoute(kind: .audio) == .none)
+    }
+
+    @Test("Search matches names, folders, types, formats, and codecs")
+    func mediaSearch() {
+        let asset = AssetRecord(
+            id: AssetID(rawValue: "search-fixture"),
+            relativePath: "Media/Clients/Acme/Launch Walkthrough.mov",
+            displayName: "Launch Walkthrough.mov",
+            kind: .video,
+            container: "mov",
+            codec: "h264",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            importedAt: Date(timeIntervalSince1970: 1_700_000_001),
+            byteSize: 42,
+            contentHash: "search-hash",
+            ingestState: .ready
+        )
+
+        for query in ["launch", "acme", "video", "mov", "h264"] {
+            #expect(BrowserSearch.matches(asset, query: query))
+        }
+        #expect(!BrowserSearch.matches(asset, query: "invoice"))
+    }
+
+    @Test("Folder search includes matching nested paths")
+    func folderSearch() {
+        let tree = FolderNode(
+            id: "",
+            name: "Media",
+            children: [
+                FolderNode(
+                    id: "Clients",
+                    name: "Clients",
+                    children: [
+                        FolderNode(
+                            id: "Clients/Acme",
+                            name: "Acme",
+                            children: [],
+                            assetCount: 4
+                        )
+                    ],
+                    assetCount: 0
+                )
+            ],
+            assetCount: 0
+        )
+
+        #expect(
+            BrowserSearch.matchingFolders(in: tree, query: "acme").map(\.id) == ["Clients/Acme"])
+        #expect(BrowserSearch.matchingFolders(in: tree, query: "clients").count == 2)
     }
 }

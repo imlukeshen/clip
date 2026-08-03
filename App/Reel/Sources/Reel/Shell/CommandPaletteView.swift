@@ -22,8 +22,12 @@ struct CommandPaletteView: View {
                 Image(systemName: "magnifyingglass")
                 TextField("Type a command…", text: $model.commandQuery)
                     .textFieldStyle(.plain)
-                Text("⌘K").font(theme.type.numeric.font)
-                    .foregroundStyle(theme.palette.textTertiary)
+                HStack(spacing: 2) {
+                    Image(systemName: "command")
+                    Text("K")
+                }
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textTertiary)
             }
             .padding(14)
             Divider().overlay(theme.palette.line)

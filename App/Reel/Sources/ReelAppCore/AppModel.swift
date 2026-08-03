@@ -12,6 +12,7 @@ import PDFEngine
 public final class AppModel {
     public var selectedWorkspace: Workspace = .inbox
     public var searchQuery = ""
+    public private(set) var searchFocusRequest = 0
     public private(set) var assets: [AssetRecord] = []
     public private(set) var folderTree: FolderNode?
     public private(set) var expandedFolders: Set<String>
@@ -90,8 +91,11 @@ public final class AppModel {
     }
 
     public var visibleAssets: [AssetRecord] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let scoped: [AssetRecord]
-        if selectedWorkspace == .inbox, let selectedFolderPath {
+        if !query.isEmpty {
+            scoped = assets
+        } else if selectedWorkspace == .inbox, let selectedFolderPath {
             let prefix =
                 selectedFolderPath.isEmpty
                 ? "Media/" : "Media/\(selectedFolderPath)/"
@@ -103,12 +107,23 @@ public final class AppModel {
             scoped = assets
         }
         let searched =
-            searchQuery.isEmpty
-            ? scoped
-            : scoped.filter {
-                $0.displayName.localizedCaseInsensitiveContains(searchQuery)
-            }
+            query.isEmpty ? scoped : scoped.filter { BrowserSearch.matches($0, query: query) }
         return searched.sorted(by: assetOrdering)
+    }
+
+    public var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var matchingFolders: [FolderNode] {
+        BrowserSearch.matchingFolders(in: folderTree, query: searchQuery)
+    }
+
+    public var searchResultDescription: String {
+        let mediaCount = visibleAssets.count
+        let folderCount = matchingFolders.count
+        return
+            "\(mediaCount) media item\(mediaCount == 1 ? "" : "s") and \(folderCount) folder\(folderCount == 1 ? "" : "s")"
     }
 
     public var currentFolderName: String {
@@ -157,6 +172,7 @@ public final class AppModel {
     }
 
     public func selectFolder(_ path: String?) {
+        if isSearching { clearSearch() }
         guard selectedFolderPath != path || selectedWorkspace != .inbox else { return }
         folderBackHistory.append(selectedFolderPath)
         folderForwardHistory.removeAll()
@@ -440,6 +456,31 @@ public final class AppModel {
 
     public func selectAsset(_ id: AssetID, modifiers: EventModifiers = []) {
         selection.click(id, modifiers: modifiers)
+    }
+
+    public func activateAsset(_ id: AssetID) {
+        guard let asset = assets.first(where: { $0.id == id }) else { return }
+        selection.click(id)
+        guard !asset.isMissing else {
+            lastMessage = "Locate this missing file before opening it."
+            return
+        }
+        switch AssetActivationRoute(kind: asset.kind) {
+        case .videoEditor: openEditor(for: id)
+        case .photoEditor: openImageEditor(for: id)
+        case .pdfEditor: openPDFEditor(for: id)
+        case .none:
+            selectedWorkspace = .convert
+            lastMessage = "Audio files are available in Convert."
+        }
+    }
+
+    public func clearSearch() {
+        searchQuery = ""
+    }
+
+    public func focusSearch() {
+        searchFocusRequest += 1
     }
 
     public func requestTrashSelectedAssets() {
