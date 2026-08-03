@@ -62,7 +62,14 @@ struct CommandPaletteView: View {
             }
         }
         .frame(width: 620, height: 480)
-        .background(theme.palette.surfaceBase)
+        .background {
+            ZStack {
+                theme.palette.surfaceBase
+                OutsideClickMonitor(isActive: model.isCommandPalettePresented) {
+                    model.isCommandPalettePresented = false
+                }
+            }
+        }
         .onDisappear { model.commandQuery = "" }
     }
 
