@@ -148,7 +148,12 @@ public final class AppModel {
         hasStarted = true
         refreshShortcuts()
         do {
-            let runtime = try await AppRuntime(libraryRoot: libraryRoot)
+            let runtime = try await AppRuntime(
+                libraryRoot: libraryRoot,
+                didAutomaticallyIngest: { [weak self] record in
+                    await self?.handleAutomaticIngest(record)
+                }
+            )
             self.runtime = runtime
             let changes = await runtime.changes()
             libraryChangesTask = Task { [weak self] in
@@ -180,6 +185,32 @@ public final class AppModel {
         }
         if workspaceChanged {
             selection.deselectAll()
+        }
+    }
+
+    private func handleAutomaticIngest(_ record: AssetRecord) async {
+        guard record.kind == .video else { return }
+        if !assets.contains(where: { $0.id == record.id }) {
+            await refreshAssets()
+        }
+        guard imageEditor == nil, pdfEditor == nil else {
+            lastMessage = "Recording added to the library. Close the current editor to open it."
+            return
+        }
+        if let editor {
+            let track = await runtime?.eventTracks(for: [record.id])[record.id]
+            guard editor.appendCapturedAsset(record, eventTrack: track) else { return }
+            selectedWorkspace = .video
+            lastMessage = "Added the recording to the end of your timeline."
+            return
+        }
+        guard record.duration != nil else {
+            lastMessage = "The recording was imported, but it has no playable duration."
+            return
+        }
+        openEditor(for: record.id)
+        if editor != nil {
+            lastMessage = "Recording opened in a new timeline."
         }
     }
 

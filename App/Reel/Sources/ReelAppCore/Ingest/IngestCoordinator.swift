@@ -5,9 +5,10 @@ import LibraryStore
 /// Connects capture-source streams to the single ingest pipeline.
 public actor IngestCoordinator {
     private let pipeline: IngestPipeline
-    private let inbox: InboxWatcher
+    private let inboxes: [InboxWatcher]
     private let pasteboard: PasteboardWatcher
     private let didIngest: @Sendable (AssetRecord, URL?) async -> Void
+    private var activeInboxes: [InboxWatcher] = []
     private var tasks: [Task<Void, Never>] = []
 
     public init(
@@ -17,7 +18,19 @@ public actor IngestCoordinator {
         didIngest: @escaping @Sendable (AssetRecord, URL?) async -> Void = { _, _ in }
     ) {
         self.pipeline = pipeline
-        self.inbox = inbox
+        self.inboxes = [inbox]
+        self.pasteboard = pasteboard
+        self.didIngest = didIngest
+    }
+
+    public init(
+        pipeline: IngestPipeline,
+        inboxes: [InboxWatcher],
+        pasteboard: PasteboardWatcher,
+        didIngest: @escaping @Sendable (AssetRecord, URL?) async -> Void = { _, _ in }
+    ) {
+        self.pipeline = pipeline
+        self.inboxes = inboxes
         self.pasteboard = pasteboard
         self.didIngest = didIngest
     }
@@ -31,14 +44,26 @@ public actor IngestCoordinator {
     /// Starts both sources and forwards their events until stopped.
     public func start() async throws {
         guard tasks.isEmpty else { return }
-        try await inbox.start()
+        guard let primaryInbox = inboxes.first else { return }
+        try await primaryInbox.start()
+        var startedInboxes = [primaryInbox]
+        for inbox in inboxes.dropFirst() {
+            do {
+                try await inbox.start()
+                startedInboxes.append(inbox)
+            } catch {
+                // Additional system capture locations are best-effort. The Reel Inbox remains
+                // available when a sandbox or stale preference blocks another directory.
+            }
+        }
+        activeInboxes = startedInboxes
         await pasteboard.start()
         let pipeline = self.pipeline
-        let inboxEvents = inbox.events
         let pasteboardImages = pasteboard.images
         let didIngest = didIngest
-        tasks = [
-            Task {
+        tasks = startedInboxes.map { inbox in
+            let inboxEvents = inbox.events
+            return Task {
                 for await url in inboxEvents {
                     do {
                         let record = try await pipeline.ingest(url, source: .inbox)
@@ -47,7 +72,9 @@ public actor IngestCoordinator {
                         // IngestPipeline emits the typed failure event.
                     }
                 }
-            },
+            }
+        }
+        tasks.append(
             Task {
                 for await data in pasteboardImages {
                     do {
@@ -57,8 +84,7 @@ public actor IngestCoordinator {
                         // IngestPipeline emits the typed failure event.
                     }
                 }
-            },
-        ]
+            })
     }
 
     /// Stops source polling and event forwarding.
@@ -67,7 +93,11 @@ public actor IngestCoordinator {
             task.cancel()
         }
         tasks = []
-        await inbox.stop()
+        let activeInboxes = activeInboxes
+        self.activeInboxes = []
+        for inbox in activeInboxes {
+            await inbox.stop()
+        }
         await pasteboard.stop()
     }
 }

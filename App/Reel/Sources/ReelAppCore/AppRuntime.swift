@@ -16,7 +16,10 @@ public actor AppRuntime {
     private let clickTracking: EventTrackAssociator
     private let libraryWatcher: LibraryRootWatcher
 
-    public init(libraryRoot: URL) async throws {
+    public init(
+        libraryRoot: URL,
+        didAutomaticallyIngest: @escaping @Sendable (AssetRecord) async -> Void = { _ in }
+    ) async throws {
         let root = libraryRoot.standardizedFileURL
         if let plan = try LibraryMigration.plan(at: root) {
             throw AppRuntimeError.migrationRequired(plan)
@@ -29,7 +32,8 @@ public actor AppRuntime {
         let bookmarks = BookmarkStore()
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
-        let inbox = InboxWatcher(url: inboxURL, bookmarks: bookmarks)
+        let captureDirectories = Self.captureDirectories(libraryInbox: inboxURL)
+        let inboxes = captureDirectories.map { InboxWatcher(url: $0, bookmarks: bookmarks) }
         let pasteboard = PasteboardWatcher()
         let clickTracking = EventTrackAssociator(library: library)
 
@@ -43,12 +47,34 @@ public actor AppRuntime {
         }
         self.coordinator = IngestCoordinator(
             pipeline: pipeline,
-            inbox: inbox,
+            inboxes: inboxes,
             pasteboard: pasteboard,
             didIngest: { record, sourceURL in
-                _ = await clickTracking.associate(record, sourceURL: sourceURL)
+                let associated = await clickTracking.associate(record, sourceURL: sourceURL)
+                await didAutomaticallyIngest(associated)
             }
         )
+    }
+
+    private static func captureDirectories(libraryInbox: URL) -> [URL] {
+        let systemCaptureDirectory: URL
+        #if DEBUG
+            if let override = ProcessInfo.processInfo.environment["REEL_CAPTURE_SOURCE"],
+                !override.isEmpty
+            {
+                systemCaptureDirectory = URL(fileURLWithPath: override, isDirectory: true)
+            } else {
+                systemCaptureDirectory = SystemCaptureDestination.current()
+            }
+        #else
+            systemCaptureDirectory = SystemCaptureDestination.current()
+        #endif
+
+        var seen: Set<String> = []
+        return [libraryInbox, systemCaptureDirectory].compactMap { directory in
+            let standardized = directory.standardizedFileURL
+            return seen.insert(standardized.path).inserted ? standardized : nil
+        }
     }
 
     public static func migrate(_ plan: LibraryMigrationPlan, at root: URL) async throws {

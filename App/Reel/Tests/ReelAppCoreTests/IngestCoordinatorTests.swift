@@ -46,6 +46,51 @@ import Testing
     #expect(await probe.lastRecord?.kind == .video)
 }
 
+@Test func inboxCoordinatorAlsoWatchesTheSystemCaptureDestination() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "reel-system-capture-tests-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let inboxURL = LibraryLayout.inbox(in: root)
+    let systemCaptureURL = root.appendingPathComponent("Desktop", isDirectory: true)
+    try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: systemCaptureURL,
+        withIntermediateDirectories: true
+    )
+    let bookmarks = BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    let library = try await LibraryStore(root: root, bookmarks: bookmarks)
+    let pipeline = IngestPipeline(
+        library: library,
+        libraryRoot: root,
+        probe: CoordinatorFixtureProbe(),
+        derivatives: CoordinatorFixtureDerivatives()
+    )
+    let probe = AssociationProbe()
+    let coordinator = IngestCoordinator(
+        pipeline: pipeline,
+        inboxes: [
+            InboxWatcher(url: inboxURL, bookmarks: bookmarks, extensions: ["mov"]),
+            InboxWatcher(url: systemCaptureURL, bookmarks: bookmarks, extensions: ["mov"]),
+        ],
+        pasteboard: PasteboardWatcher(),
+        didIngest: { record, url in await probe.record(record, url: url) }
+    )
+    try await coordinator.start()
+
+    let recording = systemCaptureURL.appendingPathComponent("Screen Recording.mov")
+    try Data(repeating: 0x32, count: 4_096).write(to: recording)
+    for _ in 0..<40 where await probe.count == 0 {
+        try await Task.sleep(for: .milliseconds(100))
+    }
+    await coordinator.stop()
+
+    #expect(await probe.count == 1)
+    #expect(await probe.lastURL == recording.standardizedFileURL)
+    #expect(await probe.lastRecord?.relativePath == "Media/Inbox/Screen Recording.mov")
+}
+
 private actor AssociationProbe {
     private(set) var records: [(AssetRecord, URL?)] = []
 

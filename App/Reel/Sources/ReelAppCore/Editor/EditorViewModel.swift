@@ -906,12 +906,13 @@ public final class EditorViewModel {
         exportTask = nil
     }
 
-    public func insert(_ asset: AssetRecord) {
+    @discardableResult
+    public func insert(_ asset: AssetRecord) -> Bool {
         guard asset.kind == .video, let duration = asset.duration else {
             notice = "That asset has no playable duration."
-            return
+            return false
         }
-        assets[asset.id] = asset
+        let previousAsset = assets.updateValue(asset, forKey: asset.id)
         let item = TimelineItem(
             id: .generate(),
             assetID: asset.id,
@@ -932,9 +933,36 @@ public final class EditorViewModel {
                 )
             )
             selection = [item.id]
+            return true
         } catch {
+            if let previousAsset {
+                assets[asset.id] = previousAsset
+            } else {
+                assets.removeValue(forKey: asset.id)
+            }
             notice = "The clip could not be added."
+            return false
         }
+    }
+
+    @discardableResult
+    public func appendCapturedAsset(
+        _ asset: AssetRecord,
+        eventTrack: EventTrack? = nil
+    ) -> Bool {
+        guard !document.timeline.video.contains(where: { $0.assetID == asset.id }) else {
+            notice = "That recording is already in this timeline."
+            return false
+        }
+        guard insert(asset) else { return false }
+        if let eventTrack {
+            eventTracks[asset.id] = eventTrack
+        }
+        if let inserted = selectedItem {
+            seek(to: inserted.timelineStart)
+        }
+        notice = "Added \(asset.displayName) to the end of the timeline."
+        return true
     }
 
     public func clearNotice() {

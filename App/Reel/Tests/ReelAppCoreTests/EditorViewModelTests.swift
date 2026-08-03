@@ -127,6 +127,42 @@ struct EditorViewModelTests {
         #expect(editor.notice == "Accessibility access is off.")
     }
 
+    @Test("Automatic recordings append once at the end of the timeline")
+    func appendCapturedRecording() throws {
+        let editor = makeEditor(document: try document())
+        let recording = AssetRecord(
+            id: AssetID(rawValue: "second-recording"),
+            relativePath: "Media/Inbox/second.mov",
+            displayName: "Second Recording.mov",
+            kind: .video,
+            createdAt: Date(timeIntervalSince1970: 2),
+            importedAt: Date(timeIntervalSince1970: 2),
+            byteSize: 2,
+            contentHash: "second-hash",
+            duration: RationalTime(seconds: 4),
+            ingestState: .ready
+        )
+        let track = EventTrack(
+            assetID: recording.id,
+            alignment: .exact(offset: .zero),
+            samples: [],
+            clicks: []
+        )
+
+        #expect(editor.appendCapturedAsset(recording, eventTrack: track))
+        #expect(
+            editor.document.timeline.video.map(\.assetID) == [
+                AssetID(rawValue: "asset"), recording.id,
+            ])
+        #expect(editor.document.timeline.video[1].timelineStart == RationalTime(seconds: 6))
+        #expect(editor.playhead == RationalTime(seconds: 6))
+        #expect(editor.selection == [editor.document.timeline.video[1].id])
+        #expect(editor.eventTracks[recording.id] == track)
+
+        #expect(!editor.appendCapturedAsset(recording, eventTrack: track))
+        #expect(editor.document.timeline.video.count == 2)
+    }
+
     private func makeEditor(
         document: ProjectDocument,
         eventTracks: [AssetID: EventTrack] = [:],
