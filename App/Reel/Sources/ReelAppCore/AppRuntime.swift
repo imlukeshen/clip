@@ -54,7 +54,8 @@ public actor AppRuntime {
         let captureDirectories = Self.captureDirectories(
             libraryInbox: inboxURL,
             captureDirectory: captureDirectory,
-            captureUsesSecurityScope: preferredCaptureDirectory.usesSecurityScope
+            captureUsesSecurityScope: preferredCaptureDirectory.usesSecurityScope,
+            includesSystemCaptureDirectory: !Self.isUITesting
         )
         let inboxes = captureDirectories.map {
             InboxWatcher(
@@ -109,17 +110,27 @@ public actor AppRuntime {
     private static func captureDirectories(
         libraryInbox: URL,
         captureDirectory: URL,
-        captureUsesSecurityScope: Bool
+        captureUsesSecurityScope: Bool,
+        includesSystemCaptureDirectory: Bool
     ) -> [(url: URL, usesSecurityScope: Bool)] {
         var seen: Set<String> = []
-        return [
-            (libraryInbox, false),
-            (captureDirectory, captureUsesSecurityScope),
-        ].compactMap { directory, usesSecurityScope in
+        var directories = [(libraryInbox, false)]
+        if includesSystemCaptureDirectory {
+            directories.append((captureDirectory, captureUsesSecurityScope))
+        }
+        return directories.compactMap { directory, usesSecurityScope in
             let standardized = directory.standardizedFileURL
             return seen.insert(standardized.path).inserted
                 ? (standardized, usesSecurityScope) : nil
         }
+    }
+
+    private static var isUITesting: Bool {
+        #if DEBUG
+            ProcessInfo.processInfo.environment["CLIP_UI_TESTING"] == "1"
+        #else
+            false
+        #endif
     }
 
     public static func migrate(_ plan: LibraryMigrationPlan, at root: URL) async throws {

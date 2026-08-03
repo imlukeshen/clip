@@ -100,3 +100,50 @@ private struct FolderTestTrashManager: FileTrashManaging {
     #expect(try await store.asset(id: id)?.relativePath == "Media/launch/Recording.mov")
     #expect(try await store.projectsReferencing(assetIDs: [id]).map(\.name) == ["Stable Project"])
 }
+
+@Test @MainActor func expandingAFolderWithFiveThousandAssetsKeepsTheUIExecutorResponsive()
+    async throws
+{
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "clip-folder-performance-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    let folders = LibraryFolders(root: root, library: store)
+    let inbox = LibraryLayout.inbox(in: root)
+
+    for index in 0..<5_000 {
+        let name = String(format: "Capture-%04d.png", index)
+        let url = inbox.appendingPathComponent(name)
+        #expect(FileManager.default.createFile(atPath: url.path, contents: Data()))
+        try await store.insert(
+            AssetRecord(
+                id: AssetID(rawValue: "asset-\(index)"),
+                relativePath: "Media/Inbox/\(name)",
+                displayName: name,
+                kind: .image,
+                createdAt: .now,
+                importedAt: .now,
+                byteSize: 0,
+                contentHash: "hash-\(index)",
+                ingestState: .ready
+            )
+        )
+    }
+
+    let clock = ContinuousClock()
+    let started = clock.now
+    let expansion = Task.detached {
+        try await folders.tree(expanding: ["", "Inbox"])
+    }
+    for _ in 0..<100 { await Task.yield() }
+    let elapsed = started.duration(to: clock.now)
+    let tree = try await expansion.value
+
+    #expect(tree.children?.first(where: { $0.id == "Inbox" })?.assetCount == 5_000)
+    #expect(elapsed < .milliseconds(100))
+}

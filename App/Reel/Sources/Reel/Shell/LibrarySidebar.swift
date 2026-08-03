@@ -166,6 +166,9 @@ struct LibrarySidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(ReelPlainButtonStyle())
+        .accessibilityIdentifier(
+            "sidebar-route-\(title.lowercased().replacingOccurrences(of: " ", with: "-"))"
+        )
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 

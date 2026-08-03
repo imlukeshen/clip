@@ -20,7 +20,8 @@ public actor LibraryFolders {
 
     public func tree(expanding: Set<String>) async throws -> FolderNode {
         let assets = try await library.assets(kind: nil, limit: Int.max, offset: 0)
-        return try node(relativePath: "", expanding: expanding, assets: assets, forceLoad: true)
+        let index = FolderTreeIndex(assets: assets)
+        return try node(relativePath: "", expanding: expanding, index: index, forceLoad: true)
     }
 
     @discardableResult
@@ -148,35 +149,36 @@ public actor LibraryFolders {
     private func node(
         relativePath: String,
         expanding: Set<String>,
-        assets: [AssetRecord],
+        index: FolderTreeIndex,
         forceLoad: Bool = false
     ) throws -> FolderNode {
         let url = try folderURL(relativePath)
-        let directPrefix = relativePath.isEmpty ? "Media/" : "Media/\(relativePath)/"
-        let count = assets.count { asset in
-            let suffix = String(asset.relativePath.dropFirst(directPrefix.count))
-            return asset.relativePath.hasPrefix(directPrefix) && !suffix.contains("/")
-        }
+        let count = index.directAssetCounts[relativePath, default: 0]
         let shouldLoad = forceLoad || expanding.contains(relativePath)
         let children: [FolderNode]?
         if shouldLoad {
-            children = try FileManager.default.contentsOfDirectory(
+            let entries = try FileManager.default.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
-            ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-                .sorted {
-                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
-                        == .orderedAscending
-                }
-                .map { child in
-                    let childPath = relative(child)
-                    return try node(
-                        relativePath: childPath,
-                        expanding: expanding,
-                        assets: assets
-                    )
-                }
+            )
+            let knownFileNames = index.knownFileNames[relativePath, default: []]
+            let folders = entries.filter { child in
+                !knownFileNames.contains(child.lastPathComponent)
+                    && (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            }
+            let sortedFolders = folders.sorted {
+                $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                    == .orderedAscending
+            }
+            children = try sortedFolders.map { child in
+                let childPath = relative(child)
+                return try node(
+                    relativePath: childPath,
+                    expanding: expanding,
+                    index: index
+                )
+            }
         } else {
             children = nil
         }
@@ -272,6 +274,29 @@ public actor LibraryFolders {
     private func rollback(_ moves: [(URL, URL)]) {
         for (source, destination) in moves.reversed() {
             try? FileManager.default.moveItem(at: destination, to: source)
+        }
+    }
+}
+
+private struct FolderTreeIndex {
+    var directAssetCounts: [String: Int] = [:]
+    var knownFileNames: [String: Set<String>] = [:]
+
+    init(assets: [AssetRecord]) {
+        for asset in assets where asset.relativePath.hasPrefix("Media/") {
+            let relativePath = String(asset.relativePath.dropFirst("Media/".count))
+            let parent = (relativePath as NSString).deletingLastPathComponent
+            let folder = parent == "." ? "" : parent
+            directAssetCounts[folder, default: 0] += 1
+            knownFileNames[folder, default: []].insert((relativePath as NSString).lastPathComponent)
+            if let eventPath = asset.eventTrackPath, eventPath.hasPrefix("Media/") {
+                let relativeEventPath = String(eventPath.dropFirst("Media/".count))
+                let eventParent = (relativeEventPath as NSString).deletingLastPathComponent
+                let eventFolder = eventParent == "." ? "" : eventParent
+                knownFileNames[eventFolder, default: []].insert(
+                    (relativeEventPath as NSString).lastPathComponent
+                )
+            }
         }
     }
 }
