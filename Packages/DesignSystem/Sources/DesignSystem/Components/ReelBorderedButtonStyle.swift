@@ -12,6 +12,7 @@ public struct ReelBorderedButtonStyle: ButtonStyle {
 
 private struct ReelBorderedButtonBody: View {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     let configuration: ButtonStyleConfiguration
     let theme: Theme
@@ -34,14 +35,16 @@ private struct ReelBorderedButtonBody: View {
                     )
             }
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.38)
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.965 : 1))
+            .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 1 : 0))
             .shadow(
-                color: isHovered && isEnabled ? .black.opacity(0.12) : .clear,
-                radius: 5,
-                y: 1
+                color: isHovered && isEnabled && !configuration.isPressed
+                    ? .black.opacity(0.12) : .clear,
+                radius: configuration.isPressed ? 1 : 5,
+                y: configuration.isPressed ? 0 : 1
             )
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.18), value: isHovered)
+            .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
+            .animation(ReelMotion.buttonHover, value: isHovered)
             .onHover { isHovered = $0 }
     }
 
