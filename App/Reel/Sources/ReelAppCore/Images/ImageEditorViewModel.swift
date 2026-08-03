@@ -7,6 +7,7 @@ import Observation
 
 public enum ImageEditorTool: String, CaseIterable, Sendable, Identifiable {
     case select
+    case pan
     case crop
     case arrow
     case box
@@ -24,6 +25,7 @@ public enum ImageEditorTool: String, CaseIterable, Sendable, Identifiable {
 
     public var title: String {
         switch self {
+        case .pan: "Pan"
         case .freehand: "Draw"
         case .step: "Step"
         case .redact: "Redact"
@@ -35,6 +37,7 @@ public enum ImageEditorTool: String, CaseIterable, Sendable, Identifiable {
     public var symbol: String {
         switch self {
         case .select: "cursorarrow"
+        case .pan: "hand.draw"
         case .crop: "crop"
         case .arrow: "arrow.up.right"
         case .box: "rectangle"
@@ -240,7 +243,7 @@ public final class ImageEditorViewModel {
         case .blur:
             guard isUsable(rect) else { return }
             layer = .blur(BlurLayer(regions: [rect], radius: blurRadius))
-        case .select, .crop, .padding, .eyedropper:
+        case .select, .pan, .crop, .padding, .eyedropper:
             return
         }
         do {

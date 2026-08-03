@@ -14,6 +14,8 @@ struct EditorView: View {
     @Bindable var editor: EditorViewModel
     @State private var showsExportSheet = false
     @State private var exportCompletionAction = CompletionAction.reveal
+    @State private var previewDragOffset = CGSize.zero
+    @State private var previewScale = 1.0
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -198,16 +200,55 @@ struct EditorView: View {
 
     private var preview: some View {
         VStack(spacing: 0) {
-            PlayerSurface(player: editor.player)
-                .overlay {
+            GeometryReader { proxy in
+                let contentSize = fittedPreviewSize(in: proxy.size)
+                ZStack {
+                    Color.black
+                    PlayerSurface(player: editor.player)
+                        .frame(width: contentSize.width, height: contentSize.height)
+                        .scaleEffect(previewScale)
+                        .offset(previewDragOffset)
+
                     if editor.isBuilding {
                         ProgressView()
                             .controlSize(.small)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .padding(18)
+                .contentShape(Rectangle())
+                .clipped()
+                .gesture(previewPanGesture(in: contentSize))
+                .simultaneousGesture(previewMagnificationGesture)
+                .overlay(alignment: .topLeading) {
+                    if editor.selectedItem != nil {
+                        Label("Three-finger drag to position", systemImage: "hand.draw")
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textSecondary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 9)
+                            .background(theme.palette.surfacePanel.opacity(0.9))
+                            .clipShape(Capsule())
+                            .padding(10)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if editor.selectedItem != nil,
+                        editor.selectedTransform.translationX != 0
+                            || editor.selectedTransform.translationY != 0
+                    {
+                        Button {
+                            editor.resetSelectedPosition()
+                        } label: {
+                            Label("Center", systemImage: "scope")
+                        }
+                        .buttonStyle(ReelBorderedButtonStyle())
+                        .padding(10)
+                    }
+                }
+                .accessibilityLabel("Video preview")
+                .accessibilityHint("Drag to position the selected clip. Pinch to scale it.")
+            }
+            .padding(18)
 
             HStack(spacing: 15) {
                 Text(timecode(editor.playhead))
@@ -262,6 +303,49 @@ struct EditorView: View {
         }
     }
 
+    private func fittedPreviewSize(in available: CGSize) -> CGSize {
+        guard available.width > 0, available.height > 0 else { return .zero }
+        let canvas = CGSize(
+            width: editor.document.canvas.width,
+            height: editor.document.canvas.height
+        )
+        guard canvas.width > 0, canvas.height > 0 else { return available }
+        let scale = min(available.width / canvas.width, available.height / canvas.height)
+        return CGSize(width: canvas.width * scale, height: canvas.height * scale)
+    }
+
+    private func previewPanGesture(in contentSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+            .onChanged { value in
+                guard editor.selectClipAtPlayheadIfNeeded() else { return }
+                previewDragOffset = value.translation
+            }
+            .onEnded { value in
+                defer { previewDragOffset = .zero }
+                guard contentSize.width > 0, contentSize.height > 0 else { return }
+                editor.translateSelectedClip(
+                    by: NormalizedPoint(
+                        x: value.translation.width / contentSize.width,
+                        y: -value.translation.height / contentSize.height
+                    )
+                )
+            }
+    }
+
+    private var previewMagnificationGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                guard editor.selectClipAtPlayheadIfNeeded() else { return }
+                previewScale = value
+            }
+            .onEnded { value in
+                defer { previewScale = 1 }
+                guard editor.selectClipAtPlayheadIfNeeded() else { return }
+                let scale = min(max(editor.selectedTransform.scaleX * value, 0.1), 3)
+                editor.setSelectedScale(scale)
+            }
+    }
+
     private var timeline: some View {
         EditorTimeline(
             timeline: editor.document.timeline,
@@ -294,7 +378,11 @@ struct EditorView: View {
             onTrim: editor.trim,
             onRazor: editor.split
         )
+        .help("Three-Finger Drag clips to reorder them, or drag a clip edge to trim.")
         .accessibilityLabel("Project timeline")
+        .accessibilityHint(
+            "Drag clips or their edges with Three-Finger Drag or a mouse to reorder and trim."
+        )
     }
 
     private var targetedTrackName: String {

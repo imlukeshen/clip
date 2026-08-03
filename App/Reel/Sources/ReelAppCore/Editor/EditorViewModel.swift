@@ -562,6 +562,50 @@ public final class EditorViewModel {
         }
     }
 
+    /// Selects the visible clip when the preview is manipulated directly.
+    @discardableResult
+    public func selectClipAtPlayheadIfNeeded() -> Bool {
+        if selectedItem != nil { return true }
+        guard let item = document.item(at: playhead)?.item else {
+            notice = "Move the playhead over a clip before positioning it."
+            return false
+        }
+        selection = [item.id]
+        return true
+    }
+
+    /// Repositions the selected video in canvas-normalized coordinates.
+    public func translateSelectedClip(by delta: NormalizedPoint) {
+        guard selectClipAtPlayheadIfNeeded(), let selectedItem,
+            delta.x.isFinite, delta.y.isFinite,
+            abs(delta.x) > 0.0001 || abs(delta.y) > 0.0001
+        else { return }
+        var transform = selectedTransform
+        transform.translationX = min(max(transform.translationX + delta.x, -2), 2)
+        transform.translationY = min(max(transform.translationY + delta.y, -2), 2)
+        if selectedItem.transform.keyframes.isEmpty {
+            updateItem(selectedItem.id, label: "Position Clip") {
+                $0.transform.constant = transform
+            }
+        } else {
+            setTransformKeyframe(transform)
+        }
+    }
+
+    public func resetSelectedPosition() {
+        guard let selectedItem else { return }
+        var transform = selectedTransform
+        transform.translationX = 0
+        transform.translationY = 0
+        if selectedItem.transform.keyframes.isEmpty {
+            updateItem(selectedItem.id, label: "Reset Clip Position") {
+                $0.transform.constant = transform
+            }
+        } else {
+            setTransformKeyframe(transform)
+        }
+    }
+
     public func setTransformKeyframe(_ value: Transform2D? = nil) {
         guard let selectedItem else { return }
         do {

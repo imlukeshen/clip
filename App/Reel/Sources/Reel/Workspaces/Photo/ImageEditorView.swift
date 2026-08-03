@@ -231,7 +231,7 @@ struct ImageEditorView: View {
             }
             .buttonStyle(ReelProminentButtonStyle())
 
-        case .eyedropper:
+        case .pan, .eyedropper:
             EmptyView()
         }
     }
@@ -338,6 +338,8 @@ private struct ImageCanvasView: View {
                         CanvasBackdrop()
                         artboard(rendered, size: artboardSize)
                             .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
+                        ScrollViewPanBridge(isEnabled: editor.activeTool == .pan)
+                            .frame(width: 0, height: 0)
                     }
                     .frame(width: workspaceSize.width, height: workspaceSize.height)
                 }
@@ -507,6 +509,8 @@ private struct ImageCanvasView: View {
                 let start = normalized(value.startLocation, in: size)
                 let current = normalized(value.location, in: size)
                 switch editor.activeTool {
+                case .pan:
+                    break
                 case .select:
                     if movingLayerID == nil {
                         editor.selectLayer(at: start)
@@ -543,6 +547,8 @@ private struct ImageCanvasView: View {
                 let start = normalized(value.startLocation, in: size)
                 let end = normalized(value.location, in: size)
                 switch editor.activeTool {
+                case .pan:
+                    break
                 case .select:
                     guard movingLayerID != nil,
                         hypot(value.translation.width, value.translation.height) > 2
@@ -762,9 +768,101 @@ private struct CropOverlay: View {
     }
 }
 
+/// Lets the system's accessibility drag (including Three-Finger Drag) scroll a
+/// SwiftUI canvas without stealing draw and selection drags in the other tools.
+private struct ScrollViewPanBridge: NSViewRepresentable {
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.owner = context.coordinator
+        view.isPanEnabled = isEnabled
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.owner = context.coordinator
+        view.isPanEnabled = isEnabled
+        context.coordinator.attach(to: view.enclosingScrollView, enabled: isEnabled)
+    }
+
+    static func dismantleNSView(_ view: ProbeView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class ProbeView: NSView {
+        weak var owner: Coordinator?
+        var isPanEnabled = false
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            owner?.attach(to: enclosingScrollView, enabled: isPanEnabled)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var scrollView: NSScrollView?
+        private var recognizer: NSPanGestureRecognizer?
+        private var startOrigin = NSPoint.zero
+
+        func attach(to nextScrollView: NSScrollView?, enabled: Bool) {
+            if scrollView !== nextScrollView {
+                detach()
+                guard let nextScrollView else { return }
+                let recognizer = NSPanGestureRecognizer(
+                    target: self,
+                    action: #selector(handlePan(_:))
+                )
+                recognizer.buttonMask = 0x1
+                recognizer.delaysPrimaryMouseButtonEvents = true
+                nextScrollView.addGestureRecognizer(recognizer)
+                scrollView = nextScrollView
+                self.recognizer = recognizer
+            }
+            recognizer?.isEnabled = enabled
+        }
+
+        func detach() {
+            if let recognizer {
+                scrollView?.removeGestureRecognizer(recognizer)
+            }
+            recognizer = nil
+            scrollView = nil
+        }
+
+        @objc private func handlePan(_ recognizer: NSPanGestureRecognizer) {
+            guard let scrollView else { return }
+            let clipView = scrollView.contentView
+            switch recognizer.state {
+            case .began:
+                startOrigin = clipView.bounds.origin
+            case .changed:
+                let translation = recognizer.translation(in: clipView)
+                var bounds = clipView.bounds
+                bounds.origin = NSPoint(
+                    x: startOrigin.x - translation.x,
+                    y: startOrigin.y - translation.y
+                )
+                let constrained = clipView.constrainBoundsRect(bounds)
+                clipView.scroll(to: constrained.origin)
+                scrollView.reflectScrolledClipView(clipView)
+            case .possible, .ended, .cancelled, .failed:
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+}
+
 extension ImageEditorTool {
     fileprivate static let grouped: [[ImageEditorTool]] = [
-        [.select, .crop],
+        [.select, .pan, .crop],
         [.arrow, .box, .ellipse, .freehand, .text, .highlight, .step],
         [.redact, .blur],
         [.padding, .eyedropper],
@@ -773,6 +871,7 @@ extension ImageEditorTool {
     fileprivate var guidance: String {
         switch self {
         case .select: "Click a layer to select it, then drag to move it."
+        case .pan: "Use Three-Finger Drag or a mouse drag to move around the canvas."
         case .crop: "Drag a crop area or choose an aspect ratio, then Apply."
         case .arrow: "Drag from the start point toward what you want to call out."
         case .box: "Drag around an area to draw a box."

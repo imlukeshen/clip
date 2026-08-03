@@ -56,6 +56,22 @@ struct EditorViewModelTests {
         #expect(editor.document == original)
     }
 
+    @Test("Preview dragging positions the visible clip and remains exactly undoable")
+    func previewDraggingPositionsClip() throws {
+        let original = try document()
+        let itemID = try #require(original.timeline.video.first?.id)
+        let editor = makeEditor(document: original)
+        editor.seek(to: RationalTime(seconds: 1))
+
+        editor.translateSelectedClip(by: NormalizedPoint(x: 0.25, y: -0.1))
+
+        #expect(editor.selection == [itemID])
+        #expect(editor.selectedTransform.translationX == 0.25)
+        #expect(editor.selectedTransform.translationY == -0.1)
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
     @Test("Click-derived zooms form one patch and preserve manual zooms")
     func autoZoomAndUndo() throws {
         var original = try document()
