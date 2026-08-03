@@ -9,50 +9,57 @@ struct Titlebar: View {
     @State private var isSearchHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button(action: model.navigateBack) {
-                Image(systemName: "chevron.left").frame(width: 20, height: 24)
-            }
-            .buttonStyle(ReelIconButtonStyle())
-            .disabled(!model.canNavigateBack)
-            Button(action: model.navigateForward) {
-                Image(systemName: "chevron.right").frame(width: 20, height: 24)
-            }
-            .buttonStyle(ReelIconButtonStyle())
-            .disabled(!model.canNavigateForward)
+        ZStack {
+            HStack(spacing: 10) {
+                Button(action: model.navigateBack) {
+                    Image(systemName: "chevron.left").frame(width: 20, height: 24)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .disabled(!model.canNavigateBack)
+                Button(action: model.navigateForward) {
+                    Image(systemName: "chevron.right").frame(width: 20, height: 24)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .disabled(!model.canNavigateForward)
 
-            breadcrumb
-                .font(theme.type.label.font)
+                breadcrumb
+                    .font(theme.type.label.font)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: isBrowsing ? 260 : .infinity, alignment: .leading)
 
-            Spacer()
+                Spacer(minLength: isBrowsing ? 350 : 16)
+
+                Button {
+                    AppCommandRouter.run("app.commandPalette", in: model)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "command")
+                        Text("K")
+                    }
+                    .font(theme.type.caption.font)
+                    .frame(height: 26)
+                    .padding(.horizontal, 7)
+                }
+                .buttonStyle(ReelPlainButtonStyle())
+                .background(theme.palette.surfacePanel)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .help("Command Palette")
+
+                Button {
+                    model.isInspectorVisible.toggle()
+                } label: {
+                    Image(systemName: "sidebar.trailing")
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(ReelIconButtonStyle(isActive: model.isInspectorVisible))
+                .help("Toggle Inspector")
+            }
+
             if isBrowsing {
                 searchField
+                    .zIndex(1)
             }
-
-            Button {
-                AppCommandRouter.run("app.commandPalette", in: model)
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "command")
-                    Text("K")
-                }
-                .font(theme.type.caption.font)
-                .frame(height: 26)
-                .padding(.horizontal, 7)
-            }
-            .buttonStyle(ReelPlainButtonStyle())
-            .background(theme.palette.surfacePanel)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            .help("Command Palette")
-
-            Button {
-                model.isInspectorVisible.toggle()
-            } label: {
-                Image(systemName: "sidebar.trailing")
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(ReelIconButtonStyle(isActive: model.isInspectorVisible))
-            .help("Toggle Inspector")
         }
         .padding(.horizontal, 16)
         .frame(height: 42)
