@@ -80,9 +80,11 @@ struct AssetGrid: View {
         .padding(.horizontal, 10)
         .frame(height: 36)
         .background(theme.palette.surfacePanel)
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
                 .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
         }
     }

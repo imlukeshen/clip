@@ -26,7 +26,13 @@ public struct KbdChip: View {
             .padding(.vertical, 2)
             .padding(.horizontal, 7)
             .background(theme.palette.surfacePanel)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+                    .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+            }
             .accessibilityValue(accessibilityValue)
     }
 

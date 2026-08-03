@@ -26,9 +26,11 @@ private struct ReelBorderedButtonBody: View {
             .padding(.vertical, theme.metrics.spacing.xs)
             .padding(.horizontal, 11)
             .background(backgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: theme.metrics.radius.control)
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
                     .stroke(
                         borderColor,
                         lineWidth: theme.metrics.hairline

@@ -102,7 +102,12 @@ struct ImageEditorView: View {
                         editor.activeTool == tool
                             ? theme.palette.accentDim : Color.clear
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.control,
+                            style: .continuous
+                        )
+                    )
                     .animation(.easeOut(duration: 0.18), value: editor.activeTool)
                     .help(tool.title)
                 }

@@ -10,7 +10,9 @@ struct ThemeTests {
         #expect(Theme.dark.metrics.hairline == 0.5)
         #expect(Theme.dark.metrics.spacing.xs == 4)
         #expect(Theme.dark.metrics.spacing.xxl == 28)
-        #expect(Theme.dark.metrics.radius.dropZone == 10)
+        #expect(Theme.dark.metrics.radius.input == 10)
+        #expect(Theme.dark.metrics.radius.card == 12)
+        #expect(Theme.dark.metrics.radius.dropZone == 14)
     }
 
     @Test("Typography uses only regular and medium weights")

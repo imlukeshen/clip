@@ -22,7 +22,14 @@ public struct StatusStrip<Content: View>: View {
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.surfacePanel)
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.05), radius: 7, y: 2)
     }
 }
 

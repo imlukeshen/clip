@@ -61,13 +61,21 @@ struct InboxView: View {
                             .padding(.horizontal, 11)
                             .frame(height: 42)
                             .background(theme.palette.surfacePanel)
-                            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: theme.metrics.radius.control,
+                                    style: .continuous
+                                )
+                            )
                             .overlay {
-                                RoundedRectangle(cornerRadius: theme.metrics.radius.control)
-                                    .strokeBorder(
-                                        theme.palette.line,
-                                        lineWidth: theme.metrics.hairline
-                                    )
+                                RoundedRectangle(
+                                    cornerRadius: theme.metrics.radius.control,
+                                    style: .continuous
+                                )
+                                .strokeBorder(
+                                    theme.palette.line,
+                                    lineWidth: theme.metrics.hairline
+                                )
                             }
                         }
                         .buttonStyle(ReelPlainButtonStyle())

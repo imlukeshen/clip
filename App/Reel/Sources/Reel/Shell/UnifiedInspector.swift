@@ -114,7 +114,12 @@ private struct PDFLayerInspector: View {
                                     editor.selectedLayerID == layer.id
                                         ? theme.palette.accentDim : Color.clear
                                 )
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: theme.metrics.radius.control,
+                                        style: .continuous
+                                    )
+                                )
                             }
                             .buttonStyle(ReelPlainButtonStyle())
                         }
@@ -320,11 +325,14 @@ private struct ImageLayerInspector: View {
         .background(
             editor.selectedLayerID == layer.id ? theme.palette.accentDim : Color.clear
         )
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+        )
     }
 }
 
 private struct AssetThumbnailSummary: View {
+    @Environment(\.theme) private var theme
     let asset: AssetRecord
     let root: URL
 
@@ -342,6 +350,8 @@ private struct AssetThumbnailSummary: View {
         .frame(height: 132)
         .clipped()
         .background(Color.black.opacity(0.2))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
     }
 }

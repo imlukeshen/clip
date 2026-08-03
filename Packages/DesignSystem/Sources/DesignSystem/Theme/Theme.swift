@@ -33,12 +33,12 @@ public struct Theme: Sendable {
         }
 
         public struct Radius: Sendable, Equatable {
-            public let timeline: CGFloat = 3
-            public let input: CGFloat = 5
-            public let control: CGFloat = 6
-            public let card: CGFloat = 8
-            public let dropZone: CGFloat = 10
-            public let sheet: CGFloat = 12
+            public let timeline: CGFloat = 4
+            public let input: CGFloat = 10
+            public let control: CGFloat = 8
+            public let card: CGFloat = 12
+            public let dropZone: CGFloat = 14
+            public let sheet: CGFloat = 16
 
             public init() {}
         }

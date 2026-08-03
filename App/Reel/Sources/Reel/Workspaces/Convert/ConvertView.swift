@@ -71,9 +71,11 @@ private struct ConversionQueue: View {
             }
         }
         .background(theme.palette.surfacePanel)
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.card)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .stroke(theme.palette.line, lineWidth: theme.metrics.hairline)
         }
     }

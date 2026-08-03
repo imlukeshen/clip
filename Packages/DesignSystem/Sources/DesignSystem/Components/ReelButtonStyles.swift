@@ -69,7 +69,9 @@ private struct ReelIconButtonBody: View {
                 isActive ? theme.palette.accent : theme.palette.textSecondary
             )
             .background(backgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
             .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.34)
             .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.91 : 1))
             .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 0.75 : 0))
@@ -117,7 +119,9 @@ private struct ReelProminentButtonBody: View {
             .padding(.vertical, theme.metrics.spacing.sm)
             .padding(.horizontal, theme.metrics.spacing.lg)
             .background(theme.palette.accent)
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
             .brightness(isHovered && isEnabled ? 0.07 : 0)
             .opacity(isEnabled ? (configuration.isPressed ? 0.84 : 1) : 0.36)
             .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.965 : 1))

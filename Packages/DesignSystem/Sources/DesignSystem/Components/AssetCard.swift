@@ -127,12 +127,18 @@ public struct AssetCard<Thumbnail: View>: View {
                 ? theme.palette.accentDim
                 : (isHovered ? theme.palette.surfaceRaised : theme.palette.surfacePanel)
         )
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.card)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: theme.metrics.hairline)
         }
-        .shadow(color: .black.opacity(isHovered ? 0.16 : 0.06), radius: isHovered ? 8 : 3, y: 2)
+        .shadow(
+            color: .black.opacity(isHovered ? 0.14 : 0.05),
+            radius: isHovered ? 10 : 4,
+            y: isHovered ? 4 : 2
+        )
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .accessibilityElement(children: .contain)
@@ -143,7 +149,7 @@ public struct AssetCard<Thumbnail: View>: View {
         switch state {
         case .selected: theme.palette.accentLine
         case .failed: theme.palette.danger
-        case .normal, .ingesting: Color.clear
+        case .normal, .ingesting: theme.palette.line
         }
     }
 }

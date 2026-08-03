@@ -151,7 +151,9 @@ struct LibrarySidebar: View {
             .padding(.horizontal, 10)
             .frame(height: 36)
             .background(selected ? theme.palette.accentDim : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
             .overlay(alignment: .leading) {
                 if selected {
                     Capsule()
@@ -254,7 +256,12 @@ private struct FolderTreeRow: View {
                             ? theme.palette.accentDim
                             : (isHovered ? theme.palette.surfaceRaised : Color.clear)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.control,
+                            style: .continuous
+                        )
+                    )
                     .animation(.easeOut(duration: 0.18), value: isSelected)
                     .animation(.easeOut(duration: 0.16), value: isHovered)
                     .contentShape(Rectangle())

@@ -28,7 +28,7 @@ struct Titlebar: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: isBrowsing ? 260 : .infinity, alignment: .leading)
 
-                Spacer(minLength: isBrowsing ? 350 : 16)
+                Spacer(minLength: isBrowsing ? 488 : 16)
 
                 Button {
                     AppCommandRouter.run("app.commandPalette", in: model)
@@ -43,7 +43,19 @@ struct Titlebar: View {
                 }
                 .buttonStyle(ReelPlainButtonStyle())
                 .background(theme.palette.surfacePanel)
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                    .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+                }
                 .help("Command Palette")
 
                 Button {
@@ -77,6 +89,7 @@ struct Titlebar: View {
     private var searchField: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(
                     isSearchFocused ? theme.palette.accent : theme.palette.textTertiary
                 )
@@ -112,28 +125,46 @@ struct Titlebar: View {
             }
             .frame(width: 22, alignment: .trailing)
         }
-        .font(theme.type.label.font)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .frame(width: isSearchFocused ? 326 : 300)
-        .background(
-            isSearchFocused || isSearchHovered
-                ? theme.palette.surfacePanel : theme.palette.surfaceRaised
+        .font(theme.type.body.font)
+        .padding(.horizontal, 12)
+        .frame(width: isSearchFocused ? 464 : 420, height: 34)
+        .background {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+                .fill(
+                    isSearchFocused || isSearchHovered
+                        ? theme.palette.surfacePanel : theme.palette.surfaceRaised
+                )
+                .overlay {
+                    LinearGradient(
+                        colors: [.white.opacity(0.035), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.input,
+                            style: .continuous
+                        )
+                    )
+                }
+        }
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
         )
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
         .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
                 .strokeBorder(
                     isSearchFocused
                         ? theme.palette.accentLine
                         : (isSearchHovered ? theme.palette.lineStrong : theme.palette.line),
-                    lineWidth: 1
+                    lineWidth: isSearchFocused ? 1 : theme.metrics.hairline
                 )
         }
         .shadow(
-            color: isSearchFocused ? theme.palette.accent.opacity(0.1) : .clear,
-            radius: 8,
-            y: 2
+            color: isSearchFocused
+                ? theme.palette.accent.opacity(0.14) : .black.opacity(0.08),
+            radius: isSearchFocused ? 10 : 4,
+            y: isSearchFocused ? 3 : 1
         )
         .animation(.easeInOut(duration: 0.2), value: isSearchFocused)
         .animation(.easeOut(duration: 0.18), value: isSearchHovered)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-public enum DropZoneState: Sendable, CaseIterable {
+public enum DropZoneState: Sendable, CaseIterable, Equatable {
     case idle
     case hovered
     case dragTargeted
@@ -47,14 +47,24 @@ public struct DropZone: View {
                 .buttonStyle(ReelBorderedButtonStyle())
         }
         .padding(22)
-        .background(state == .dragTargeted ? theme.palette.accentDim : Color.clear)
+        .background(
+            state == .dragTargeted
+                ? theme.palette.accentDim
+                : (state == .hovered
+                    ? theme.palette.surfaceRaised : theme.palette.surfacePanel.opacity(0.55))
+        )
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.dropZone, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.dropZone)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.dropZone, style: .continuous)
                 .strokeBorder(
                     borderColor,
-                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    style: StrokeStyle(lineWidth: 0.75, dash: [6, 5])
                 )
         }
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
+        .animation(.easeOut(duration: 0.18), value: state)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title). \(detail)")

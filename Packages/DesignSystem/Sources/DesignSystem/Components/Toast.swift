@@ -15,11 +15,14 @@ public struct Toast: View {
             .padding(.vertical, 8)
             .padding(.horizontal, theme.metrics.spacing.lg)
             .background(theme.palette.surfaceRaised)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 7)
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                     .stroke(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
             }
+            .shadow(color: .black.opacity(0.14), radius: 12, y: 4)
             .accessibilityAddTraits(.isStaticText)
     }
 }

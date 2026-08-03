@@ -802,7 +802,9 @@ private struct AssistantBubble: View {
             .background(
                 message.role == .user ? theme.palette.accentDim : theme.palette.surfaceRaised
             )
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
             .textSelection(.enabled)
     }
 }
@@ -827,7 +829,9 @@ private struct PendingActionCard: View {
         }
         .padding(9)
         .background(theme.palette.surfaceRaised)
-        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+        )
     }
 }
 
@@ -849,7 +853,9 @@ private struct EffectButton: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 6)
             .background(theme.palette.surfaceRaised)
-            .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control))
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
     }
 }
 
