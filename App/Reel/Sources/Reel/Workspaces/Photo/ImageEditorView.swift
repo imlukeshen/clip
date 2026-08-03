@@ -362,13 +362,6 @@ private struct ImageCanvasView: View {
             }
         }
         .onDeleteCommand { editor.removeSelectedLayer() }
-        .onExitCommand {
-            if editor.pendingCrop != nil {
-                editor.cancelPendingCrop()
-            } else {
-                editor.activate(.select)
-            }
-        }
         .onMoveCommand { direction in
             guard editor.activeTool == .select else { return }
             let amount: CGFloat = 0.005
