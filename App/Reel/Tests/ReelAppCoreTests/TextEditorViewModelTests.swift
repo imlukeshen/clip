@@ -37,6 +37,18 @@ struct TextEditorViewModelTests {
         #expect(textView.string.isEmpty)
     }
 
+    @Test("Pasting into an empty plain buffer detects a high-confidence language")
+    func emptyPasteDetectsLanguage() throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Untitled.txt")
+        let editor = try makeEditor(file: file, text: "")
+
+        editor.text = "{\"clip\": true}"
+        editor.detectPastedLanguage(contents: editor.text)
+
+        #expect(editor.language == .json)
+        #expect(editor.activeFile?.languageIsExplicit == false)
+    }
+
     @Test("Mixed line ending normalization is one undoable edit")
     func normalizesMixedLineEndings() throws {
         let file = TextFile(

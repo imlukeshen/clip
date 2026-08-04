@@ -11,16 +11,20 @@ struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
     let language: LanguageID
     let settings: EditorSettings
+    let fileName: String
     let isReadOnly: Bool
     let undoManager: UndoManager
     let onSave: () -> Void
     let onLongLineModeChange: (Bool) -> Void
     let onLargePaste: () -> Void
     let onPasteRefused: () -> Void
+    let onPasteIntoEmptyBuffer: (String) -> Void
+    let onSnippetNotice: (String) -> Void
     let diagnostics: [TeXDiagnostic]
     let scrollToLine: Int?
     let navigation: TextEditorNavigation?
     let onVisibleLineChange: (Int) -> Void
+    let onSelectionChange: (NSRange) -> Void
     let onCursorChange: (Int, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -34,6 +38,10 @@ struct CodeEditor: NSViewRepresentable {
         textView.onSave = context.coordinator.save
         textView.onLargePaste = context.coordinator.largePaste
         textView.onPasteRefused = context.coordinator.refusePaste
+        textView.onPasteIntoEmptyBuffer = onPasteIntoEmptyBuffer
+        textView.snippetLanguage = language
+        textView.snippetFileName = fileName
+        textView.onSnippetNotice = onSnippetNotice
         textView.isEditable = !isReadOnly
         textView.isSelectable = true
         textView.setAccessibilityIdentifier("text-editor")
@@ -97,6 +105,10 @@ struct CodeEditor: NSViewRepresentable {
         let scrollView = container.scrollView
         guard let textView = scrollView.documentView as? CodeTextView else { return }
         textView.isEditable = !isReadOnly
+        textView.snippetLanguage = language
+        textView.snippetFileName = fileName
+        textView.onSnippetNotice = onSnippetNotice
+        textView.onPasteIntoEmptyBuffer = onPasteIntoEmptyBuffer
         if !context.coordinator.isApplyingText, textView.string != text {
             context.coordinator.apply(text, to: textView)
         }
@@ -184,6 +196,7 @@ struct CodeEditor: NSViewRepresentable {
             pendingSyntaxEdit = nil
             scheduleHighlight(for: value)
             ruler?.needsDisplay = true
+            reportSelection(textView.selectedRange())
         }
 
         func textStorage(
@@ -383,6 +396,7 @@ struct CodeEditor: NSViewRepresentable {
 
         private func reportSelection(_ selection: NSRange) {
             let position = lineIndex.position(at: selection.location)
+            parent.onSelectionChange(selection)
             parent.onCursorChange(position.line, position.column)
         }
 

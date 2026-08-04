@@ -5,6 +5,7 @@ import DesignSystem
 import ReelAppCore
 import SwiftUI
 import TextEngine
+import UniformTypeIdentifiers
 
 struct TextEditorWorkspace: View {
     @Environment(\.theme) private var theme
@@ -20,6 +21,7 @@ struct TextEditorWorkspace: View {
     @State private var texForwardSearch: TeXForwardSearchRequest?
     @State private var showsTeXOutput = false
     @State private var texOutputTab: TeXOutputTab = .problems
+    @State private var selectedRange = NSRange(location: 0, length: 0)
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -155,12 +157,15 @@ struct TextEditorWorkspace: View {
             text: $editor.text,
             language: editor.language,
             settings: editor.settings,
+            fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
             isReadOnly: editor.isReadOnly,
             undoManager: editor.undoManager,
             onSave: editor.saveNow,
             onLongLineModeChange: editor.setSoftWrapSuppressed,
             onLargePaste: editor.enterLargePasteReadOnlyMode,
             onPasteRefused: editor.reportPasteRefused,
+            onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
+            onSnippetNotice: editor.reportNotice,
             diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
             scrollToLine: editor.language == .markdown && showsMarkdownPreview
                 ? synchronizedLine : nil,
@@ -168,7 +173,8 @@ struct TextEditorWorkspace: View {
             onVisibleLineChange: { line in
                 guard editor.language == .markdown, showsMarkdownPreview else { return }
                 synchronizedLine = line
-            }
+            },
+            onSelectionChange: { selectedRange = $0 }
         ) { line, column in
             cursorLine = line
             cursorColumn = column
@@ -201,6 +207,8 @@ struct TextEditorWorkspace: View {
                 .clipShape(Capsule())
 
             Spacer()
+
+            snippetMenu
 
             if editor.language == .markdown {
                 Button {
@@ -317,6 +325,93 @@ struct TextEditorWorkspace: View {
     private func runForwardSearch() {
         guard let location = editor.forwardTeXSearch(line: cursorLine) else { return }
         texForwardSearch = TeXForwardSearchRequest(location: location)
+    }
+
+    private var snippetMenu: some View {
+        Menu {
+            Group {
+                Button("Copy as Rich Text") {
+                    sendSnippetAction(#selector(CodeTextView.copyAsRichText(_:)))
+                }
+                Button("Copy as HTML") {
+                    sendSnippetAction(#selector(CodeTextView.copyAsHTML(_:)))
+                }
+                Button("Copy with Line Numbers") {
+                    sendSnippetAction(#selector(CodeTextView.copyWithLineNumbers(_:)))
+                }
+                Button("Copy with File and Lines") {
+                    sendSnippetAction(#selector(CodeTextView.copyAnnotated(_:)))
+                }
+            }
+            .disabled(selectedRange.length == 0)
+
+            Divider()
+
+            Button("Wrap in Code Fence") {
+                sendSnippetAction(#selector(CodeTextView.wrapInCodeFence(_:)))
+            }
+            .disabled(selectedRange.length == 0 || editor.isReadOnly)
+            Button("Export as HTML…", action: presentHTMLExportPanel)
+        } label: {
+            Image(systemName: "doc.on.clipboard")
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .disabled(selectedRange.length == 0 && editor.text.isEmpty)
+        .help("Copy snippets or export this file")
+        .accessibilityLabel("Snippet actions")
+        .accessibilityIdentifier("text-snippet-menu")
+    }
+
+    private func sendSnippetAction(_ action: Selector) {
+        if !NSApp.sendAction(action, to: nil, from: nil) {
+            editor.reportNotice("Click in the editor before using a snippet command.")
+        }
+    }
+
+    private func presentHTMLExportPanel() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.html]
+        let sourceName = editor.activeFile?.relativePath ?? "Untitled"
+        panel.nameFieldStringValue =
+            URL(fileURLWithPath: sourceName).deletingPathExtension().lastPathComponent + ".html"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            exportStandaloneHTML(to: url)
+        }
+    }
+
+    private func exportStandaloneHTML(to url: URL) {
+        let source = editor.text
+        let language = editor.language
+        let title = editor.activeFile?.relativePath ?? "Untitled"
+        Task { @MainActor in
+            let highlighter = SyntaxHighlighter()
+            let result = await highlighter.highlights(
+                in: source,
+                language: language,
+                visibleRange: NSRange(location: 0, length: (source as NSString).length)
+            )
+            let attributed = TextSnippetOperations.attributedString(
+                source: source,
+                tokens: result.tokens
+            )
+            let html = TextSnippetOperations.standaloneHTML(
+                title: title,
+                attributedString: attributed
+            )
+            let data = Data(html.utf8)
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try data.write(to: url, options: .atomic)
+                }.value
+                editor.reportNotice("Exported \(url.lastPathComponent).")
+            } catch {
+                editor.reportNotice("The HTML file could not be exported.")
+            }
+        }
     }
 
     private func runInverseSearch(page: Int, x: Double, y: Double) {

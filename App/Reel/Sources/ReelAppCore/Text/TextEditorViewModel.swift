@@ -328,6 +328,9 @@ public final class TextEditorViewModel {
     /// Clears the transient editor notice.
     public func clearNotice() { notice = nil }
 
+    /// Shows a short result from an editor-adjacent action such as copy or export.
+    public func reportNotice(_ message: String) { notice = message }
+
     /// Supplies the engine selected by the app's distribution channel.
     public func configureTeXEngine(_ engine: any TeXEngine) {
         texEngine = engine
@@ -443,6 +446,23 @@ public final class TextEditorViewModel {
     /// Reports that a paste exceeded the hard in-app size limit.
     public func reportPasteRefused() {
         notice = "Pastes over 20 MB cannot be opened in Clip."
+    }
+
+    /// Detects a high-confidence language when content is pasted into an empty buffer.
+    public func detectPastedLanguage(contents: String) {
+        guard let activeFile, !activeFile.languageIsExplicit,
+            activeFile.language == .plainText
+        else { return }
+        let detected = LanguageDetector.detect(path: "", contents: contents)
+        guard detected != .plainText else { return }
+        do {
+            _ = try document.apply(.setLanguage(activeFile.id, detected, explicit: false))
+            rebuildTeXProjectAnalysis()
+            persistStructureNow()
+            notice = "Detected \(detected.rawValue.capitalized)."
+        } catch {
+            notice = "Clip could not update the detected language."
+        }
     }
 
     /// Explicitly normalizes mixed separators and keeps text plus metadata in one undo step.

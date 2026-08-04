@@ -1,4 +1,5 @@
 import AppKit
+import CoreModel
 import ReelAppCore
 
 @MainActor
@@ -14,6 +15,10 @@ final class CodeTextView: NSTextView {
     var onSave: (String) -> Void = { _ in }
     var onLargePaste: () -> Void = {}
     var onPasteRefused: () -> Void = {}
+    var onPasteIntoEmptyBuffer: (String) -> Void = { _ in }
+    var snippetLanguage: LanguageID = .plainText
+    var snippetFileName = "Untitled.txt"
+    var onSnippetNotice: (String) -> Void = { _ in }
     private var findPanelController: CodeFindPanelController?
 
     override var undoManager: UndoManager? { providedUndoManager ?? super.undoManager }
@@ -29,7 +34,9 @@ final class CodeTextView: NSTextView {
             onPasteRefused()
             return
         }
+        let wasEmpty = string.isEmpty
         super.paste(sender)
+        if wasEmpty { onPasteIntoEmptyBuffer(value) }
         if byteCount > 2 * 1024 * 1024 {
             isEditable = false
             onLargePaste()
@@ -165,6 +172,108 @@ final class CodeTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        menu.addItem(.separator())
+        addSnippetItem("Copy as Rich Text", action: #selector(copyAsRichText(_:)), to: menu)
+        addSnippetItem("Copy as HTML", action: #selector(copyAsHTML(_:)), to: menu)
+        addSnippetItem(
+            "Copy with Line Numbers", action: #selector(copyWithLineNumbers(_:)), to: menu)
+        addSnippetItem("Copy with File and Lines", action: #selector(copyAnnotated(_:)), to: menu)
+        menu.addItem(.separator())
+        addSnippetItem("Wrap in Code Fence", action: #selector(wrapInCodeFence(_:)), to: menu)
+        return menu
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copyAsRichText(_:)),
+            #selector(copyAsHTML(_:)),
+            #selector(copyWithLineNumbers(_:)),
+            #selector(copyAnnotated(_:)):
+            return selectedRange().length > 0
+        case #selector(wrapInCodeFence(_:)):
+            return isEditable && selectedRange().length > 0
+        default:
+            return super.validateMenuItem(menuItem)
+        }
+    }
+
+    @objc func copyAsRichText(_ sender: Any?) {
+        guard let attributed = selectedAttributedString(),
+            let data = TextSnippetOperations.richTextData(
+                from: attributed,
+                backgroundColor: backgroundColor
+            )
+        else {
+            rejectEmptySnippet()
+            return
+        }
+        writeToPasteboard(string: attributed.string, data: data, type: .rtf)
+        onSnippetNotice("Copied rich text with syntax colors.")
+    }
+
+    @objc func copyAsHTML(_ sender: Any?) {
+        guard let attributed = selectedAttributedString() else {
+            rejectEmptySnippet()
+            return
+        }
+        let html = TextSnippetOperations.htmlFragment(
+            from: attributed,
+            backgroundColor: backgroundColor
+        )
+        writeToPasteboard(
+            string: attributed.string,
+            data: Data(html.utf8),
+            type: .html
+        )
+        onSnippetNotice("Copied an inline-styled HTML snippet.")
+    }
+
+    @objc func copyWithLineNumbers(_ sender: Any?) {
+        guard
+            let value = TextSnippetOperations.copyWithLineNumbers(
+                in: string,
+                selectedRange: selectedRange()
+            )
+        else {
+            rejectEmptySnippet()
+            return
+        }
+        writePlainText(value)
+        onSnippetNotice("Copied with line numbers.")
+    }
+
+    @objc func copyAnnotated(_ sender: Any?) {
+        guard
+            let value = TextSnippetOperations.annotatedSelection(
+                in: string,
+                selectedRange: selectedRange(),
+                fileName: snippetFileName
+            )
+        else {
+            rejectEmptySnippet()
+            return
+        }
+        writePlainText(value)
+        onSnippetNotice("Copied with file and line context.")
+    }
+
+    @objc func wrapInCodeFence(_ sender: Any?) {
+        guard isEditable,
+            let result = TextSnippetOperations.wrappingSelectionInCodeFence(
+                in: string,
+                selectedRange: selectedRange(),
+                language: snippetLanguage
+            )
+        else {
+            rejectEmptySnippet()
+            return
+        }
+        apply(result)
+        onSnippetNotice("Wrapped the selection in a code fence.")
+    }
+
     private var currentLineRect: NSRect? {
         guard let window else { return nil }
         let source = string as NSString
@@ -177,6 +286,42 @@ final class CodeTextView: NSTextView {
         let screenRect = firstRect(forCharacterRange: characterRange, actualRange: &actual)
         let local = convert(window.convertFromScreen(screenRect), from: nil)
         return NSRect(x: 0, y: local.minY, width: bounds.width, height: local.height)
+    }
+
+    private func addSnippetItem(_ title: String, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    private func selectedAttributedString() -> NSAttributedString? {
+        let selection = selectedRange()
+        guard selection.length > 0, let textStorage,
+            NSMaxRange(selection) <= textStorage.length
+        else { return nil }
+        return textStorage.attributedSubstring(from: selection)
+    }
+
+    private func writePlainText(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+    }
+
+    private func writeToPasteboard(
+        string: String,
+        data: Data,
+        type: NSPasteboard.PasteboardType
+    ) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+        pasteboard.setData(data, forType: type)
+    }
+
+    private func rejectEmptySnippet() {
+        NSSound.beep()
+        onSnippetNotice("Select text before using a snippet command.")
     }
 
     private func apply(_ result: TextEditResult) {
