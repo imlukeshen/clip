@@ -18,6 +18,7 @@ struct EditorView: View {
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
     @State private var liveTextSpans: [OCRSpan] = []
+    @AppStorage("clip.timeline.zoom") private var timelineZoom = TimelineViewport.fitZoom
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -31,12 +32,12 @@ struct EditorView: View {
                 }
                 Divider().overlay(theme.palette.line)
                 timeline
-                    .frame(height: 190)
+                    .frame(height: 224)
             }
 
             if let notice = editor.notice {
                 Toast(notice)
-                    .padding(.bottom, 204)
+                    .padding(.bottom, 238)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .task(id: notice) {
                         try? await Task.sleep(for: .seconds(2.1))
@@ -395,6 +396,106 @@ struct EditorView: View {
     }
 
     private var timeline: some View {
+        VStack(spacing: 0) {
+            timelineToolbar
+            Divider().overlay(theme.palette.line)
+            GeometryReader { proxy in
+                ScrollView(.horizontal) {
+                    timelineCanvas
+                        .frame(
+                            width: CGFloat(
+                                TimelineViewport.contentWidth(
+                                    viewportWidth: Double(proxy.size.width),
+                                    zoom: timelineZoom
+                                )
+                            ),
+                            height: proxy.size.height
+                        )
+                }
+                .scrollIndicators(.visible)
+                .background(theme.palette.surfaceSunken)
+            }
+        }
+        .background(theme.palette.surfacePanel)
+    }
+
+    private var timelineToolbar: some View {
+        HStack(spacing: 8) {
+            Label(
+                "\(editor.document.timeline.video.count) clips",
+                systemImage: "rectangle.stack"
+            )
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textSecondary)
+
+            Divider()
+                .overlay(theme.palette.line)
+                .frame(height: 15)
+
+            Label(
+                editor.isSnappingEnabled ? "Snap" : "Free",
+                systemImage: editor.isSnappingEnabled ? "magnet.fill" : "magnet"
+            )
+            .font(theme.type.caption.font)
+            .foregroundStyle(
+                editor.isSnappingEnabled ? theme.palette.accent : theme.palette.textTertiary
+            )
+
+            Spacer(minLength: 12)
+
+            Button {
+                setTimelineZoom(
+                    TimelineViewport.stepping(timelineZoom, direction: -1)
+                )
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .disabled(timelineZoom <= TimelineViewport.fitZoom)
+            .keyboardShortcut("-", modifiers: .command)
+            .help("Zoom out")
+
+            Slider(
+                value: Binding(
+                    get: { timelineZoom },
+                    set: { setTimelineZoom($0) }
+                ),
+                in: TimelineViewport.fitZoom...TimelineViewport.maximumZoom
+            )
+            .controlSize(.mini)
+            .frame(width: 112)
+            .accessibilityLabel("Timeline zoom")
+            .accessibilityValue("\(Int((timelineZoom * 100).rounded())) percent")
+
+            Button {
+                setTimelineZoom(
+                    TimelineViewport.stepping(timelineZoom, direction: 1)
+                )
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .disabled(timelineZoom >= TimelineViewport.maximumZoom)
+            .keyboardShortcut("=", modifiers: .command)
+            .help("Zoom in")
+
+            Text("\(Int((timelineZoom * 100).rounded()))%")
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .frame(width: 48, alignment: .trailing)
+
+            Button("Fit") {
+                setTimelineZoom(TimelineViewport.fitZoom)
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .disabled(timelineZoom == TimelineViewport.fitZoom)
+            .help("Fit the complete project")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+    }
+
+    private var timelineCanvas: some View {
         EditorTimeline(
             timeline: editor.document.timeline,
             names: editor.assetNames,
@@ -427,13 +528,26 @@ struct EditorView: View {
             onScrubbing: editor.setScrubbing,
             onReorder: editor.reorder,
             onTrim: editor.trim,
-            onRazor: editor.split
+            onRazor: editor.split,
+            onZoom: zoomTimeline
         )
-        .help("Three-Finger Drag clips to reorder them, or drag a clip edge to trim.")
+        .help(
+            "Three-finger drag clips to reorder or trim. Scroll to pan; pinch or Option-scroll to zoom."
+        )
         .accessibilityLabel("Project timeline")
         .accessibilityHint(
-            "Drag clips or their edges with Three-Finger Drag or a mouse to reorder and trim."
+            "Drag clips or their edges to reorder and trim. Scroll to pan and pinch to zoom."
         )
+    }
+
+    private func zoomTimeline(by factor: CGFloat) {
+        setTimelineZoom(
+            TimelineViewport.zooming(timelineZoom, by: Double(factor))
+        )
+    }
+
+    private func setTimelineZoom(_ zoom: Double) {
+        timelineZoom = TimelineViewport.clampedZoom(zoom)
     }
 
     private var targetedTrackName: String {

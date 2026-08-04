@@ -1,0 +1,27 @@
+import Testing
+
+@testable import ReelAppCore
+
+@Suite("Timeline viewport")
+struct TimelineViewportTests {
+    @Test("Fit mode is exactly the visible viewport")
+    func fitMode() {
+        #expect(TimelineViewport.contentWidth(viewportWidth: 900, zoom: 1) == 900)
+    }
+
+    @Test("Zoom expands the timeline and respects its limits")
+    func zoomLimits() {
+        #expect(TimelineViewport.contentWidth(viewportWidth: 800, zoom: 2.5) == 2_000)
+        #expect(TimelineViewport.clampedZoom(0.2) == 1)
+        #expect(TimelineViewport.clampedZoom(50) == 12)
+        #expect(TimelineViewport.zooming(2, by: 1.5) == 3)
+        #expect(TimelineViewport.zooming(2, by: .nan) == 2)
+    }
+
+    @Test("Buttons use finer steps near fit and faster steps when zoomed in")
+    func steppedZoom() {
+        #expect(TimelineViewport.stepping(1, direction: 1) == 1.25)
+        #expect(TimelineViewport.stepping(3, direction: 1) == 3.5)
+        #expect(TimelineViewport.stepping(7, direction: -1) == 6)
+    }
+}

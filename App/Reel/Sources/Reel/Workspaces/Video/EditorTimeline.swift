@@ -34,6 +34,7 @@ struct EditorTimeline: NSViewRepresentable {
     let onReorder: (ItemID, Int) -> Void
     let onTrim: (ItemID, TimeRange) -> Void
     let onRazor: (ItemID, RationalTime) -> Void
+    let onZoom: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> TimelineCanvas {
         TimelineCanvas()
@@ -70,6 +71,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.onReorder = onReorder
         view.onTrim = onTrim
         view.onRazor = onRazor
+        view.onZoom = onZoom
         view.needsDisplay = true
     }
 }
@@ -107,6 +109,7 @@ final class TimelineCanvas: NSView {
     var onReorder: ((ItemID, Int) -> Void)?
     var onTrim: ((ItemID, TimeRange) -> Void)?
     var onRazor: ((ItemID, RationalTime) -> Void)?
+    var onZoom: ((CGFloat) -> Void)?
 
     private let labelWidth: CGFloat = 46
     private let rulerHeight: CGFloat = 24
@@ -118,6 +121,12 @@ final class TimelineCanvas: NSView {
     private var previewRange: (ItemID, TimeRange)?
     private var dropIndex: Int?
     private var snapIndicator: RationalTime?
+    private var hoveredItemID: ItemID?
+    private var hoveredEdge: Edge?
+    private var hoveredTime: RationalTime?
+    private var trackingArea: NSTrackingArea?
+    private var pendingSeek: RationalTime?
+    private var seekIsScheduled = false
 
     private enum Gesture {
         case scrub
@@ -136,6 +145,18 @@ final class TimelineCanvas: NSView {
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let next = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+            owner: self
+        )
+        addTrackingArea(next)
+        trackingArea = next
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         surface.setFill()
@@ -150,6 +171,7 @@ final class TimelineCanvas: NSView {
         drawInOutPoints()
         drawDropMarker()
         drawSnapGuide()
+        drawHoverGuide()
         drawPlayhead()
     }
 
@@ -163,7 +185,7 @@ final class TimelineCanvas: NSView {
                 onRazor?(hit.item.id, time(at: point.x))
                 return
             }
-            if abs(point.x - hit.rect.minX) <= 7 {
+            if abs(point.x - hit.rect.minX) <= 10 {
                 gesture = .trim(
                     itemID: hit.item.id,
                     edge: .leading,
@@ -171,7 +193,7 @@ final class TimelineCanvas: NSView {
                     speed: hit.item.speed,
                     originX: point.x
                 )
-            } else if abs(point.x - hit.rect.maxX) <= 7 {
+            } else if abs(point.x - hit.rect.maxX) <= 10 {
                 gesture = .trim(
                     itemID: hit.item.id,
                     edge: .trailing,
@@ -182,6 +204,7 @@ final class TimelineCanvas: NSView {
             } else if hit.trackIndex == 0 {
                 gesture = .move(itemID: hit.item.id, originalIndex: hit.index)
                 dropIndex = hit.index
+                NSCursor.closedHand.set()
             }
         } else {
             gesture = .scrub
@@ -193,10 +216,12 @@ final class TimelineCanvas: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let gesture else { return }
         let point = convert(event.locationInWindow, from: nil)
+        hoveredTime = time(at: point.x)
         switch gesture {
         case .scrub:
-            onSeek?(time(at: point.x), false)
+            scheduleSeek(to: time(at: point.x))
         case .move:
+            autoscroll(with: event)
             dropIndex = insertionIndex(at: point.x)
             needsDisplay = true
         case .trim(let itemID, let edge, let original, let speed, let originX):
@@ -266,12 +291,14 @@ final class TimelineCanvas: NSView {
             previewRange = nil
             dropIndex = nil
             snapIndicator = nil
+            NSCursor.arrow.set()
             needsDisplay = true
         }
         guard let gesture else { return }
         switch gesture {
         case .scrub:
             let point = convert(event.locationInWindow, from: nil)
+            pendingSeek = nil
             onSeek?(time(at: point.x), true)
             onScrubbing?(false)
         case .move(let itemID, let originalIndex):
@@ -282,6 +309,69 @@ final class TimelineCanvas: NSView {
             if let previewRange, previewRange.1 != original {
                 onTrim?(itemID, previewRange.1)
             }
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard case nil = gesture else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let hit = clip(at: point)
+        hoveredTime = time(at: point.x)
+        hoveredItemID = hit?.item.id
+        if let hit, abs(point.x - hit.rect.minX) <= 10 {
+            hoveredEdge = .leading
+            NSCursor.resizeLeftRight.set()
+        } else if let hit, abs(point.x - hit.rect.maxX) <= 10 {
+            hoveredEdge = .trailing
+            NSCursor.resizeLeftRight.set()
+        } else if hit != nil {
+            hoveredEdge = nil
+            (activeTool == .razor ? NSCursor.crosshair : NSCursor.openHand).set()
+        } else {
+            hoveredEdge = nil
+            (activeTool == .razor ? NSCursor.crosshair : NSCursor.arrow).set()
+        }
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        guard case nil = gesture else { return }
+        hoveredItemID = nil
+        hoveredEdge = nil
+        hoveredTime = nil
+        NSCursor.arrow.set()
+        needsDisplay = true
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        mouseMoved(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        onZoom?(max(0.2, 1 + event.magnification))
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.option) {
+            let delta =
+                event.hasPreciseScrollingDeltas
+                ? event.scrollingDeltaY : event.scrollingDeltaY * 4
+            onZoom?(CGFloat(exp(Double(delta) * 0.018)))
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    private func scheduleSeek(to time: RationalTime) {
+        pendingSeek = time
+        guard !seekIsScheduled else { return }
+        seekIsScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            seekIsScheduled = false
+            guard let pendingSeek else { return }
+            self.pendingSeek = nil
+            self.onSeek?(pendingSeek, false)
         }
     }
 
@@ -401,15 +491,24 @@ final class TimelineCanvas: NSView {
     private func drawVideo() {
         for clip in clipRects() {
             let selected = selection.contains(clip.item.id)
+            let hovered = hoveredItemID == clip.item.id
+            let fillColor: NSColor
+            if selected {
+                fillColor = accentDim
+            } else if hovered {
+                fillColor = clipColor.blended(withFraction: 0.12, of: accent) ?? clipColor
+            } else {
+                fillColor = clipColor
+            }
             let path = NSBezierPath(
                 roundedRect: clip.rect.insetBy(dx: 1, dy: 0),
                 xRadius: clipCornerRadius,
                 yRadius: clipCornerRadius
             )
-            (selected ? accentDim : clipColor).setFill()
+            fillColor.setFill()
             path.fill()
-            (selected ? accent : lineColor).setStroke()
-            path.lineWidth = selected ? 1.5 : 0.5
+            (selected || hovered ? accent : lineColor).setStroke()
+            path.lineWidth = selected ? 1.5 : hovered ? 1 : 0.5
             path.stroke()
 
             if missingAssetIDs.contains(clip.item.assetID) {
@@ -447,6 +546,21 @@ final class TimelineCanvas: NSView {
                 accent.setFill()
                 NSRect(x: clip.rect.minX, y: clip.rect.minY + 4, width: 3, height: 26).fill()
                 NSRect(x: clip.rect.maxX - 3, y: clip.rect.minY + 4, width: 3, height: 26).fill()
+            }
+
+            if hovered, let hoveredEdge {
+                accent.setFill()
+                let edgeX = hoveredEdge == .leading ? clip.rect.minX : clip.rect.maxX - 4
+                NSBezierPath(
+                    roundedRect: NSRect(
+                        x: edgeX,
+                        y: clip.rect.minY + 3,
+                        width: 4,
+                        height: clip.rect.height - 6
+                    ),
+                    xRadius: 2,
+                    yRadius: 2
+                ).fill()
             }
         }
     }
@@ -569,6 +683,33 @@ final class TimelineCanvas: NSView {
         NSRect(x: x - 0.5, y: rulerHeight, width: 1, height: bounds.maxY - rulerHeight).fill()
     }
 
+    private func drawHoverGuide() {
+        guard let hoveredTime, case nil = gesture else { return }
+        let x = labelWidth + CGFloat(hoveredTime.seconds) * pointsPerSecond
+        textTertiary.withAlphaComponent(0.3).setFill()
+        NSRect(
+            x: x - 0.5,
+            y: rulerHeight,
+            width: 1,
+            height: captionY + eventHeight - rulerHeight
+        ).fill()
+
+        let label = formatHoverTime(hoveredTime.seconds)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
+            .foregroundColor: textPrimary,
+        ]
+        let size = (label as NSString).size(withAttributes: attributes)
+        let labelX = min(max(x + 5, labelWidth + 3), bounds.maxX - size.width - 11)
+        let rect = NSRect(x: labelX, y: 3, width: size.width + 8, height: 16)
+        clipColor.withAlphaComponent(0.95).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        (label as NSString).draw(
+            at: NSPoint(x: rect.minX + 4, y: rect.minY + 2),
+            withAttributes: attributes
+        )
+    }
+
     private func drawDropMarker() {
         guard case .move(_, let originalIndex) = gesture,
             let dropIndex,
@@ -634,5 +775,14 @@ final class TimelineCanvas: NSView {
 
     private func formatRuler(_ seconds: Double) -> String {
         String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
+    }
+
+    private func formatHoverTime(_ seconds: Double) -> String {
+        String(
+            format: "%02d:%02d.%03d",
+            Int(seconds) / 60,
+            Int(seconds) % 60,
+            Int(seconds * 1_000) % 1_000
+        )
     }
 }
