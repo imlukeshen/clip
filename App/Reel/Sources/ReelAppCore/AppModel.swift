@@ -108,6 +108,18 @@ public final class AppModel {
             )
         }
     }
+    /// Allows Clip to fetch only pinned, hash-verified open fonts when a PDF's
+    /// embedded subset cannot represent newly typed characters.
+    public var isPDFFontAutoDownloadEnabled: Bool {
+        didSet {
+            guard isPDFFontAutoDownloadEnabled != oldValue else { return }
+            UserDefaults.standard.set(
+                isPDFFontAutoDownloadEnabled,
+                forKey: Self.pdfFontAutoDownloadPreferenceKey
+            )
+            pdfEditor?.automaticallyResolveMissingFonts = isPDFFontAutoDownloadEnabled
+        }
+    }
     /// Where a finished recording goes when no editor is open to take it.
     public private(set) var captureDestination = CaptureDestination.restored()
     public let selection = SelectionModel()
@@ -127,6 +139,10 @@ public final class AppModel {
         LibraryLayout.texCache(in: libraryRoot)
     }
 
+    public var pdfFontCacheURL: URL {
+        LibraryLayout.pdfFontCache(in: libraryRoot)
+    }
+
     private let shortcutReader: ShortcutReader
     private var runtime: AppRuntime?
     private var libraryChangesTask: Task<Void, Never>?
@@ -140,6 +156,8 @@ public final class AppModel {
 
     private static let globalClipboardShortcutPreferenceKey =
         "clip.globalClipboardShortcutEnabled"
+    private static let pdfFontAutoDownloadPreferenceKey =
+        "clip.pdf.autoResolveFonts"
 
     public init(
         libraryRoot: URL = AppModel.defaultLibraryRoot,
@@ -184,6 +202,9 @@ public final class AppModel {
             .flatMap(AppearancePreference.init(rawValue:)) ?? .system
         self.isGlobalClipboardShortcutEnabled =
             UserDefaults.standard.object(forKey: Self.globalClipboardShortcutPreferenceKey)
+            as? Bool ?? true
+        self.isPDFFontAutoDownloadEnabled =
+            UserDefaults.standard.object(forKey: Self.pdfFontAutoDownloadPreferenceKey)
             as? Bool ?? true
         self.inspectorWidth = InspectorLayout.restoredWidth()
         self.undoManager.groupsByEvent = false
@@ -492,6 +513,10 @@ public final class AppModel {
 
     public func setGlobalClipboardShortcutEnabled(_ isEnabled: Bool) {
         isGlobalClipboardShortcutEnabled = isEnabled
+    }
+
+    public func setPDFFontAutoDownloadEnabled(_ isEnabled: Bool) {
+        isPDFFontAutoDownloadEnabled = isEnabled
     }
 
     /// Reads the richest media representation from the system pasteboard and
@@ -2035,6 +2060,8 @@ public final class AppModel {
                     document: document,
                     sourceURL: sourceURL,
                     source: source,
+                    fontStore: PDFOpenFontStore(cacheDirectory: pdfFontCacheURL),
+                    automaticallyResolveMissingFonts: isPDFFontAutoDownloadEnabled,
                     persisting: { document in
                         try await runtime.savePDFDocument(document)
                     }
@@ -2381,6 +2408,25 @@ public final class AppModel {
                 self?.lastMessage = "The TeX package cache was cleared."
             } catch {
                 self?.lastMessage = "The TeX package cache could not be cleared."
+            }
+        }
+    }
+
+    /// Clears downloaded open fonts without touching PDF files or edit documents.
+    public func clearPDFFontCache() {
+        let cache = pdfFontCacheURL
+        Task { [weak self] in
+            do {
+                try await Task.detached(priority: .utility) {
+                    let manager = FileManager.default
+                    if manager.fileExists(atPath: cache.path) {
+                        try manager.removeItem(at: cache)
+                    }
+                    try manager.createDirectory(at: cache, withIntermediateDirectories: true)
+                }.value
+                self?.lastMessage = "The PDF font cache was cleared."
+            } catch {
+                self?.lastMessage = "The PDF font cache could not be cleared."
             }
         }
     }

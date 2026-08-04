@@ -12,7 +12,7 @@ struct UnifiedInspector: View {
     var body: some View {
         Group {
             if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
-                PDFLayerInspector(editor: editor)
+                PDFLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
                 ImageLayerInspector(editor: editor)
             } else if model.selectedWorkspace == .video, let editor = model.editor {
@@ -122,88 +122,177 @@ struct AssistantChatBubble: View {
 
 private struct PDFLayerInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("PDF Edits").font(theme.type.label.font)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("PDF Inspector")
+                    .font(theme.type.title.font)
                 Spacer()
-                Text("\(editor.selectedPage?.layers.count ?? 0)")
+                Text("Page \(editor.selectedPageNumber)")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(theme.palette.surfaceRaised)
+                    .clipShape(Capsule())
             }
-            if let layers = editor.selectedPage?.layers, !layers.isEmpty {
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(Array(layers.reversed())) { layer in
-                            Button {
-                                editor.selectLayer(layer.id)
-                            } label: {
-                                HStack {
-                                    Image(systemName: symbol(for: layer))
-                                    Text(layer.name)
-                                    Spacer()
-                                }
-                                .padding(6)
-                                .background(
-                                    editor.selectedLayerID == layer.id
-                                        ? theme.palette.accentDim : Color.clear
-                                )
-                                .clipShape(
-                                    RoundedRectangle(
-                                        cornerRadius: theme.metrics.radius.control,
-                                        style: .continuous
-                                    )
-                                )
-                            }
-                            .buttonStyle(ReelPlainButtonStyle())
-                        }
-                    }
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+
+            Divider().overlay(theme.palette.line)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    directTextCard
+                    editsCard
+                    fontsCard
+                    recognitionCard
                 }
-            } else {
-                EmptyState(headline: "No edits on this page")
+                .padding(14)
             }
+            .scrollIndicators(.visible)
+        }
+    }
+
+    @ViewBuilder private var directTextCard: some View {
+        inspectorCard("Edit text", symbol: "character.cursor.ibeam") {
             if case .text(let text) = editor.selectedLayer {
-                Divider().overlay(theme.palette.line)
-                Text("Text").font(theme.type.label.font)
                 TextField(
-                    "Text",
+                    "PDF text",
                     text: Binding(
                         get: { text.text },
                         set: { editor.updateSelectedText($0) }
                     ),
                     axis: .vertical
                 )
-                LabeledContent("Font", value: text.font.postScriptName)
+                .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .padding(9)
+                .background(theme.palette.surfaceSunken)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                )
+                LabeledContent("Font", value: text.font.familyName ?? text.font.postScriptName)
                     .font(theme.type.caption.font)
-                if text.font.isEmbedded {
-                    Text(text.font.isSubset ? "Embedded subset" : "Embedded font")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(
-                            text.font.isSubset ? theme.palette.click : theme.palette.success
-                        )
+                HStack(spacing: 6) {
+                    Image(systemName: fontStatusSymbol(text.font))
+                    Text(fontStatus(text.font))
+                    if editor.isResolvingFont { ProgressView().controlSize(.mini) }
                 }
+                .font(theme.type.micro.font)
+                .foregroundStyle(
+                    text.font.isSubset ? theme.palette.click : theme.palette.textTertiary
+                )
+                if text.sourceReference != nil {
+                    Text(
+                        "This changes the original PDF text object and stays selectable on export."
+                    )
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                }
+                if text.font.isSubset || !text.font.isEmbedded {
+                    Button("Resolve font", action: editor.retrySelectedFontResolution)
+                        .buttonStyle(ReelBorderedButtonStyle())
+                        .disabled(editor.isResolvingFont)
+                }
+            } else if let block = editor.selectedSourceTextBlock {
+                Text(block.text)
+                    .font(theme.type.body.font)
+                    .textSelection(.enabled)
+                Text("Double-click the outlined text on the page to edit it in place.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            } else {
+                Text("Select text on the page, then double-click to type directly into the PDF.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
             }
-            if editor.selectedLayer != nil {
-                Button("Delete edit", role: .destructive) { editor.removeSelectedLayer() }
+        }
+    }
+
+    private var editsCard: some View {
+        inspectorCard("Page edits", symbol: "square.3.layers.3d") {
+            if let layers = editor.selectedPage?.layers, !layers.isEmpty {
+                LazyVStack(spacing: 4) {
+                    ForEach(Array(layers.reversed())) { layer in
+                        Button {
+                            editor.selectLayer(layer.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: symbol(for: layer))
+                                    .frame(width: 16)
+                                Text(layer.name)
+                                Spacer()
+                                if editor.selectedLayerID == layer.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(theme.palette.accent)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .frame(height: 32)
+                            .background(
+                                editor.selectedLayerID == layer.id
+                                    ? theme.palette.accentDim : Color.clear
+                            )
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: theme.metrics.radius.control,
+                                    style: .continuous
+                                )
+                            )
+                        }
+                        .buttonStyle(ReelPlainButtonStyle())
+                    }
+                }
+                if editor.selectedLayer != nil {
+                    Button("Delete selected edit", role: .destructive) {
+                        editor.removeSelectedLayer()
+                    }
                     .buttonStyle(ReelPlainButtonStyle())
+                }
+            } else {
+                Text("No edits on this page yet.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
             }
-            Divider().overlay(theme.palette.line)
-            Text("Fonts on source page").font(theme.type.label.font)
+        }
+    }
+
+    private var fontsCard: some View {
+        inspectorCard("Typography", symbol: "textformat") {
+            Toggle(
+                "Resolve missing fonts automatically",
+                isOn: Binding(
+                    get: { model.isPDFFontAutoDownloadEnabled },
+                    set: { model.setPDFFontAutoDownloadEnabled($0) }
+                )
+            )
+            .toggleStyle(.switch)
+            .controlSize(.small)
             if let fonts = editor.pageAnalysis?.fonts, !fonts.isEmpty {
                 ForEach(fonts, id: \.postScriptName) { font in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(font.postScriptName).font(theme.type.caption.font)
-                        Text(fontStatus(font))
-                            .font(theme.type.micro.font)
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: fontStatusSymbol(font))
                             .foregroundStyle(
                                 font.isSubset ? theme.palette.click : theme.palette.textTertiary
                             )
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(font.familyName ?? font.postScriptName)
+                                .font(theme.type.caption.font)
+                            Text(fontStatus(font))
+                                .font(theme.type.micro.font)
+                                .foregroundStyle(theme.palette.textTertiary)
+                        }
                     }
                 }
             } else {
-                Text("No embedded text fonts detected.")
+                Text("No editable text objects were detected. OCR can still recognize a scan.")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
@@ -212,14 +301,17 @@ private struct PDFLayerInspector: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.click)
             }
-            Divider().overlay(theme.palette.line)
-            Text("On-device text recognition").font(theme.type.label.font)
+        }
+    }
+
+    private var recognitionCard: some View {
+        inspectorCard("Scanned text", symbol: "doc.text.viewfinder") {
             if let text = editor.selectedPage?.ocrText {
-                Text(text.isEmpty ? "No text recognized" : "\(text.count) characters saved")
+                Text(text.isEmpty ? "No text recognized" : "\(text.count) characters recognized")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             } else {
-                Text("OCR has not been run for this page.")
+                Text("Run on-device OCR when the page is a scan instead of selectable text.")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
@@ -228,9 +320,25 @@ private struct PDFLayerInspector: View {
             }
             .buttonStyle(ReelBorderedButtonStyle())
             .disabled(editor.isRecognizingText)
-            Spacer()
         }
-        .padding(14)
+    }
+
+    private func inspectorCard<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol)
+                .font(theme.type.label.font)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
     }
 
     private func symbol(for layer: PDFLayer) -> String {
@@ -244,6 +352,10 @@ private struct PDFLayerInspector: View {
     private func fontStatus(_ font: PDFFontDescriptor) -> String {
         if font.isSubset { return "Embedded subset - new glyphs may be unavailable" }
         return font.isEmbedded ? "Embedded" : "Referenced"
+    }
+
+    private func fontStatusSymbol(_ font: PDFFontDescriptor) -> String {
+        font.isSubset ? "exclamationmark.triangle" : "checkmark.circle"
     }
 }
 

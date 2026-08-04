@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreModel
+import CoreText
 import Foundation
 import PDFEngine
 import Testing
@@ -8,6 +9,47 @@ import Testing
 
 @Suite("PDF editor mutation path")
 struct PDFEditorViewModelTests {
+    @Test("Source text is selected and replaced through the undoable model")
+    @MainActor
+    func directTextEditing() async throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "pdf-text-fixture"),
+            title: "Text Fixture"
+        )
+        let editor = PDFEditorViewModel(
+            document: document,
+            sourceURL: URL(fileURLWithPath: "/tmp/text-fixture.pdf"),
+            source: source,
+            fontStore: PDFOpenFontStore(
+                cacheDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "clip-pdf-font-tests-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            ),
+            automaticallyResolveMissingFonts: false,
+            persisting: { _ in }
+        )
+        editor.start()
+        try await waitUntil { !editor.editableTextBlocks.isEmpty }
+        let before = editor.document
+        let block = try #require(editor.editableTextBlocks.first)
+
+        editor.selectSourceTextBlock(block.pageObjectIndex)
+        editor.replaceSourceText(objectIndex: block.pageObjectIndex, with: "PDF text changed")
+
+        let layer = try #require(editor.selectedLayer)
+        guard case .text(let text) = layer else {
+            Issue.record("Expected a source text edit")
+            return
+        }
+        #expect(text.text == "PDF text changed")
+        #expect(text.sourceReference?.pageObjectIndex == block.pageObjectIndex)
+        editor.undo()
+        #expect(editor.document == before)
+        editor.stop()
+    }
+
     @Test("Page and layer edits persist and undo exactly")
     @MainActor
     func editsPersistAndUndo() async throws {
@@ -21,6 +63,12 @@ struct PDFEditorViewModelTests {
             document: document,
             sourceURL: URL(fileURLWithPath: "/tmp/fixture.pdf"),
             source: source,
+            fontStore: PDFOpenFontStore(
+                cacheDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "clip-pdf-font-tests-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            ),
             persisting: { document in await recorder.save(document) }
         )
         editor.start()
@@ -59,6 +107,22 @@ struct PDFEditorViewModelTests {
         context.beginPDFPage(nil)
         context.setFillColor(CGColor(gray: 0.85, alpha: 1))
         context.fill(mediaBox)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
+                "Helvetica" as CFString,
+                20,
+                nil
+            ),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(
+                gray: 0.1,
+                alpha: 1
+            ),
+        ]
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: "Editable PDF text", attributes: attributes)
+        )
+        context.textPosition = CGPoint(x: 24, y: 120)
+        CTLineDraw(line, context)
         context.endPDFPage()
         context.beginPDFPage(nil)
         context.endPDFPage()

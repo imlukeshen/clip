@@ -28,6 +28,7 @@ private struct SettingsContent: View {
     @State private var googleKey = ""
     @State private var showsAcknowledgements = false
     @State private var confirmsTeXCacheClear = false
+    @State private var confirmsPDFFontCacheClear = false
 
     var body: some View {
         Form {
@@ -95,6 +96,36 @@ private struct SettingsContent: View {
                 Text(
                     "Package downloads happen only after your one-time choice and are recorded "
                         + "in the egress ledger. Clearing the cache may require downloading packages again."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            }
+            Section("PDF text editing") {
+                Toggle(
+                    "Automatically resolve missing fonts",
+                    isOn: pdfFontDownloadBinding
+                )
+                LabeledContent("Verified font cache") {
+                    Text(model.pdfFontCacheURL.path(percentEncoded: false))
+                        .font(theme.type.numeric.font)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([
+                            model.pdfFontCacheURL
+                        ])
+                    }
+                    Button("Clear cache…", role: .destructive) {
+                        confirmsPDFFontCacheClear = true
+                    }
+                }
+                Text(
+                    "Clip first uses the PDF's embedded or installed font. If new text needs "
+                        + "missing glyphs, it can download a pinned, SHA-256 verified open font "
+                        + "from the Google Fonts repository. PDF-provided URLs are never opened."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -172,6 +203,16 @@ private struct SettingsContent: View {
         } message: {
             Text("Your documents and generated PDFs will not be removed.")
         }
+        .confirmationDialog(
+            "Clear cached PDF fonts?",
+            isPresented: $confirmsPDFFontCacheClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear cache", role: .destructive) { model.clearPDFFontCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("PDFs and edits stay intact. Missing open fonts may be downloaded again.")
+        }
     }
 
     private var captureDestinationBinding: Binding<CaptureDestination> {
@@ -190,6 +231,13 @@ private struct SettingsContent: View {
                 model.setGlobalClipboardShortcutEnabled(isEnabled)
                 ClipAppDelegate.refreshClipboardShortcutRegistration()
             }
+        )
+    }
+
+    private var pdfFontDownloadBinding: Binding<Bool> {
+        Binding(
+            get: { model.isPDFFontAutoDownloadEnabled },
+            set: { model.setPDFFontAutoDownloadEnabled($0) }
         )
     }
 

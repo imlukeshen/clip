@@ -56,6 +56,11 @@ public enum LibraryLayout {
         internalDirectory(in: root).appendingPathComponent("tex-cache", isDirectory: true)
     }
 
+    /// Verified open-font packages used to preserve editable PDF typography.
+    public static func pdfFontCache(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("pdf-fonts", isDirectory: true)
+    }
+
     /// LaTeX project metadata such as the selected main file.
     public static func texProjects(in root: URL) -> URL {
         internalDirectory(in: root).appendingPathComponent("tex", isDirectory: true)

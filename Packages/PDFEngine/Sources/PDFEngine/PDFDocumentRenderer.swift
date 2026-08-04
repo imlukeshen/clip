@@ -5,9 +5,14 @@ import Foundation
 
 public struct PDFDocumentRenderer: Sendable {
     private let source: PDFiumDocument
+    private let fontData: @Sendable (String) -> Data?
 
-    public init(source: PDFiumDocument) {
+    public init(
+        source: PDFiumDocument,
+        fontData: @escaping @Sendable (String) -> Data? = { _ in nil }
+    ) {
         self.source = source
+        self.fontData = fontData
     }
 
     public func render(
@@ -25,10 +30,18 @@ public struct PDFDocumentRenderer: Sendable {
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: outputSize.width, height: outputSize.height))
         if let sourcePageIndex = page.sourcePageIndex {
+            let directTextEdits = page.layers.compactMap { layer -> PDFTextLayer? in
+                guard case .text(let text) = layer, text.sourceReference != nil else {
+                    return nil
+                }
+                return text
+            }
             let base = try source.renderPage(
                 at: sourcePageIndex,
                 maxPixelDimension: maxPixelDimension,
-                rotation: page.rotation
+                rotation: page.rotation,
+                sourceTextEdits: directTextEdits,
+                fontData: fontData
             )
             context.draw(
                 base,
@@ -52,6 +65,15 @@ public struct PDFDocumentRenderer: Sendable {
             ".\(destination.lastPathComponent).\(UUID().uuidString).tmp"
         )
         defer { try? fileManager.removeItem(at: temporary) }
+        if canPreserveSourceContent(document) {
+            try source.exportApplyingSourceEdits(
+                document,
+                to: temporary,
+                fontData: fontData
+            )
+            try install(temporary, at: destination, using: fileManager)
+            return
+        }
         guard let consumer = CGDataConsumer(url: temporary as CFURL) else {
             throw PDFEngineError.renderFailed
         }
@@ -71,11 +93,7 @@ public struct PDFDocumentRenderer: Sendable {
             pdf.endPDFPage()
         }
         pdf.closePDF()
-        if fileManager.fileExists(atPath: destination.path) {
-            _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
-        } else {
-            try fileManager.moveItem(at: temporary, to: destination)
-        }
+        try install(temporary, at: destination, using: fileManager)
     }
 
     private func pixelSize(for page: PDFPage, maxPixelDimension: Int) -> (
@@ -122,6 +140,7 @@ public struct PDFDocumentRenderer: Sendable {
     ) {
         switch layer {
         case .text(let text):
+            guard text.sourceReference == nil else { return }
             let rect = outputRect(text.frame, size: size)
             let pointSize = max(text.fontSize / page.size.height * Double(size.height), 1)
             let font = CTFontCreateWithName(text.font.postScriptName as CFString, pointSize, nil)
@@ -170,5 +189,31 @@ public struct PDFDocumentRenderer: Sendable {
 
     private func color(_ color: RGBA) -> CGColor {
         CGColor(red: color.r, green: color.g, blue: color.b, alpha: color.a)
+    }
+
+    private func canPreserveSourceContent(_ document: PDFEditDocument) -> Bool {
+        guard document.pages.count == source.pageCount else { return false }
+        for (index, page) in document.pages.enumerated() {
+            guard page.sourcePageIndex == index else { return false }
+            guard
+                page.layers.allSatisfy({ layer in
+                    guard case .text(let text) = layer else { return false }
+                    return text.sourceReference != nil
+                })
+            else { return false }
+        }
+        return true
+    }
+
+    private func install(
+        _ temporary: URL,
+        at destination: URL,
+        using fileManager: FileManager
+    ) throws {
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+            try fileManager.moveItem(at: temporary, to: destination)
+        }
     }
 }

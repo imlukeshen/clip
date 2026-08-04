@@ -28,7 +28,12 @@ struct PDFEditDocumentTests {
         let layer = PDFLayer.text(
             PDFTextLayer(
                 text: "Replacement",
-                frame: CGRect(x: 0.1, y: 0.15, width: 0.5, height: 0.08)
+                frame: CGRect(x: 0.1, y: 0.15, width: 0.5, height: 0.08),
+                sourceReference: PDFSourceTextReference(
+                    pageObjectIndex: 4,
+                    originalText: "Original",
+                    originalFontPostScriptName: "Helvetica"
+                )
             )
         )
         let patches: [PDFPatch] = [
