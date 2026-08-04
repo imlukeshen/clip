@@ -43,6 +43,7 @@ struct TeXPDFPreview: View {
                 )
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("latex-pdf-preview")
     }
 

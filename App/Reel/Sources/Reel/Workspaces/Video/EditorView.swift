@@ -422,7 +422,7 @@ struct EditorView: View {
     private var timelineToolbar: some View {
         HStack(spacing: 8) {
             Label(
-                "\(editor.document.timeline.video.count) clips",
+                clipCountLabel,
                 systemImage: "rectangle.stack"
             )
             .font(theme.type.caption.font)
@@ -495,6 +495,11 @@ struct EditorView: View {
         .frame(height: 34)
     }
 
+    private var clipCountLabel: String {
+        let count = editor.document.timeline.video.count
+        return "\(count) \(count == 1 ? "clip" : "clips")"
+    }
+
     private var timelineCanvas: some View {
         EditorTimeline(
             timeline: editor.document.timeline,
@@ -531,6 +536,7 @@ struct EditorView: View {
             onRazor: editor.split,
             onZoom: zoomTimeline
         )
+        .accessibilityIdentifier("video-timeline")
         .help(
             "Three-finger drag clips to reorder or trim. Scroll to pan; pinch or Option-scroll to zoom."
         )

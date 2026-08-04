@@ -37,7 +37,10 @@ struct EditorTimeline: NSViewRepresentable {
     let onZoom: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> TimelineCanvas {
-        TimelineCanvas()
+        let view = TimelineCanvas()
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.group)
+        return view
     }
 
     func updateNSView(_ view: TimelineCanvas, context: Context) {

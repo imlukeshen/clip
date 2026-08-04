@@ -291,10 +291,10 @@ struct TextInspector: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .accessibilityIdentifier("text-inspector-language-menu")
         }
         .padding(.horizontal, theme.metrics.spacing.md)
         .frame(maxWidth: .infinity, minHeight: 44)
-        .accessibilityIdentifier("text-language-menu")
     }
 
     private var tabWidthMenu: some View {
@@ -322,10 +322,10 @@ struct TextInspector: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .accessibilityIdentifier("text-inspector-tab-width-menu")
         }
         .padding(.horizontal, theme.metrics.spacing.md)
         .frame(maxWidth: .infinity, minHeight: 44)
-        .accessibilityIdentifier("text-tab-width-menu")
     }
 
     private var fontSizeRow: some View {

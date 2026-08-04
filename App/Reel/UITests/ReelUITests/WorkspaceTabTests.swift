@@ -12,6 +12,7 @@ final class WorkspaceTabTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: libraryRoot) }
         app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 
         let routes = [

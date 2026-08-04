@@ -22,6 +22,7 @@ struct CommandPaletteView: View {
                 Image(systemName: "magnifyingglass")
                 TextField("Type a command…", text: $model.commandQuery)
                     .textFieldStyle(.plain)
+                    .accessibilityIdentifier("command-palette-search")
                 HStack(spacing: 2) {
                     Image(systemName: "command")
                     Text("K")
@@ -56,11 +57,14 @@ struct CommandPaletteView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(ReelPlainButtonStyle())
+                        .accessibilityIdentifier("command-\(command.id.rawValue)")
                     }
                 }
                 .padding(6)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("command-palette")
         .frame(width: 620, height: 480)
         .background {
             ZStack {

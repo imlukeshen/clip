@@ -209,6 +209,7 @@ private struct WorkspaceContent: View {
             case .convert: ConvertView(model: model)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-content-\(model.selectedWorkspace.rawValue)")
     }
 }

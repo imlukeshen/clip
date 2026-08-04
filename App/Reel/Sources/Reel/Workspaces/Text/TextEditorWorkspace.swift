@@ -132,6 +132,7 @@ struct TextEditorWorkspace: View {
                 )
                 .frame(minWidth: 340)
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("latex-split-editor")
         } else if editor.language == .markdown, showsMarkdownPreview {
             HSplitView {
@@ -140,6 +141,7 @@ struct TextEditorWorkspace: View {
                 markdownPreview
                     .frame(minWidth: 340)
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("markdown-split-editor")
         } else {
             codeEditor
@@ -381,6 +383,8 @@ struct TextEditorWorkspace: View {
                 .allowsHitTesting(false)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("markdown-preview")
         .background(theme.palette.surfaceSunken)
     }
 

@@ -97,6 +97,7 @@ struct Titlebar: View {
                 .accessibilityHidden(true)
             TextField("Search", text: $model.searchQuery)
                 .textFieldStyle(.plain)
+                .accessibilityIdentifier("library-search-field")
                 .focused($isSearchFocused)
                 .onExitCommand {
                     if model.isSearching {

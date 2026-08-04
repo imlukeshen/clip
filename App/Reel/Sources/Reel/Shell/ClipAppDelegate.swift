@@ -14,16 +14,29 @@ import os
 final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     private static let log = Logger(subsystem: "app.reel.editor", category: "clipboard-hotkey")
     private static var preparedModel: AppModel?
+    private static weak var activeDelegate: ClipAppDelegate?
 
     private let hotKey = GlobalHotKey()
     private var panel: ClipboardPanelController?
     private var lastHotKeyToggleUptime: TimeInterval = 0
+
+    override init() {
+        super.init()
+        Self.activeDelegate = self
+    }
 
     /// Bridges the model created by `ClipApp` into AppKit before any window is
     /// restored. The global clipboard belongs to the running process, not a
     /// particular window, so it must not depend on `MainWindow.onAppear`.
     static func prepare(model: AppModel) {
         preparedModel = model
+    }
+
+    /// Toggles the process-wide clipboard without relying on `NSApp.delegate`.
+    /// SwiftUI may wrap its adapted delegate, so casting the application
+    /// delegate can fail even though this object is alive and registered.
+    static func toggleClipboard() {
+        activeDelegate?.handleHotKey()
     }
 
     /// The process-shared model prepared by `ClipApp`. The delegate holds it
@@ -49,6 +62,25 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         } else {
             registerHotKey()
         }
+
+        // A SwiftUI `WindowGroup` can restore the valid state "no windows".
+        // That is useful for document apps, but Clip is a library app: launching
+        // it should always reveal the library. Wait until SwiftUI has installed
+        // its scene commands, then use the scene's own New Window command when
+        // restoration did not create a window.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            showOrCreateMainWindow(in: NSApp)
+        }
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        guard !flag else { return true }
+        showOrCreateMainWindow(in: sender)
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -82,13 +114,38 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
             try hotKey.register {
                 // Carbon delivers hotkey events on the main run loop. The
                 // `@Sendable` closure cannot capture the main-actor delegate, so
-                // it hops back onto the main actor and reads it from `NSApp`.
+                // it hops back onto the main actor and uses the instance retained
+                // by SwiftUI's application-delegate adaptor.
                 Task { @MainActor in
-                    (NSApp.delegate as? ClipAppDelegate)?.handleHotKey()
+                    Self.toggleClipboard()
                 }
             }
         } catch {
             Self.log.error("Global clipboard hotkey could not be registered.")
+        }
+    }
+
+    private func showOrCreateMainWindow(in application: NSApplication) {
+        if let window = application.windows.first(where: { window in
+            !(window is NSPanel) && window.canBecomeMain
+        }) {
+            window.makeKeyAndOrderFront(nil)
+            application.activate(ignoringOtherApps: true)
+            return
+        }
+
+        guard let mainMenu = application.mainMenu else { return }
+        for menu in mainMenu.items.compactMap(\.submenu) {
+            guard
+                let index = menu.items.firstIndex(
+                    where: { item in
+                        item.keyEquivalent.lowercased() == "n"
+                            && item.keyEquivalentModifierMask.contains(.command)
+                    })
+            else { continue }
+            menu.performActionForItem(at: index)
+            application.activate(ignoringOtherApps: true)
+            return
         }
     }
 }

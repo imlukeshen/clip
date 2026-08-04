@@ -94,7 +94,12 @@ public struct TectonicEngine: TeXEngine {
     }
 
     public static var bundledExecutableURL: URL {
-        Bundle.module.bundleURL
+        Bundle.module.url(
+            forResource: "tectonic",
+            withExtension: nil,
+            subdirectory: "Resources/Tectonic"
+        )
+            ?? Bundle.module.bundleURL
             .appendingPathComponent("Resources/Tectonic/tectonic", isDirectory: false)
     }
 
