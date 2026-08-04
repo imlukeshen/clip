@@ -39,6 +39,44 @@ extension LibraryStore {
         }
     }
 
+    public func transcriptSpans(for assetID: AssetID) async throws -> [TranscriptSpan] {
+        do {
+            return try await database.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT id, asset_id, start_value, start_scale,
+                               end_value, end_scale, text, script
+                        FROM transcript_span
+                        WHERE asset_id = ?
+                        ORDER BY start_value ASC, id ASC
+                        """,
+                    arguments: [assetID.rawValue]
+                ).compactMap { row in
+                    guard let script = OCRScript(rawValue: row["script"] as String) else {
+                        return nil
+                    }
+                    return TranscriptSpan(
+                        id: row["id"],
+                        assetID: AssetID(rawValue: row["asset_id"]),
+                        start: RationalTime(
+                            value: row["start_value"],
+                            timescale: row["start_scale"]
+                        ),
+                        end: RationalTime(
+                            value: row["end_value"],
+                            timescale: row["end_scale"]
+                        ),
+                        text: row["text"],
+                        script: script
+                    )
+                }
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("read transcript spans")
+        }
+    }
+
     /// Runs escaped BM25 lookup over filenames, OCR, and on-device transcripts.
     /// User input is always quoted here; callers cannot inject FTS5 operators.
     public func keywordMatches(
@@ -83,15 +121,19 @@ extension LibraryStore {
     }
 
     /// Whether every relevant durable job is terminal at query time.
-    public func isTextIndexComplete() async throws -> Bool {
+    public func isTextIndexComplete(includeEmbeddings: Bool = false) async throws -> Bool {
         do {
             return try await database.read { db in
+                let stages =
+                    includeEmbeddings
+                    ? "'ocr', 'transcript', 'embedding'"
+                    : "'ocr', 'transcript'"
                 let count =
                     try Int.fetchOne(
                         db,
                         sql: """
                             SELECT COUNT(*) FROM index_job
-                            WHERE stage IN ('ocr', 'transcript')
+                            WHERE stage IN (\(stages))
                               AND state IN ('pending', 'running')
                             """
                     ) ?? 0

@@ -69,11 +69,18 @@ public actor AppRuntime {
         let captureDirectory = preferredCaptureDirectory.url
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
+        let embeddingProvider = NaturalLanguageEmbeddingProvider()
         let indexPipeline = IndexPipeline(
             store: library,
-            processor: LocalIndexStageProcessor(store: library)
+            processor: LocalIndexStageProcessor(
+                store: library,
+                embeddingProvider: embeddingProvider
+            )
         )
-        let searchEngine = SearchEngine(store: library)
+        let searchEngine = SearchEngine(
+            store: library,
+            embeddingProvider: embeddingProvider
+        )
         let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
         let captureInboxes =
             Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
@@ -308,6 +315,15 @@ public actor AppRuntime {
         try await searchEngine.textAt(assetID, time: time)
     }
 
+    public func embeddingModelStatus() async -> EmbeddingIndexStatus {
+        await searchEngine.embeddingModelStatus()
+    }
+
+    public func rebuildSemanticIndex() async throws {
+        try await library.rebuildIndexJobs(scope: .all, stages: [.embedding])
+        await indexPipeline.resumePending()
+    }
+
     public func assets() async throws -> [AssetRecord] {
         try await library.assets(kind: nil, limit: Int.max, offset: 0)
     }
@@ -529,8 +545,10 @@ public actor AppRuntime {
 
     private static func indexStages(for asset: AssetRecord) -> Set<IndexStage> {
         switch asset.kind {
-        case .image, .video: [.metadata, .ocr]
-        case .audio, .document, .text: [.metadata]
+        case .image: [.metadata, .ocr, .embedding]
+        case .video: [.metadata, .ocr, .transcript, .embedding]
+        case .audio: [.metadata, .transcript, .embedding]
+        case .document, .text: [.metadata, .embedding]
         }
     }
 }

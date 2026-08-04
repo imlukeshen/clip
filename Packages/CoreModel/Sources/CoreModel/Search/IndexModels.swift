@@ -164,3 +164,77 @@ public struct IndexedTextMatch: Sendable, Equatable {
         self.rank = rank
     }
 }
+
+/// One normalized semantic-search vector persisted inside the Clip library.
+public struct EmbeddingRecord: Sendable, Equatable {
+    public var assetID: AssetID
+    public var chunkIndex: Int
+    public var kind: SearchHitSource
+    public var start: RationalTime?
+    public var end: RationalTime?
+    public var text: String
+    public var vector: [Float]
+    public var model: String
+
+    public var dimensions: Int { vector.count }
+
+    public init(
+        assetID: AssetID,
+        chunkIndex: Int,
+        kind: SearchHitSource,
+        start: RationalTime? = nil,
+        end: RationalTime? = nil,
+        text: String,
+        vector: [Float],
+        model: String
+    ) {
+        self.assetID = assetID
+        self.chunkIndex = chunkIndex
+        self.kind = kind
+        self.start = start
+        self.end = end
+        self.text = text
+        self.vector = vector
+        self.model = model
+    }
+}
+
+/// A cosine-ranked chunk returned by the in-memory semantic vector index.
+public struct SemanticTextMatch: Sendable, Equatable {
+    public var assetID: AssetID
+    public var kind: SearchHitSource
+    public var start: RationalTime?
+    public var end: RationalTime?
+    public var text: String
+    public var score: Float
+
+    public init(
+        assetID: AssetID,
+        kind: SearchHitSource,
+        start: RationalTime? = nil,
+        end: RationalTime? = nil,
+        text: String,
+        score: Float
+    ) {
+        self.assetID = assetID
+        self.kind = kind
+        self.start = start
+        self.end = end
+        self.text = text
+        self.score = score
+    }
+}
+
+public struct EmbeddingIndexStatus: Sendable, Equatable {
+    public var currentModels: Set<String>
+    public var indexedModels: Set<String>
+
+    public var needsReindex: Bool {
+        !indexedModels.isEmpty && !indexedModels.isSubset(of: currentModels)
+    }
+
+    public init(currentModels: Set<String> = [], indexedModels: Set<String> = []) {
+        self.currentModels = currentModels
+        self.indexedModels = indexedModels
+    }
+}

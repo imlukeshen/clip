@@ -222,6 +222,29 @@ enum LibrarySchema {
                     """
             )
         }
+        migrator.registerMigration("v7-search-embeddings") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE embedding (
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      chunk_index INTEGER NOT NULL,
+                      kind        TEXT NOT NULL,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      vector      BLOB NOT NULL,
+                      dims        INTEGER NOT NULL CHECK (dims > 0),
+                      model       TEXT NOT NULL,
+                      PRIMARY KEY (asset_id, chunk_index, kind, model)
+                    );
+                    CREATE INDEX idx_embedding_model ON embedding(model, asset_id);
+                    INSERT OR IGNORE INTO meta (key, value)
+                    VALUES ('embeddingGeneration', '0');
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }

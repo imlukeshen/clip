@@ -20,6 +20,27 @@ struct SearchResultsView: View {
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
             }
+            if model.embeddingModelNeedsReindex {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(theme.palette.textSecondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Semantic model changed")
+                            .font(theme.type.label.font)
+                        Text("Exact search still works. Rebuild to refresh concept matches safely.")
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textTertiary)
+                    }
+                    Spacer()
+                    Button("Rebuild") { model.reindexSemanticSearch() }
+                        .buttonStyle(ReelBorderedButtonStyle())
+                }
+                .padding(12)
+                .background(theme.palette.surfacePanel)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                )
+            }
             if model.isSearchLoading, model.searchHits.isEmpty {
                 HStack(spacing: 9) {
                     ProgressView().controlSize(.small)

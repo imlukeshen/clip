@@ -18,6 +18,8 @@ let package = Package(
             dependencies: ["CoreModel", "LibraryStore"],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
+                .linkedFramework("Accelerate"),
+                .linkedFramework("NaturalLanguage"),
                 .linkedFramework("Vision"),
             ]
         ),

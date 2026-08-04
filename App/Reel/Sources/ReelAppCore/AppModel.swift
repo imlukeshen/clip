@@ -24,6 +24,7 @@ public final class AppModel {
     public private(set) var searchHits: [SearchHit] = []
     public private(set) var isSearchLoading = false
     public private(set) var isSearchComplete = true
+    public private(set) var embeddingModelNeedsReindex = false
     public private(set) var assets: [AssetRecord] = []
     public private(set) var folderTree: FolderNode?
     public private(set) var expandedFolders: Set<String>
@@ -227,6 +228,7 @@ public final class AppModel {
             isCaptureDirectoryWatched = captureStatus.isWatching
             canRevertMigration = LibraryMigration.canRevert(at: libraryRoot)
             clickTrackingState = await runtime.clickTrackingState()
+            embeddingModelNeedsReindex = await runtime.embeddingModelStatus().needsReindex
             await refreshAssets()
             await refreshScratchBuffers()
         } catch AppRuntimeError.migrationRequired(let plan) {
@@ -245,7 +247,11 @@ public final class AppModel {
             let updates = await runtime.indexProgress()
             for await progress in updates {
                 guard !Task.isCancelled else { return }
+                let wasComplete = self?.indexProgress.isComplete ?? true
                 self?.indexProgress = progress
+                if !wasComplete, progress.isComplete, self?.isSearching == true {
+                    self?.scheduleLibrarySearch()
+                }
             }
         }
         indexActivityTask = Task { [weak self] in
@@ -808,6 +814,19 @@ public final class AppModel {
         closeOpenEditors()
         searchQuery = query
         focusSearch()
+    }
+
+    public func reindexSemanticSearch() {
+        guard let runtime else { return }
+        Task {
+            do {
+                try await runtime.rebuildSemanticIndex()
+                embeddingModelNeedsReindex = false
+                lastMessage = "Semantic search is rebuilding in the background."
+            } catch {
+                lastMessage = "Semantic search could not be rebuilt."
+            }
+        }
     }
 
     public func clearSearch() {

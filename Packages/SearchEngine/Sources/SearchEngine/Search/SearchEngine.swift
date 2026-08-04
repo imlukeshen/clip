@@ -6,16 +6,23 @@ import LibraryStore
 /// candidates to this same asset-level fusion point.
 public actor SearchEngine {
     private let store: LibraryStore
+    private let semanticIndex: SemanticVectorIndex
 
-    public init(store: LibraryStore) {
+    public init(
+        store: LibraryStore,
+        embeddingProvider: any TextEmbeddingProviding = NaturalLanguageEmbeddingProvider()
+    ) {
         self.store = store
+        self.semanticIndex = SemanticVectorIndex(store: store, provider: embeddingProvider)
     }
 
     public func search(_ query: SearchQuery) async throws -> SearchResponse {
         let parsed = try SearchQueryParser.parse(query)
         let assets = try await store.assets(kind: nil, limit: Int.max, offset: 0)
         let filtered = assets.filter { assetMatches($0, filters: parsed.filters) }
-        let isComplete = try await store.isTextIndexComplete()
+        let runsSemantic = parsed.mode != .keyword && parsed.phrases.isEmpty
+        let runsKeyword = parsed.mode != .semantic
+        let isComplete = try await store.isTextIndexComplete(includeEmbeddings: runsSemantic)
         let limit = min(max(query.limit, 1), 500)
 
         guard !parsed.isEmpty else {
@@ -35,11 +42,13 @@ public actor SearchEngine {
         }
 
         let candidateLimit = min(max(limit * 20, 200), 10_000)
-        let rawMatches = try await store.keywordMatches(
-            terms: parsed.terms,
-            phrases: parsed.phrases,
-            limit: candidateLimit
-        )
+        let rawMatches =
+            runsKeyword
+            ? try await store.keywordMatches(
+                terms: parsed.terms,
+                phrases: parsed.phrases,
+                limit: candidateLimit
+            ) : []
         let allowed = Dictionary(uniqueKeysWithValues: filtered.map { ($0.id, $0) })
         let highlightTerms = parsed.terms + parsed.phrases
         var buckets: [AssetID: HitBucket] = [:]
@@ -69,6 +78,37 @@ public actor SearchEngine {
             }
         }
 
+        if runsSemantic {
+            let semanticText = parsed.terms.joined(separator: " ")
+            if !semanticText.isEmpty,
+                let semanticMatches = try? await semanticIndex.matches(
+                    text: semanticText,
+                    limit: candidateLimit
+                )
+            {
+                for (rank, match) in semanticMatches.enumerated() {
+                    guard allowed[match.assetID] != nil else { continue }
+                    var bucket = buckets[match.assetID] ?? HitBucket()
+                    bucket.score += sourceWeight(match.kind) * 0.85 / Double(60 + rank + 1)
+                    bucket.sources.insert(match.kind)
+                    if let start = match.start {
+                        let moment = SearchMoment(
+                            assetID: match.assetID,
+                            start: start,
+                            end: match.end,
+                            snippet: AttributedString(match.text),
+                            source: match.kind
+                        )
+                        if !bucket.moments.contains(where: { $0.id == moment.id }) {
+                            bucket.moments.append(moment)
+                        }
+                    }
+                    if bucket.snippet == nil { bucket.snippet = AttributedString(match.text) }
+                    buckets[match.assetID] = bucket
+                }
+            }
+        }
+
         let hits = buckets.compactMap { assetID, bucket -> SearchHit? in
             guard let asset = allowed[assetID] else { return nil }
             return SearchHit(
@@ -92,27 +132,55 @@ public actor SearchEngine {
     public func searchWithin(_ assetID: AssetID, text: String) async throws -> [SearchMoment] {
         let parsed = try SearchQueryParser.parse(SearchQuery(text: text, limit: 500))
         guard !parsed.isEmpty else { return [] }
-        return try await store.keywordMatches(
-            terms: parsed.terms,
-            phrases: parsed.phrases,
-            limit: 2_000
-        )
-        .filter { $0.assetID == assetID && $0.start != nil }
-        .compactMap { match in
-            guard let start = match.start else { return nil }
-            return SearchMoment(
-                assetID: assetID,
-                start: start,
-                end: match.end,
-                snippet: highlighted(match.text, terms: parsed.terms + parsed.phrases),
-                source: match.source
+        var moments: [SearchMoment] = []
+        if parsed.mode != .semantic {
+            moments += try await store.keywordMatches(
+                terms: parsed.terms,
+                phrases: parsed.phrases,
+                limit: 2_000
             )
+            .filter { $0.assetID == assetID && $0.start != nil }
+            .compactMap { match in
+                guard let start = match.start else { return nil }
+                return SearchMoment(
+                    assetID: assetID,
+                    start: start,
+                    end: match.end,
+                    snippet: highlighted(match.text, terms: parsed.terms + parsed.phrases),
+                    source: match.source
+                )
+            }
         }
-        .sorted { $0.start < $1.start }
+        if parsed.mode != .keyword {
+            let semanticText = parsed.terms.joined(separator: " ")
+            if !semanticText.isEmpty,
+                let semantic = try? await semanticIndex.matches(text: semanticText, limit: 2_000)
+            {
+                let matchingAsset = semantic.filter { $0.assetID == assetID }
+                for match in matchingAsset {
+                    guard let start = match.start else { continue }
+                    moments.append(
+                        SearchMoment(
+                            assetID: assetID,
+                            start: start,
+                            end: match.end,
+                            snippet: AttributedString(match.text),
+                            source: match.kind
+                        )
+                    )
+                }
+            }
+        }
+        return Dictionary(grouping: moments, by: \.id).compactMap(\.value.first)
+            .sorted { $0.start < $1.start }
     }
 
     public func textAt(_ assetID: AssetID, time: RationalTime) async throws -> [OCRSpan] {
         try await store.ocrSpans(for: assetID, at: time)
+    }
+
+    public func embeddingModelStatus() async -> EmbeddingIndexStatus {
+        await semanticIndex.modelStatus()
     }
 
     private struct HitBucket {
