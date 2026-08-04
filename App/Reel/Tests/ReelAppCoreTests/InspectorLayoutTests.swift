@@ -29,6 +29,26 @@ struct InspectorLayoutTests {
         #expect(InspectorLayout.minimumWidth >= 240)
     }
 
+    @Test("A narrow window protects the editor from a wide inspector")
+    func narrowWindowShrinksDisplayedWidth() {
+        #expect(
+            InspectorLayout.displayedWidth(
+                requestedWidth: InspectorLayout.maximumWidth,
+                availableWindowWidth: 1_024
+            ) == 264
+        )
+    }
+
+    @Test("The preferred inspector width returns when the window has room")
+    func wideWindowRestoresRequestedWidth() {
+        #expect(
+            InspectorLayout.displayedWidth(
+                requestedWidth: 360,
+                availableWindowWidth: 1_440
+            ) == 360
+        )
+    }
+
     @Test("A fresh install starts at the default rather than at zero")
     func restoresDefaultWhenUnset() {
         let defaults = makeDefaults()

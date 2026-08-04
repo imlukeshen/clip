@@ -123,38 +123,53 @@ private struct ThemedMainWindow: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // The sidebar runs the full height of the window and the title bar
-            // spans only what is to its right. That leaves one hairline in the
-            // shell instead of a horizontal rule crossing a vertical one.
-            HStack(spacing: 0) {
-                if !isEditing {
-                    LibrarySidebar(model: model)
-                    shellDivider
-                }
-                VStack(spacing: 0) {
-                    Titlebar(model: model)
-                    HStack(spacing: 0) {
-                        workspace
-                        if model.showsEditorInspector && model.isInspectorVisible {
-                            InspectorResizeDivider(model: model)
-                            UnifiedInspector(model: model)
-                        }
-                    }
-                }
-            }
-            if let message = model.lastMessage {
-                Toast(message)
-                    .padding(.bottom, 38)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: message) {
-                        try? await Task.sleep(for: .seconds(2.1))
-                        model.clearMessage()
-                    }
-            }
+        GeometryReader { proxy in
+            windowContent(availableWidth: proxy.size.width)
         }
         .background(theme.palette.surfaceBase)
         .foregroundStyle(theme.palette.textPrimary)
+    }
+
+    private func windowContent(availableWidth: CGFloat) -> some View {
+        let displayedInspectorWidth = InspectorLayout.displayedWidth(
+            requestedWidth: model.inspectorWidth,
+            availableWindowWidth: availableWidth
+        )
+
+        return
+            ZStack(alignment: .bottom) {
+                // The sidebar runs the full height of the window and the title bar
+                // spans only what is to its right. That leaves one hairline in the
+                // shell instead of a horizontal rule crossing a vertical one.
+                HStack(spacing: 0) {
+                    if !isEditing {
+                        LibrarySidebar(model: model)
+                        shellDivider
+                    }
+                    VStack(spacing: 0) {
+                        Titlebar(model: model)
+                        HStack(spacing: 0) {
+                            workspace
+                            if model.showsEditorInspector && model.isInspectorVisible {
+                                InspectorResizeDivider(
+                                    model: model,
+                                    displayedWidth: displayedInspectorWidth
+                                )
+                                UnifiedInspector(model: model, width: displayedInspectorWidth)
+                            }
+                        }
+                    }
+                }
+                if let message = model.lastMessage {
+                    Toast(message)
+                        .padding(.bottom, 38)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .task(id: message) {
+                            try? await Task.sleep(for: .seconds(2.1))
+                            model.clearMessage()
+                        }
+                }
+            }
     }
 
     private var isEditing: Bool {

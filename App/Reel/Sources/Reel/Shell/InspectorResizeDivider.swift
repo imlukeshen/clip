@@ -11,6 +11,7 @@ import SwiftUI
 struct InspectorResizeDivider: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
+    let displayedWidth: Double
 
     @State private var widthAtDragStart: Double?
     @State private var isHovering = false
@@ -43,7 +44,7 @@ struct InspectorResizeDivider: View {
     private var drag: some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
-                let start = widthAtDragStart ?? model.inspectorWidth
+                let start = widthAtDragStart ?? displayedWidth
                 widthAtDragStart = start
                 // The inspector is on the trailing edge, so dragging left widens it.
                 model.setInspectorWidth(start - value.translation.width)

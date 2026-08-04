@@ -8,6 +8,7 @@ import SwiftUI
 struct UnifiedInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
+    let width: Double
 
     var body: some View {
         Group {
@@ -27,7 +28,7 @@ struct UnifiedInspector: View {
                 EmptyView()
             }
         }
-        .frame(width: model.inspectorWidth)
+        .frame(width: width)
         .background(theme.palette.surfacePanel)
     }
 }

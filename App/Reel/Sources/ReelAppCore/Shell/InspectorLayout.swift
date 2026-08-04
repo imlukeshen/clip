@@ -13,11 +13,31 @@ public enum InspectorLayout {
     public static let maximumWidth = 420.0
     public static let defaultWidth = 248.0
 
+    /// Width reserved for the editor when the window becomes narrow. A wide
+    /// inspector should yield before the canvas, tool rail, or timeline do.
+    public static let minimumWorkspaceWidth = 760.0
+
     private static let storageKey = "reel.inspectorWidth"
 
     public static func clamped(_ width: Double) -> Double {
         guard width.isFinite else { return defaultWidth }
         return min(max(width, minimumWidth), maximumWidth)
+    }
+
+    /// Returns the inspector width that can be displayed without squeezing the
+    /// active editor. The persisted requested width is deliberately left alone,
+    /// so the inspector expands back to the user's preferred size with the
+    /// window.
+    public static func displayedWidth(
+        requestedWidth: Double,
+        availableWindowWidth: Double
+    ) -> Double {
+        guard availableWindowWidth.isFinite else { return clamped(requestedWidth) }
+        let availableForInspector = max(
+            minimumWidth,
+            availableWindowWidth - minimumWorkspaceWidth
+        )
+        return min(clamped(requestedWidth), availableForInspector)
     }
 
     /// The width the user last dragged to, or the default on a fresh install.
