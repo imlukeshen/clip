@@ -64,6 +64,25 @@ final class CodeTextView: NSTextView {
         let beforeCaret = source.substring(
             with: NSRange(location: lineRange.location, length: caret - lineRange.location)
         )
+        if snippetLanguage == .markdown, let list = markdownContinuation(for: beforeCaret) {
+            if list.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let removal = NSRange(
+                    location: lineRange.location + list.markerRange.location,
+                    length: list.markerRange.length
+                )
+                let updated = source.replacingCharacters(in: removal, with: "")
+                apply(
+                    TextEditResult(
+                        text: updated,
+                        selectedRange: NSRange(location: removal.location, length: 0)
+                    )
+                )
+                return
+            }
+            super.insertNewline(sender)
+            super.insertText(list.continuation, replacementRange: selectedRange())
+            return
+        }
         let indentation = String(beforeCaret.prefix { $0 == " " || $0 == "\t" })
         super.insertNewline(sender)
         if !indentation.isEmpty { super.insertText(indentation, replacementRange: selectedRange()) }
@@ -98,6 +117,18 @@ final class CodeTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
+        if snippetLanguage == .markdown, flags == .command, key == "b" {
+            performMarkdown(.bold, notice: "Bold formatting applied.")
+            return true
+        }
+        if snippetLanguage == .markdown, flags == .command, key == "i" {
+            performMarkdown(.italic, notice: "Italic formatting applied.")
+            return true
+        }
+        if snippetLanguage == .markdown, flags == [.command, .shift], key == "x" {
+            performMarkdown(.strikethrough, notice: "Strikethrough formatting applied.")
+            return true
+        }
         if flags == .command, key == "f" {
             presentFindReplace()
             return true
@@ -174,6 +205,13 @@ final class CodeTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
+        if snippetLanguage == .markdown {
+            menu.addItem(.separator())
+            addSnippetItem("Bold", action: #selector(markdownBold(_:)), to: menu)
+            addSnippetItem("Italic", action: #selector(markdownItalic(_:)), to: menu)
+            addSnippetItem("Add Link", action: #selector(markdownLink(_:)), to: menu)
+            addSnippetItem("Turn into Heading", action: #selector(markdownHeading2(_:)), to: menu)
+        }
         menu.addItem(.separator())
         addSnippetItem("Copy as Rich Text", action: #selector(copyAsRichText(_:)), to: menu)
         addSnippetItem("Copy as HTML", action: #selector(copyAsHTML(_:)), to: menu)
@@ -194,9 +232,85 @@ final class CodeTextView: NSTextView {
             return selectedRange().length > 0
         case #selector(wrapInCodeFence(_:)):
             return isEditable && selectedRange().length > 0
+        case #selector(markdownBody(_:)),
+            #selector(markdownHeading1(_:)),
+            #selector(markdownHeading2(_:)),
+            #selector(markdownHeading3(_:)),
+            #selector(markdownBold(_:)),
+            #selector(markdownItalic(_:)),
+            #selector(markdownStrikethrough(_:)),
+            #selector(markdownInlineCode(_:)),
+            #selector(markdownLink(_:)),
+            #selector(markdownBulletedList(_:)),
+            #selector(markdownNumberedList(_:)),
+            #selector(markdownChecklist(_:)),
+            #selector(markdownQuote(_:)),
+            #selector(markdownCodeBlock(_:)),
+            #selector(markdownDivider(_:)):
+            return isEditable && snippetLanguage == .markdown
         default:
             return super.validateMenuItem(menuItem)
         }
+    }
+
+    @objc func markdownBody(_ sender: Any?) {
+        performMarkdown(.body, notice: "Changed to body text.")
+    }
+
+    @objc func markdownHeading1(_ sender: Any?) {
+        performMarkdown(.heading1, notice: "Changed to heading 1.")
+    }
+
+    @objc func markdownHeading2(_ sender: Any?) {
+        performMarkdown(.heading2, notice: "Changed to heading 2.")
+    }
+
+    @objc func markdownHeading3(_ sender: Any?) {
+        performMarkdown(.heading3, notice: "Changed to heading 3.")
+    }
+
+    @objc func markdownBold(_ sender: Any?) {
+        performMarkdown(.bold, notice: "Bold formatting applied.")
+    }
+
+    @objc func markdownItalic(_ sender: Any?) {
+        performMarkdown(.italic, notice: "Italic formatting applied.")
+    }
+
+    @objc func markdownStrikethrough(_ sender: Any?) {
+        performMarkdown(.strikethrough, notice: "Strikethrough formatting applied.")
+    }
+
+    @objc func markdownInlineCode(_ sender: Any?) {
+        performMarkdown(.inlineCode, notice: "Inline code formatting applied.")
+    }
+
+    @objc func markdownLink(_ sender: Any?) {
+        performMarkdown(.link, notice: "Link inserted. Paste or type its destination.")
+    }
+
+    @objc func markdownBulletedList(_ sender: Any?) {
+        performMarkdown(.bulletedList, notice: "Bulleted list formatting applied.")
+    }
+
+    @objc func markdownNumberedList(_ sender: Any?) {
+        performMarkdown(.numberedList, notice: "Numbered list formatting applied.")
+    }
+
+    @objc func markdownChecklist(_ sender: Any?) {
+        performMarkdown(.checklist, notice: "Checklist formatting applied.")
+    }
+
+    @objc func markdownQuote(_ sender: Any?) {
+        performMarkdown(.quote, notice: "Quote formatting applied.")
+    }
+
+    @objc func markdownCodeBlock(_ sender: Any?) {
+        performMarkdown(.codeBlock, notice: "Code block inserted.")
+    }
+
+    @objc func markdownDivider(_ sender: Any?) {
+        performMarkdown(.divider, notice: "Divider inserted.")
     }
 
     @objc func copyAsRichText(_ sender: Any?) {
@@ -324,11 +438,106 @@ final class CodeTextView: NSTextView {
         onSnippetNotice("Select text before using a snippet command.")
     }
 
+    private func performMarkdown(_ action: MarkdownFormattingAction, notice: String) {
+        guard isEditable, snippetLanguage == .markdown else {
+            NSSound.beep()
+            return
+        }
+        apply(
+            MarkdownFormattingOperations.apply(
+                action,
+                to: string,
+                selectedRange: selectedRange()
+            )
+        )
+        onSnippetNotice(notice)
+        window?.makeFirstResponder(self)
+    }
+
+    private func markdownContinuation(
+        for line: String
+    ) -> (continuation: String, markerRange: NSRange, content: String)? {
+        let patterns: [(String, (NSTextCheckingResult, NSString) -> String)] = [
+            (
+                "^([ \\t]*)[-+*][ \\t]+\\[[ xX]\\][ \\t]+(.*)$",
+                { match, source in
+                    source.substring(with: match.range(at: 1)) + "- [ ] "
+                }
+            ),
+            (
+                "^([ \\t]*)([0-9]+)\\.[ \\t]+(.*)$",
+                { match, source in
+                    let indentation = source.substring(with: match.range(at: 1))
+                    let number = Int(source.substring(with: match.range(at: 2))) ?? 0
+                    return indentation + "\(number + 1). "
+                }
+            ),
+            (
+                "^([ \\t]*)[-+*][ \\t]+(.*)$",
+                { match, source in
+                    source.substring(with: match.range(at: 1)) + "- "
+                }
+            ),
+            (
+                "^([ \\t]*)>[ \\t]+(.*)$",
+                { match, source in
+                    source.substring(with: match.range(at: 1)) + "> "
+                }
+            ),
+        ]
+        let source = line as NSString
+        let fullRange = NSRange(location: 0, length: source.length)
+        for (pattern, continuation) in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                let match = expression.firstMatch(in: line, range: fullRange)
+            else { continue }
+            let contentGroup = match.numberOfRanges - 1
+            let contentRange = match.range(at: contentGroup)
+            let indentationRange = match.range(at: 1)
+            let markerRange = NSRange(
+                location: NSMaxRange(indentationRange),
+                length: contentRange.location - NSMaxRange(indentationRange)
+            )
+            return (
+                continuation(match, source),
+                markerRange,
+                source.substring(with: contentRange)
+            )
+        }
+        return nil
+    }
+
     private func apply(_ result: TextEditResult) {
         guard result.text != string else { return }
-        let fullRange = NSRange(location: 0, length: (string as NSString).length)
-        let replacement = NSAttributedString(string: result.text, attributes: typingAttributes)
-        guard performValidatedReplacement(in: fullRange, with: replacement) else { return }
+        let current = string as NSString
+        let updated = result.text as NSString
+        var commonPrefix = 0
+        while commonPrefix < current.length, commonPrefix < updated.length,
+            current.character(at: commonPrefix) == updated.character(at: commonPrefix)
+        {
+            commonPrefix += 1
+        }
+        var commonSuffix = 0
+        while commonSuffix < current.length - commonPrefix,
+            commonSuffix < updated.length - commonPrefix,
+            current.character(at: current.length - commonSuffix - 1)
+                == updated.character(at: updated.length - commonSuffix - 1)
+        {
+            commonSuffix += 1
+        }
+        let changedRange = NSRange(
+            location: commonPrefix,
+            length: current.length - commonPrefix - commonSuffix
+        )
+        let replacementRange = NSRange(
+            location: commonPrefix,
+            length: updated.length - commonPrefix - commonSuffix
+        )
+        let replacement = NSAttributedString(
+            string: updated.substring(with: replacementRange),
+            attributes: typingAttributes
+        )
+        guard performValidatedReplacement(in: changedRange, with: replacement) else { return }
         setSelectedRange(result.selectedRange)
     }
 

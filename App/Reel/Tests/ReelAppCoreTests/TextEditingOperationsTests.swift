@@ -173,4 +173,84 @@ struct TextEditingOperationsTests {
                 .isEmpty
         )
     }
+
+    @Test("Markdown inline formatting wraps, unwraps, and positions the selection")
+    func markdownInlineFormatting() {
+        let source = "Make this clear"
+        let selection = NSRange(location: 5, length: 4)
+        let bold = MarkdownFormattingOperations.apply(
+            .bold,
+            to: source,
+            selectedRange: selection
+        )
+        #expect(bold.text == "Make **this** clear")
+        #expect(bold.selectedRange == NSRange(location: 7, length: 4))
+
+        let restored = MarkdownFormattingOperations.apply(
+            .bold,
+            to: bold.text,
+            selectedRange: bold.selectedRange
+        )
+        #expect(restored.text == source)
+        #expect(restored.selectedRange == selection)
+
+        let placeholder = MarkdownFormattingOperations.apply(
+            .italic,
+            to: "",
+            selectedRange: NSRange(location: 0, length: 0)
+        )
+        #expect(placeholder.text == "_italic text_")
+        #expect(placeholder.selectedRange == NSRange(location: 1, length: 11))
+    }
+
+    @Test("Markdown block styles transform selected lines and toggle cleanly")
+    func markdownBlockFormatting() {
+        let source = "First\nSecond\n"
+        let all = NSRange(location: 0, length: (source as NSString).length)
+        let checklist = MarkdownFormattingOperations.apply(
+            .checklist,
+            to: source,
+            selectedRange: all
+        )
+        #expect(checklist.text == "- [ ] First\n- [ ] Second\n")
+
+        let restored = MarkdownFormattingOperations.apply(
+            .checklist,
+            to: checklist.text,
+            selectedRange: checklist.selectedRange
+        )
+        #expect(restored.text == source)
+
+        let heading = MarkdownFormattingOperations.apply(
+            .heading2,
+            to: "# Existing heading\n",
+            selectedRange: NSRange(location: 3, length: 0)
+        )
+        #expect(heading.text == "## Existing heading\n")
+        let body = MarkdownFormattingOperations.apply(
+            .body,
+            to: heading.text,
+            selectedRange: heading.selectedRange
+        )
+        #expect(body.text == "Existing heading\n")
+    }
+
+    @Test("Markdown link and block insertion select the next editable content")
+    func markdownInsertions() {
+        let link = MarkdownFormattingOperations.apply(
+            .link,
+            to: "Clip",
+            selectedRange: NSRange(location: 0, length: 4)
+        )
+        #expect(link.text == "[Clip](https://)")
+        #expect((link.text as NSString).substring(with: link.selectedRange) == "https://")
+
+        let block = MarkdownFormattingOperations.apply(
+            .codeBlock,
+            to: "sample",
+            selectedRange: NSRange(location: 0, length: 6)
+        )
+        #expect(block.text == "```\nsample\n```")
+        #expect((block.text as NSString).substring(with: block.selectedRange) == "sample")
+    }
 }

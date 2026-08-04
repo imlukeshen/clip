@@ -15,8 +15,6 @@ struct TextEditorWorkspace: View {
     @State private var cursorColumn = 1
     @State private var showsExternalConflictAlert = false
     @State private var showsExternalDiff = false
-    @State private var showsMarkdownPreview = true
-    @State private var synchronizedLine = 1
     @State private var sourceNavigation: TextEditorNavigation?
     @State private var texForwardSearch: TeXForwardSearchRequest?
     @State private var showsTeXOutput = false
@@ -27,6 +25,10 @@ struct TextEditorWorkspace: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 header
+                if editor.language == .markdown {
+                    Divider().overlay(theme.palette.line)
+                    markdownFormattingBar
+                }
                 Divider().overlay(theme.palette.line)
                 if editor.isDetached {
                     detachedBanner
@@ -134,17 +136,12 @@ struct TextEditorWorkspace: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("latex-split-editor")
-        } else if editor.language == .markdown, showsMarkdownPreview {
-            HSplitView {
-                codeEditor
-                    .frame(minWidth: 340)
-                markdownPreview
-                    .frame(minWidth: 340)
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("markdown-split-editor")
         } else {
             codeEditor
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(
+                    editor.language == .markdown ? "markdown-inline-editor" : "text-source-editor"
+                )
         }
     }
 
@@ -164,13 +161,9 @@ struct TextEditorWorkspace: View {
                 onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
                 onSnippetNotice: editor.reportNotice,
                 diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
-                scrollToLine: editor.language == .markdown && showsMarkdownPreview
-                    ? synchronizedLine : nil,
+                scrollToLine: nil,
                 navigation: sourceNavigation,
-                onVisibleLineChange: { line in
-                    guard editor.language == .markdown, showsMarkdownPreview else { return }
-                    synchronizedLine = line
-                },
+                onVisibleLineChange: { _ in },
                 onSelectionChange: { selectedRange = $0 }
             ) { line, column in
                 cursorLine = line
@@ -215,20 +208,6 @@ struct TextEditorWorkspace: View {
             snippetMenu
 
             if editor.language == .markdown {
-                Button {
-                    showsMarkdownPreview.toggle()
-                } label: {
-                    Image(
-                        systemName: showsMarkdownPreview
-                            ? "rectangle.split.2x1.fill" : "rectangle.split.2x1"
-                    )
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(ReelIconButtonStyle())
-                .help(showsMarkdownPreview ? "Hide Markdown preview" : "Show Markdown preview")
-                .accessibilityLabel(showsMarkdownPreview ? "Hide preview" : "Show preview")
-                .accessibilityIdentifier("markdown-preview-toggle")
-
                 Menu {
                     ForEach(model.textEditorExportTargets) { target in
                         Button(target.displayName) {
@@ -373,7 +352,7 @@ struct TextEditorWorkspace: View {
         .fixedSize()
         .help(
             editor.activeFile?.languageIsExplicit == false
-                ? "Detected automatically from what you type" : "Choose syntax and preview mode"
+                ? "Detected automatically from what you type" : "Choose document language"
         )
         .accessibilityLabel(
             editor.activeFile?.languageIsExplicit == false
@@ -395,32 +374,166 @@ struct TextEditorWorkspace: View {
         }
     }
 
-    private var markdownPreview: some View {
-        ZStack {
-            MarkdownPreview(
-                markdown: editor.text,
-                baseDirectory: editor.sourceURL?.deletingLastPathComponent(),
-                sourceLine: synchronizedLine
-            ) { line in
-                synchronizedLine = line
-            }
-            if editor.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                VStack(spacing: theme.metrics.spacing.md) {
-                    Image(systemName: "doc.richtext")
-                        .font(.system(size: 28))
-                        .foregroundStyle(theme.palette.textTertiary)
-                    Text("Markdown preview")
-                        .font(theme.type.title.font)
-                    Text("Start typing on the left. Rich text appears here automatically.")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textSecondary)
+    private var markdownFormattingBar: some View {
+        HStack(spacing: 4) {
+            Menu {
+                Button("Body") { sendMarkdownAction(#selector(CodeTextView.markdownBody(_:))) }
+                Button("Heading 1") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading1(_:)))
                 }
-                .allowsHitTesting(false)
+                Button("Heading 2") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading2(_:)))
+                }
+                Button("Heading 3") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading3(_:)))
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "textformat.size")
+                    Text("Text")
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textPrimary)
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(theme.palette.surfaceRaised)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+                )
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Turn the current line into body text or a heading")
+            .accessibilityIdentifier("markdown-block-style")
+
+            formattingDivider
+
+            markdownFormatButton(
+                "Bold",
+                systemImage: "bold",
+                action: #selector(CodeTextView.markdownBold(_:)),
+                identifier: "markdown-bold",
+                shortcut: "⌘B"
+            )
+            markdownFormatButton(
+                "Italic",
+                systemImage: "italic",
+                action: #selector(CodeTextView.markdownItalic(_:)),
+                identifier: "markdown-italic",
+                shortcut: "⌘I"
+            )
+            markdownFormatButton(
+                "Strikethrough",
+                systemImage: "strikethrough",
+                action: #selector(CodeTextView.markdownStrikethrough(_:)),
+                identifier: "markdown-strikethrough",
+                shortcut: "⇧⌘X"
+            )
+            markdownFormatButton(
+                "Inline code",
+                systemImage: "chevron.left.forwardslash.chevron.right",
+                action: #selector(CodeTextView.markdownInlineCode(_:)),
+                identifier: "markdown-inline-code"
+            )
+            markdownFormatButton(
+                "Link",
+                systemImage: "link",
+                action: #selector(CodeTextView.markdownLink(_:)),
+                identifier: "markdown-link"
+            )
+
+            formattingDivider
+
+            markdownFormatButton(
+                "Bulleted list",
+                systemImage: "list.bullet",
+                action: #selector(CodeTextView.markdownBulletedList(_:)),
+                identifier: "markdown-bulleted-list"
+            )
+            markdownFormatButton(
+                "Numbered list",
+                systemImage: "list.number",
+                action: #selector(CodeTextView.markdownNumberedList(_:)),
+                identifier: "markdown-numbered-list"
+            )
+            markdownFormatButton(
+                "Checklist",
+                systemImage: "checklist",
+                action: #selector(CodeTextView.markdownChecklist(_:)),
+                identifier: "markdown-checklist"
+            )
+            markdownFormatButton(
+                "Quote",
+                systemImage: "text.quote",
+                action: #selector(CodeTextView.markdownQuote(_:)),
+                identifier: "markdown-quote"
+            )
+
+            Menu {
+                Button("Code block") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownCodeBlock(_:)))
+                }
+                Button("Divider") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownDivider(_:)))
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 28, height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("Insert a code block or divider")
+            .accessibilityLabel("Insert Markdown block")
+            .accessibilityIdentifier("markdown-insert-block")
+
+            Spacer(minLength: theme.metrics.spacing.md)
+
+            Label("Formats as you type", systemImage: "sparkles")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .lineLimit(1)
+                .accessibilityLabel("Markdown formats inline as you type")
         }
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(height: 42)
+        .background(theme.palette.surfacePanel)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("markdown-preview")
-        .background(theme.palette.surfaceSunken)
+        .accessibilityIdentifier("markdown-formatting-toolbar")
+    }
+
+    private var formattingDivider: some View {
+        Rectangle()
+            .fill(theme.palette.line)
+            .frame(width: theme.metrics.hairline, height: 18)
+            .padding(.horizontal, 3)
+            .accessibilityHidden(true)
+    }
+
+    private func markdownFormatButton(
+        _ title: String,
+        systemImage: String,
+        action: Selector,
+        identifier: String,
+        shortcut: String? = nil
+    ) -> some View {
+        Button {
+            sendMarkdownAction(action)
+        } label: {
+            Image(systemName: systemImage)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(ReelIconButtonStyle())
+        .help(shortcut.map { "\(title) (\($0))" } ?? title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func sendMarkdownAction(_ action: Selector) {
+        if !NSApp.sendAction(action, to: nil, from: nil) {
+            editor.reportNotice("Click in the writing canvas before formatting text.")
+        }
     }
 
     private func runForwardSearch() {
@@ -628,9 +741,9 @@ struct TextEditorWorkspace: View {
             statusItem(editor.activeFile?.lineEnding.editorDisplayName ?? "LF")
             statusDivider
             statusItem(editor.settings.softWrap ? "Wrap" : "No wrap")
-            if editor.language == .markdown, showsMarkdownPreview {
+            if editor.language == .markdown {
                 statusDivider
-                statusItem("Preview")
+                statusItem("Inline Markdown")
             }
             if editor.language == .latex {
                 statusDivider
