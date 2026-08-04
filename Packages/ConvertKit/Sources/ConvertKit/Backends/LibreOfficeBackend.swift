@@ -68,7 +68,12 @@ public struct LibreOfficeBackend: ConversionBackend {
                             "LibreOffice is no longer available. Reinstall it or choose another format."
                         )
                     }
-                    try self.convert(step, input: input, output: output, process: process)
+                    try await self.convert(
+                        step,
+                        input: input,
+                        output: output,
+                        process: process
+                    )
                     try Task.checkCancellation()
                     continuation.yield(1)
                     continuation.finish()
@@ -80,8 +85,8 @@ public struct LibreOfficeBackend: ConversionBackend {
             }
             continuation.onTermination = { termination in
                 if case .cancelled = termination {
-                    process.terminate()
                     task.cancel()
+                    Task { await process.terminate() }
                 }
             }
         }
@@ -92,7 +97,7 @@ public struct LibreOfficeBackend: ConversionBackend {
         input: URL,
         output: URL,
         process processBox: LibreOfficeProcessBox
-    ) throws {
+    ) async throws {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
             "clip-libreoffice-\(UUID().uuidString)",
             isDirectory: true
@@ -106,16 +111,6 @@ public struct LibreOfficeBackend: ConversionBackend {
         ).appendingPathExtension(step.to.preferredFilenameExtension)
         let standardOutputURL = workspace.appendingPathComponent("stdout.log")
         let standardErrorURL = workspace.appendingPathComponent("stderr.log")
-        _ = FileManager.default.createFile(atPath: standardOutputURL.path, contents: nil)
-        _ = FileManager.default.createFile(atPath: standardErrorURL.path, contents: nil)
-        let standardOutput = try FileHandle(forWritingTo: standardOutputURL)
-        let standardError = try FileHandle(forWritingTo: standardErrorURL)
-        defer {
-            try? standardOutput.close()
-            try? standardError.close()
-        }
-        let process = Process()
-        process.executableURL = capabilities.libreOfficeExecutable
         var arguments = [
             "-env:UserInstallation=\(profile.absoluteString)",
             "--headless",
@@ -136,27 +131,18 @@ public struct LibreOfficeBackend: ConversionBackend {
             "--outdir", workspace.path,
             input.path,
         ])
-        process.arguments = arguments
-        process.standardOutput = standardOutput
-        process.standardError = standardError
-        try processBox.run(process)
-        try standardOutput.synchronize()
-        try standardError.synchronize()
-        let outputText =
-            String(
-                data: try Data(contentsOf: standardOutputURL),
-                encoding: .utf8
-            ) ?? ""
-        let errorText =
-            String(
-                data: try Data(contentsOf: standardErrorURL),
-                encoding: .utf8
-            ) ?? ""
-        guard process.terminationStatus == 0,
+        let result = try await processBox.run(
+            executableURL: capabilities.libreOfficeExecutable,
+            arguments: arguments,
+            standardOutputURL: standardOutputURL,
+            standardErrorURL: standardErrorURL
+        )
+        try Task.checkCancellation()
+        guard result.status == 0,
             FileManager.default.fileExists(atPath: expected.path)
         else {
             let detail =
-                [errorText, outputText]
+                [result.errorText, result.outputText]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .first { !$0.isEmpty }
                 ?? "LibreOffice did not produce the requested Office document"
@@ -176,21 +162,58 @@ public struct LibreOfficeBackend: ConversionBackend {
     }
 }
 
-private final class LibreOfficeProcessBox: @unchecked Sendable {
-    private let lock = NSLock()
+private actor LibreOfficeProcessBox {
     private var process: Process?
 
-    func run(_ process: Process) throws {
-        lock.withLock { self.process = process }
-        defer { lock.withLock { self.process = nil } }
-        try process.run()
-        process.waitUntilExit()
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        standardOutputURL: URL,
+        standardErrorURL: URL
+    ) async throws -> (status: Int32, outputText: String, errorText: String) {
+        _ = FileManager.default.createFile(atPath: standardOutputURL.path, contents: nil)
+        _ = FileManager.default.createFile(atPath: standardErrorURL.path, contents: nil)
+        let standardOutput = try FileHandle(forWritingTo: standardOutputURL)
+        let standardError = try FileHandle(forWritingTo: standardErrorURL)
+        defer {
+            try? standardOutput.close()
+            try? standardError.close()
+        }
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.standardOutput = standardOutput
+        process.standardError = standardError
+        self.process = process
+        defer { self.process = nil }
+        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { finished in
+                continuation.resume(returning: finished.terminationStatus)
+            }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+            }
+        }
+        try standardOutput.synchronize()
+        try standardError.synchronize()
+        let outputText =
+            String(
+                data: try Data(contentsOf: standardOutputURL),
+                encoding: .utf8
+            ) ?? ""
+        let errorText =
+            String(
+                data: try Data(contentsOf: standardErrorURL),
+                encoding: .utf8
+            ) ?? ""
+        return (status, outputText, errorText)
     }
 
     func terminate() {
-        lock.withLock {
-            guard process?.isRunning == true else { return }
-            process?.terminate()
-        }
+        guard process?.isRunning == true else { return }
+        process?.terminate()
     }
 }
