@@ -1,6 +1,7 @@
 import CaptureKit
 import ConvertKit
 import CoreModel
+import CryptoKit
 import Foundation
 import LibraryStore
 import SearchEngine
@@ -495,6 +496,25 @@ public actor AppRuntime {
         try data.write(to: textDocumentURL(for: assetID), options: .atomic)
     }
 
+    public func texProjectDocument(for relativeFolder: String) throws -> TextDocument? {
+        let url = texProjectDocumentURL(for: relativeFolder)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(TextDocument.self, from: Data(contentsOf: url))
+    }
+
+    public func saveTeXProjectDocument(
+        _ document: TextDocument,
+        for relativeFolder: String
+    ) throws {
+        let directory = LibraryLayout.texProjects(in: libraryRoot)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(document)
+        data.append(0x0A)
+        try data.write(to: texProjectDocumentURL(for: relativeFolder), options: .atomic)
+    }
+
     /// Reads a text asset's bytes into an editable buffer, detecting its encoding
     /// and line endings so a later save can reproduce the original file.
     public func loadTextContents(for assetID: AssetID) async throws -> LoadedTextFile {
@@ -555,6 +575,14 @@ public actor AppRuntime {
     private func textDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.textDocuments(in: libraryRoot)
             .appendingPathComponent("\(assetID.rawValue).reeltext")
+    }
+
+    private func texProjectDocumentURL(for relativeFolder: String) -> URL {
+        let digest = SHA256.hash(data: Data(relativeFolder.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return LibraryLayout.texProjects(in: libraryRoot)
+            .appendingPathComponent("\(digest).reeltext")
     }
 
     private static func indexStages(for asset: AssetRecord) -> Set<IndexStage> {

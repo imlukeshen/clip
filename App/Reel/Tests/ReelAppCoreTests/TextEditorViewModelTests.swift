@@ -202,6 +202,111 @@ struct TextEditorViewModelTests {
         #expect(editor.texCompilationState == .idle)
     }
 
+    @Test("Editing an included file builds the main file with bibliography dependencies")
+    func multiFileLatexBuildUsesMainDependencyGraph() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-multifile-editor-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let chapters = root.appendingPathComponent("chapters", isDirectory: true)
+        try FileManager.default.createDirectory(at: chapters, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mainID = FileID(rawValue: "main")
+        let chapterID = FileID(rawValue: "chapter")
+        let bibID = FileID(rawValue: "bib")
+        let mainURL = root.appendingPathComponent("main.tex")
+        let chapterURL = chapters.appendingPathComponent("intro.tex")
+        let bibURL = root.appendingPathComponent("refs.bib")
+        let mainSource = "\\documentclass{article}\\input{chapters/intro}\\bibliography{refs}"
+        let chapterSource = "Included chapter"
+        let bibliography = "@book{clip,title={Clip}}"
+        let contents = [mainID: mainSource, chapterID: chapterSource, bibID: bibliography]
+        for (url, value) in [
+            (mainURL, mainSource),
+            (chapterURL, chapterSource),
+            (bibURL, bibliography),
+        ] {
+            try Data(value.utf8).write(to: url)
+        }
+        let document = try TextDocument(
+            files: [
+                TextFile(id: mainID, relativePath: "main.tex", language: .latex),
+                TextFile(
+                    id: chapterID,
+                    relativePath: "chapters/intro.tex",
+                    language: .latex
+                ),
+                TextFile(id: bibID, relativePath: "refs.bib", language: .latex),
+            ],
+            mainFileID: mainID
+        )
+        let preferences = try makeTeXPreferences(packageAccess: .cachedOnly)
+        let recorder = TeXJobRecorder()
+        let editor = TextEditorViewModel(
+            document: document,
+            contents: contents,
+            activeFileID: chapterID,
+            sourceURLs: [mainID: mainURL, chapterID: chapterURL, bibID: bibURL],
+            projectFileURLs: [
+                "main.tex": mainURL,
+                "chapters/intro.tex": chapterURL,
+                "refs.bib": bibURL,
+            ],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _, _ in },
+            texPreferences: preferences
+        )
+        editor.configureTeXEngine(RecordingTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        let job = try #require(recorder.job)
+
+        #expect(job.mainFile == mainURL)
+        #expect(Set(job.projectFiles) == Set([mainURL, chapterURL, bibURL]))
+        #expect(Set(job.sourceOverrides.keys) == ["main.tex", "chapters/intro.tex", "refs.bib"])
+        #expect(job.bibliography == .bibtex)
+    }
+
+    @Test("Switching project files saves every edited buffer")
+    func switchingFilesPreservesAllPendingEdits() async throws {
+        let firstID = FileID(rawValue: "first")
+        let secondID = FileID(rawValue: "second")
+        let document = try TextDocument(
+            files: [
+                TextFile(id: firstID, relativePath: "main.tex", language: .latex),
+                TextFile(id: secondID, relativePath: "chapter.tex", language: .latex),
+            ],
+            mainFileID: firstID
+        )
+        let writes = TextWriteRecorder()
+        let editor = TextEditorViewModel(
+            document: document,
+            contents: [firstID: "first", secondID: "second"],
+            activeFileID: firstID,
+            sourceURLs: [:],
+            projectFileURLs: [:],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { fileID, data, _ in
+                await writes.record(fileID, data: data)
+            }
+        )
+
+        editor.text = "edited first"
+        editor.selectFile(secondID)
+        editor.text = "edited second"
+        editor.stop()
+
+        for _ in 0..<50 {
+            if await writes.count >= 2 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(await writes.text(for: firstID) == "edited first")
+        #expect(await writes.text(for: secondID) == "edited second")
+    }
+
     private func makeEditor(
         file: TextFile,
         text: String,
@@ -215,6 +320,75 @@ struct TextEditorViewModelTests {
             persistingStructure: { _ in },
             persistingContents: { _, _ in }
         )
+    }
+}
+
+private func makeTeXPreferences(packageAccess: TeXPackageAccess) throws -> UserDefaults {
+    let suite = "clip-tex-preferences-\(UUID().uuidString)"
+    guard let preferences = UserDefaults(suiteName: suite) else {
+        throw CocoaError(.fileReadUnknown)
+    }
+    preferences.removePersistentDomain(forName: suite)
+    preferences.set(TeXCompileMode.manual.rawValue, forKey: "clip.tex.compileMode")
+    preferences.set(packageAccess.rawValue, forKey: "clip.tex.packageAccess")
+    return preferences
+}
+
+private final class TeXJobRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedJob: TeXJob?
+
+    var job: TeXJob? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedJob
+    }
+
+    func record(_ job: TeXJob) {
+        lock.lock()
+        storedJob = job
+        lock.unlock()
+    }
+}
+
+private actor TextWriteRecorder {
+    private var writes: [FileID: String] = [:]
+
+    var count: Int { writes.count }
+
+    func record(_ id: FileID, data: Data) {
+        writes[id] = String(data: data, encoding: .utf8)
+    }
+
+    func text(for id: FileID) -> String? { writes[id] }
+}
+
+private struct RecordingTeXEngine: TeXEngine {
+    let id: EngineID = "recording-test"
+    let displayName = "Recording Test TeX"
+    let isAvailable = true
+    let recorder: TeXJobRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        recorder.record(job)
+        return AsyncThrowingStream { continuation in
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "clip-recording-tex-result-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                let pdf = directory.appendingPathComponent("main.pdf")
+                try Data("%PDF-test".utf8).write(to: pdf)
+                continuation.yield(.finished(pdf: pdf, synctex: nil))
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
     }
 }
 

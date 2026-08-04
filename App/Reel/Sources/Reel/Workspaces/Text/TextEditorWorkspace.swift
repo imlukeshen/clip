@@ -117,6 +117,10 @@ struct TextEditorWorkspace: View {
     @ViewBuilder private var editorSurface: some View {
         if editor.language == .latex {
             HSplitView {
+                if editor.document.files.count > 1 {
+                    TeXProjectSidebar(editor: editor)
+                        .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
+                }
                 codeEditor
                     .frame(minWidth: 340)
                 TeXPDFPreview(
@@ -157,7 +161,7 @@ struct TextEditorWorkspace: View {
             onLongLineModeChange: editor.setSoftWrapSuppressed,
             onLargePaste: editor.enterLargePasteReadOnlyMode,
             onPasteRefused: editor.reportPasteRefused,
-            diagnostics: editor.language == .latex ? editor.texDiagnostics : [],
+            diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
             scrollToLine: editor.language == .markdown && showsMarkdownPreview
                 ? synchronizedLine : nil,
             navigation: sourceNavigation,
@@ -317,6 +321,7 @@ struct TextEditorWorkspace: View {
 
     private func runInverseSearch(page: Int, x: Double, y: Double) {
         guard let location = editor.inverseTeXSearch(page: page, x: x, y: y) else { return }
+        editor.selectFile(relativePath: location.file)
         sourceNavigation = TextEditorNavigation(
             line: location.line,
             column: location.column ?? 1
@@ -325,7 +330,15 @@ struct TextEditorWorkspace: View {
 
     private func navigateToDiagnostic(_ diagnostic: TeXDiagnostic) {
         guard let line = diagnostic.line else { return }
+        if let file = diagnostic.file { editor.selectFile(relativePath: file) }
         sourceNavigation = TextEditorNavigation(line: line)
+    }
+
+    private var activeFileDiagnostics: [TeXDiagnostic] {
+        return editor.texDiagnostics.filter { diagnostic in
+            guard let file = diagnostic.file else { return true }
+            return editor.isActiveFile(path: file)
+        }
     }
 
     private var detachedBanner: some View {

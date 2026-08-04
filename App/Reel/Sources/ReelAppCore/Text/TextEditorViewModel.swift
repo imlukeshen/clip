@@ -43,7 +43,10 @@ public final class TextEditorViewModel {
             guard text != oldValue else { return }
             if isDetached { hasSavedDetachedCopy = false }
             guard !isApplyingExternalText else { return }
+            textBuffers[activeFileID] = text
+            rebuildTeXProjectAnalysis()
             isDirty = true
+            dirtyFileIDs.insert(activeFileID)
             scheduleContentAutosave()
             scheduleTeXCompilation()
         }
@@ -82,9 +85,11 @@ public final class TextEditorViewModel {
     public private(set) var texCompileMode: TeXCompileMode
     /// `nil` until the user chooses whether Tectonic may fetch packages.
     public private(set) var texPackageAccess: TeXPackageAccess?
+    /// Dependency graph for the active LaTeX folder.
+    public private(set) var texProjectAnalysis: TeXProjectAnalysis?
 
     /// The source file on disk, or `nil` for an unsaved scratch buffer.
-    public let sourceURL: URL?
+    public var sourceURL: URL? { sourceURLs[activeFileID] }
     /// The undo manager shared by the text view and document-level patches.
     public let undoManager = UndoManager()
 
@@ -93,7 +98,11 @@ public final class TextEditorViewModel {
     /// Persists the structural document overlay (`.reel/text/*.reeltext`).
     private let persistStructure: @Sendable (TextDocument) async throws -> Void
     /// Persists the buffer contents to their on-disk home (library file or scratch).
-    private let persistContents: @Sendable (Data, String) async throws -> Void
+    private let persistContents: @Sendable (FileID, Data, String) async throws -> Void
+    private let sourceURLs: [FileID: URL]
+    private let projectFileURLs: [String: URL]
+    private var textBuffers: [FileID: String]
+    private var dirtyFileIDs: Set<FileID> = []
 
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
@@ -104,7 +113,7 @@ public final class TextEditorViewModel {
     @ObservationIgnored private var texEngine: (any TeXEngine)?
     private var texCompileTask: Task<Void, Never>?
     private var texCompileGeneration = UUID()
-    private var texSuccessfulSource: String?
+    private var texSuccessfulSources: [FileID: String]?
     private let texPreferences: UserDefaults
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
@@ -120,20 +129,56 @@ public final class TextEditorViewModel {
     ///   - hashingWith: Computes the content hash for an in-place save.
     ///   - persistingStructure: Writes the `.reeltext` overlay.
     ///   - persistingContents: Writes the buffer bytes and their hash to disk.
-    public init(
+    public convenience init(
         document: TextDocument,
         text: String,
         activeFileID: FileID? = nil,
         sourceURL: URL?,
         hashingWith hashData: @escaping @Sendable (Data) -> String,
         persistingStructure: @escaping @Sendable (TextDocument) async throws -> Void,
-        persistingContents: @escaping @Sendable (Data, String) async throws -> Void,
+        persistingContents persistSingleContents:
+            @escaping @Sendable (Data, String) async throws -> Void,
+        texPreferences: UserDefaults = .standard
+    ) {
+        let selected = activeFileID ?? document.files[0].id
+        self.init(
+            document: document,
+            contents: [selected: text],
+            activeFileID: selected,
+            sourceURLs: sourceURL.map { [selected: $0] } ?? [:],
+            projectFileURLs: sourceURL.map {
+                [
+                    document.files.first(where: { $0.id == selected })?.relativePath
+                        ?? $0.lastPathComponent: $0
+                ]
+            } ?? [:],
+            hashingWith: hashData,
+            persistingStructure: persistingStructure,
+            persistingContents: { _, data, hash in
+                try await persistSingleContents(data, hash)
+            },
+            texPreferences: texPreferences
+        )
+    }
+
+    /// Creates an editor over every text file in one LaTeX project folder.
+    public init(
+        document: TextDocument,
+        contents: [FileID: String],
+        activeFileID: FileID,
+        sourceURLs: [FileID: URL],
+        projectFileURLs: [String: URL],
+        hashingWith hashData: @escaping @Sendable (Data) -> String,
+        persistingStructure: @escaping @Sendable (TextDocument) async throws -> Void,
+        persistingContents: @escaping @Sendable (FileID, Data, String) async throws -> Void,
         texPreferences: UserDefaults = .standard
     ) {
         self.document = document
-        self.text = text
-        self.activeFileID = activeFileID ?? document.files[0].id
-        self.sourceURL = sourceURL
+        self.text = contents[activeFileID] ?? ""
+        self.activeFileID = activeFileID
+        self.sourceURLs = sourceURLs
+        self.projectFileURLs = projectFileURLs
+        self.textBuffers = contents
         self.hashData = hashData
         self.persistStructure = persistingStructure
         self.persistContents = persistingContents
@@ -144,6 +189,7 @@ public final class TextEditorViewModel {
         self.texPackageAccess =
             texPreferences.string(forKey: "clip.tex.packageAccess")
             .flatMap(TeXPackageAccess.init(rawValue:))
+        rebuildTeXProjectAnalysis()
     }
 
     /// The file record currently being edited.
@@ -161,15 +207,18 @@ public final class TextEditorViewModel {
         document.settings
     }
 
+    public var mainFile: TextFile? {
+        guard let id = document.mainFileID else { return nil }
+        return document.files.first { $0.id == id }
+    }
+
+    public func isReachableFromMain(_ file: TextFile) -> Bool {
+        texProjectAnalysis?.reachableFiles.contains(file.relativePath) ?? true
+    }
+
     /// Starts editor-owned background work.
     public func start() {
-        if fileMonitor == nil, let sourceURL {
-            fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.scheduleExternalReload()
-                }
-            }
-        }
+        startFileMonitor()
         scheduleTeXCompilation()
     }
 
@@ -195,6 +244,7 @@ public final class TextEditorViewModel {
             let inverse = try document.apply(patch)
             registerUndo(inverse, actionName: actionName)
             undoManager.setActionName(actionName)
+            rebuildTeXProjectAnalysis()
             persistStructureNow()
         } catch {
             notice = "That change could not be applied."
@@ -213,6 +263,55 @@ public final class TextEditorViewModel {
         } else {
             cancelTeXCompilation(resetState: true)
         }
+    }
+
+    /// Switches the visible buffer without discarding pending edits in the old file.
+    public func selectFile(_ id: FileID) {
+        guard id != activeFileID, document.files.contains(where: { $0.id == id }) else { return }
+        guard pendingExternalContents == nil else {
+            notice = "Resolve the file change before switching project files."
+            return
+        }
+        guard !isDetached || hasSavedDetachedCopy else {
+            notice = "Save a copy of this detached file before switching project files."
+            return
+        }
+        contentTask?.cancel()
+        cleanupTask?.cancel()
+        if isDirty { writeContents() }
+        textBuffers[activeFileID] = text
+        fileMonitor?.cancel()
+        fileMonitor = nil
+        activeFileID = id
+        pendingExternalContents = nil
+        isDetached = false
+        hasSavedDetachedCopy = false
+        isApplyingExternalText = true
+        text = textBuffers[id] ?? ""
+        isApplyingExternalText = false
+        isDirty = dirtyFileIDs.contains(id)
+        if isDirty { scheduleContentAutosave() }
+        undoManager.removeAllActions()
+        startFileMonitor()
+    }
+
+    public func selectFile(relativePath: String) {
+        guard let file = projectFile(matching: relativePath) else { return }
+        selectFile(file.id)
+    }
+
+    /// Persists a user override for the project root file.
+    public func setMainFile(_ id: FileID) {
+        guard
+            let file = document.files.first(where: { $0.id == id }),
+            Self.isTeXSource(file.relativePath),
+            document.mainFileID != id
+        else {
+            return
+        }
+        perform(.setMainFile(id), actionName: "Set Main LaTeX File")
+        rebuildTeXProjectAnalysis()
+        scheduleTeXCompilation()
     }
 
     /// Replaces the shared editor settings.
@@ -276,15 +375,19 @@ public final class TextEditorViewModel {
 
     /// Resolves the active source line into the last successful PDF.
     public func forwardTeXSearch(line: Int) -> SyncTeXPDFLocation? {
-        guard let texSyncTeXIndex, let sourceURL else {
+        guard let texSyncTeXIndex, let activeFile else {
             notice = "No current SyncTeX mapping is available. Build the document first."
             return nil
         }
-        guard texSuccessfulSource == text else {
+        guard texSuccessfulSources == textBuffers else {
             notice = "The SyncTeX map is stale. Build the changed source before navigating."
             return nil
         }
-        guard let location = texSyncTeXIndex.forwardSearch(file: sourceURL.path, line: line)
+        guard
+            let location = texSyncTeXIndex.forwardSearch(
+                file: activeFile.relativePath,
+                line: line
+            )
         else {
             notice = "The last build has no PDF mapping for line \(line)."
             return nil
@@ -298,7 +401,7 @@ public final class TextEditorViewModel {
             notice = "No current SyncTeX mapping is available. Build the document first."
             return nil
         }
-        guard texSuccessfulSource == text else {
+        guard texSuccessfulSources == textBuffers else {
             notice = "The SyncTeX map is stale. Build the changed source before navigating."
             return nil
         }
@@ -306,7 +409,19 @@ public final class TextEditorViewModel {
             notice = "No source mapping is available at that PDF position."
             return nil
         }
-        return location
+        if let file = projectFile(matching: location.file) {
+            return SyncTeXSourceLocation(
+                file: file.relativePath,
+                line: location.line,
+                column: location.column
+            )
+        }
+        notice = "The mapped source file is no longer part of this project."
+        return nil
+    }
+
+    public func isActiveFile(path: String) -> Bool {
+        projectFile(matching: path)?.id == activeFileID
     }
 
     /// Updates the layout safety mode reported by the native editor.
@@ -386,6 +501,7 @@ public final class TextEditorViewModel {
 
     /// Writes a detached buffer to a user-selected location without touching the missing asset.
     public func saveDetachedCopy(to url: URL) {
+        let fileID = activeFileID
         let value = text
         let encoding = activeFile?.encoding ?? .utf8
         let byteOrderMark = activeFile?.byteOrderMark
@@ -406,8 +522,9 @@ public final class TextEditorViewModel {
                 }
             }.value
             guard let self else { return }
-            if didWrite, text == value {
+            if didWrite, activeFileID == fileID, text == value {
                 isDirty = false
+                dirtyFileIDs.remove(fileID)
                 hasSavedDetachedCopy = true
                 notice = "Saved a copy as \(url.lastPathComponent)."
             } else if !didWrite {
@@ -468,16 +585,41 @@ public final class TextEditorViewModel {
             texCompilationState = .failed("The bundled TeX engine is unavailable.")
             return
         }
-        guard let sourceURL, let packageAccess = texPackageAccess else { return }
+        guard let packageAccess = texPackageAccess else { return }
+        rebuildTeXProjectAnalysis()
+        guard let analysis = texProjectAnalysis,
+            let mainPath = analysis.mainFile,
+            let mainFile = document.files.first(where: { $0.relativePath == mainPath }),
+            let mainURL = sourceURLs[mainFile.id]
+        else {
+            texCompilationState = .failed(
+                "Choose a main LaTeX file containing \\documentclass before building."
+            )
+            return
+        }
         texCompileTask?.cancel()
         let generation = UUID()
         texCompileGeneration = generation
-        let source = text
-        let projectDirectory = sourceURL.deletingLastPathComponent()
+        let sourceSnapshot = textBuffers
+        let projectDirectory = Self.projectRoot(
+            for: mainPath,
+            sourceURL: mainURL
+        )
+        let reachableURLs = analysis.reachableFiles.compactMap { projectFileURLs[$0] }
+        let overrides: [String: Data] = Dictionary(
+            uniqueKeysWithValues: document.files.compactMap { file in
+                guard analysis.reachableFiles.contains(file.relativePath),
+                    let source = sourceSnapshot[file.id]
+                else { return nil }
+                return (file.relativePath, Data(source.utf8))
+            }
+        )
         let job = TeXJob(
-            mainFile: sourceURL,
+            mainFile: mainURL,
             workingDirectory: projectDirectory,
-            sourceOverrides: [sourceURL.lastPathComponent: Data(source.utf8)],
+            projectFiles: reachableURLs,
+            sourceOverrides: overrides,
+            bibliography: analysis.bibliography,
             timeout: .seconds(120),
             packageAccess: packageAccess
         )
@@ -503,7 +645,7 @@ public final class TextEditorViewModel {
                         guard texCompileGeneration == generation else { return }
                         replaceTeXResults(pdf: pdf, synctex: synctex)
                         texSyncTeXIndex = index
-                        texSuccessfulSource = source
+                        texSuccessfulSources = sourceSnapshot
                         texCompilationState = .succeeded
                     }
                 }
@@ -540,7 +682,7 @@ public final class TextEditorViewModel {
         texPDFURL = nil
         texSyncTeXURL = nil
         texSyncTeXIndex = nil
-        texSuccessfulSource = nil
+        texSuccessfulSources = nil
     }
 
     private func scheduleContentAutosave() {
@@ -558,17 +700,33 @@ public final class TextEditorViewModel {
     }
 
     private func flushContentAutosave() {
-        guard isDirty else { return }
-        writeContents()
+        for fileID in dirtyFileIDs {
+            guard let value = textBuffers[fileID] else { continue }
+            if fileID == activeFileID,
+                isDetached || pendingExternalContents != nil
+            {
+                continue
+            }
+            writeContents(fileID: fileID, value: value)
+        }
     }
 
     private func writeContents() {
         guard isDirty, !isDetached, pendingExternalContents == nil else { return }
-        let encoding = activeFile?.encoding.stringEncoding ?? .utf8
-        let textEncoding = activeFile?.encoding ?? .utf8
-        let byteOrderMark = activeFile?.byteOrderMark
+        let fileID = activeFileID
         let value = text
-        isDirty = false
+        writeContents(fileID: fileID, value: value)
+    }
+
+    private func writeContents(fileID: FileID, value: String) {
+        guard dirtyFileIDs.contains(fileID),
+            let file = document.files.first(where: { $0.id == fileID })
+        else { return }
+        let encoding = file.encoding.stringEncoding
+        let textEncoding = file.encoding
+        let byteOrderMark = file.byteOrderMark
+        if activeFileID == fileID { isDirty = false }
+        dirtyFileIDs.remove(fileID)
         let hashData = hashData
         let persistContents = persistContents
         Task { [weak self] in
@@ -586,15 +744,17 @@ public final class TextEditorViewModel {
                 return (data, hashData(data))
             }.value
             guard let (data, hash) = payload else {
-                self?.isDirty = true
+                self?.dirtyFileIDs.insert(fileID)
+                if self?.activeFileID == fileID { self?.isDirty = true }
                 self?.notice = "This text could not be encoded for saving."
                 return
             }
             do {
-                try await persistContents(data, hash)
+                try await persistContents(fileID, data, hash)
             } catch {
                 await MainActor.run {
-                    self?.isDirty = true
+                    self?.dirtyFileIDs.insert(fileID)
+                    if self?.activeFileID == fileID { self?.isDirty = true }
                     self?.notice = "The file could not be saved."
                 }
             }
@@ -666,8 +826,10 @@ public final class TextEditorViewModel {
         pendingExternalContents = nil
         isApplyingExternalText = true
         text = contents.text
+        textBuffers[activeFileID] = contents.text
         isApplyingExternalText = false
         isDirty = false
+        dirtyFileIDs.remove(activeFileID)
         hasSavedDetachedCopy = false
         undoManager.removeAllActions()
         updateDetectedFormat(from: contents)
@@ -715,11 +877,76 @@ public final class TextEditorViewModel {
                 let redo = try target.document.apply(patch)
                 target.registerUndo(redo, actionName: actionName)
                 target.undoManager.setActionName(actionName)
+                target.rebuildTeXProjectAnalysis()
                 target.persistStructureNow()
             } catch {
                 target.notice = "That change could not be undone."
             }
         }
+    }
+
+    private func rebuildTeXProjectAnalysis() {
+        let sources = Dictionary(
+            uniqueKeysWithValues: document.files.compactMap { file in
+                textBuffers[file.id].map { (file.relativePath, $0) }
+            }
+        )
+        guard
+            sources.values.contains(where: { $0.contains("\\documentclass") })
+                || document.files.contains(where: { $0.language == .latex })
+        else {
+            texProjectAnalysis = nil
+            return
+        }
+        let selectedMain = document.mainFileID.flatMap { id in
+            document.files.first(where: { $0.id == id })?.relativePath
+        }
+        texProjectAnalysis = TeXProjectAnalyzer.analyze(
+            sources: sources,
+            availableFiles: Set(projectFileURLs.keys),
+            selectedMainFile: selectedMain
+        )
+    }
+
+    private func startFileMonitor() {
+        guard fileMonitor == nil, let sourceURL else { return }
+        fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.scheduleExternalReload()
+            }
+        }
+    }
+
+    private static func projectRoot(for relativePath: String, sourceURL: URL) -> URL {
+        var root = sourceURL
+        let depth = relativePath.split(separator: "/").count
+        for _ in 0..<depth { root.deleteLastPathComponent() }
+        return root
+    }
+
+    private static func projectPathsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs { return true }
+        return rhs.hasSuffix("/\(lhs)") || lhs.hasSuffix("/\(rhs)")
+    }
+
+    private func projectFile(matching path: String) -> TextFile? {
+        if let exact = document.files.first(where: { $0.relativePath == path }) {
+            return exact
+        }
+        let matches = document.files.filter {
+            Self.projectPathsMatch($0.relativePath, path)
+        }
+        let maximumDepth = matches.map {
+            $0.relativePath.split(separator: "/").count
+        }.max()
+        let mostSpecific = matches.filter {
+            $0.relativePath.split(separator: "/").count == maximumDepth
+        }
+        return mostSpecific.count == 1 ? mostSpecific[0] : nil
+    }
+
+    private static func isTeXSource(_ path: String) -> Bool {
+        ["tex", "latex"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
     }
 }
 

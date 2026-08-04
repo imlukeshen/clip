@@ -28,13 +28,13 @@ private let syncTeXFixture = """
 
 @Test func syncTeXMapsForwardAndInverseWithoutGuessingAcrossMissingLines() throws {
     let index = try SyncTeXIndex(synctexText: syncTeXFixture)
-    let location = try #require(index.forwardSearch(file: "/Documents/main.tex", line: 3))
+    let location = try #require(index.forwardSearch(file: "main.tex", line: 3))
 
     #expect(location.page == 1)
     #expect(abs(location.x - 133.77) < 0.1)
     #expect(location.width > 14)
     #expect(location.height > 6)
-    #expect(index.forwardSearch(file: "/Documents/main.tex", line: 142) == nil)
+    #expect(index.forwardSearch(file: "main.tex", line: 142) == nil)
 
     let source = try #require(
         index.inverseSearch(
@@ -64,6 +64,25 @@ private let syncTeXFixture = """
     let index = try SyncTeXIndex(contentsOf: url)
     #expect(index.forwardSearch(file: "main.tex", line: 3) != nil)
     #expect(index.forwardSearch(file: "main.tex", line: 5) != nil)
+}
+
+@Test func forwardSearchDoesNotConfuseDuplicateFilenamesInNestedFolders() throws {
+    let source = """
+        SyncTeX Version:1
+        Input:1:/private/tmp/clip-tex-test/source/main.tex
+        Input:2:/private/tmp/clip-tex-test/source/chapters/main.tex
+        Content:
+        {1
+        h1,7:100000,100000:100000,100000,0
+        h2,7:900000,900000:100000,100000,0
+        }1
+        """
+    let index = try SyncTeXIndex(synctexText: source)
+
+    let root = try #require(index.forwardSearch(file: "main.tex", line: 7))
+    let nested = try #require(index.forwardSearch(file: "chapters/main.tex", line: 7))
+
+    #expect(root.x < nested.x)
 }
 
 @Test func texLogsPreserveErrorsWarningsBoxesAndUnknownOutput() {

@@ -120,6 +120,7 @@ public protocol TeXEngine: Sendable {
 public enum TeXEngineError: Error, Sendable, Equatable {
     case unavailable
     case invalidMainFile
+    case bibliographyToolUnavailable(String)
     case unsafeProjectEntry(String)
     case unsafeSource(String)
     case launchFailed(String)
@@ -137,6 +138,8 @@ extension TeXEngineError: LocalizedError {
             "No safe TeX engine is available."
         case .invalidMainFile:
             "The LaTeX main file is outside its project folder or is unavailable."
+        case .bibliographyToolUnavailable(let tool):
+            "\(tool) is not available in this build. Install MacTeX and use Clip's direct build."
         case .unsafeProjectEntry(let path):
             "The project entry is unsafe and was not compiled: \(path)"
         case .unsafeSource(let reason):

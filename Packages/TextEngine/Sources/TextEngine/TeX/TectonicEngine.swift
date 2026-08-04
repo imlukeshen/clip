@@ -31,6 +31,12 @@ public struct TectonicEngine: TeXEngine {
                     continuation.finish(throwing: TeXEngineError.unavailable)
                     return
                 }
+                guard job.bibliography != .biber else {
+                    continuation.finish(
+                        throwing: TeXEngineError.bibliographyToolUnavailable("Biber")
+                    )
+                    return
+                }
                 do {
                     let workspace = try TeXWorkspaceSandbox.prepare(job)
                     defer { workspace.remove() }

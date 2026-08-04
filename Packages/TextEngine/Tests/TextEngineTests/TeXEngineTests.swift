@@ -83,6 +83,36 @@ import Testing
     #expect(!logs.contains("--only-cached"))
 }
 
+@Test func bundledTectonicExplainsThatBiberNeedsTheDirectBuild() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    do {
+        _ = try await collect(
+            engine.compile(TeXJob(mainFile: fixture.mainFile, bibliography: .biber))
+        )
+        Issue.record("Bundled Tectonic should not claim to include Biber")
+    } catch {
+        #expect(error as? TeXEngineError == .bibliographyToolUnavailable("Biber"))
+    }
+}
+
+@Test func biberProjectsRouteToAnAvailableSystemEngine() async throws {
+    let primary = RecordingTeXEngine(id: .tectonic, isAvailable: true)
+    let system = RecordingTeXEngine(id: .systemTeX, isAvailable: true)
+    let router = BibliographyRoutingTeXEngine(primary: primary, biberEngine: system)
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+
+    _ = try await collect(
+        router.compile(TeXJob(mainFile: fixture.mainFile, bibliography: .biber))
+    )
+
+    #expect(await primary.compiles == 0)
+    #expect(await system.compiles == 1)
+}
+
 @Test func shellEscapeIsRefusedBeforeTheEngineStarts() async throws {
     let marker = FileManager.default.temporaryDirectory.appendingPathComponent(
         "clip-tex-marker-\(UUID().uuidString)"
@@ -165,6 +195,37 @@ private actor NetworkObserver {
     private(set) var count = 0
 
     func record() { count += 1 }
+}
+
+private final class RecordingTeXEngine: TeXEngine, @unchecked Sendable {
+    let id: EngineID
+    let displayName = "Recorder"
+    let isAvailable: Bool
+    private let state = RecordingTeXState()
+
+    init(id: EngineID, isAvailable: Bool) {
+        self.id = id
+        self.isAvailable = isAvailable
+    }
+
+    var compiles: Int {
+        get async { await state.compiles }
+    }
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                await state.record()
+                continuation.finish()
+            }
+        }
+    }
+}
+
+private actor RecordingTeXState {
+    private(set) var compiles = 0
+
+    func record() { compiles += 1 }
 }
 
 private struct TeXFixture {

@@ -165,8 +165,21 @@ public struct SyncTeXIndex: Sendable, Equatable {
     }
 
     public func forwardSearch(file: String, line: Int) -> SyncTeXPDFLocation? {
+        let matchingInputs = inputs.filter { Self.pathsMatch($0.value, file) }
+        let minimumExtraComponents = matchingInputs.values.map {
+            max(
+                Self.pathComponents($0).count - Self.pathComponents(file).count,
+                0
+            )
+        }.min()
         let matchingTags = Set(
-            inputs.compactMap { tag, path in Self.pathsMatch(path, file) ? tag : nil }
+            matchingInputs.compactMap { tag, path in
+                let extraComponents = max(
+                    Self.pathComponents(path).count - Self.pathComponents(file).count,
+                    0
+                )
+                return extraComponents == minimumExtraComponents ? tag : nil
+            }
         )
         return
             records
@@ -217,9 +230,11 @@ public struct SyncTeXIndex: Sendable, Equatable {
         let indexedURL = URL(fileURLWithPath: indexed).standardizedFileURL
         let requestedURL = URL(fileURLWithPath: requested).standardizedFileURL
         if indexedURL == requestedURL { return true }
-        return indexedURL.lastPathComponent == requestedURL.lastPathComponent
-            || indexed.hasSuffix("/\(requested)")
-            || requested.hasSuffix("/\(indexed)")
+        return indexed.hasSuffix("/\(requested)")
+    }
+
+    private static func pathComponents(_ path: String) -> [Substring] {
+        path.split(separator: "/", omittingEmptySubsequences: true)
     }
 
     private struct ParsedRecord {

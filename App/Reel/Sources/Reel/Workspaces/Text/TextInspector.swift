@@ -2,6 +2,7 @@ import CoreModel
 import DesignSystem
 import ReelAppCore
 import SwiftUI
+import TextEngine
 
 struct TextInspector: View {
     @Environment(\.theme) private var theme
@@ -29,6 +30,9 @@ struct TextInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xxl) {
                     documentSection
+                    if editor.language == .latex {
+                        latexSection
+                    }
                     editorSection
                 }
                 .padding(theme.metrics.spacing.lg)
@@ -75,6 +79,36 @@ struct TextInspector: View {
                 rowDivider
 
                 languageMenu
+            }
+        }
+    }
+
+    private var latexSection: some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
+            sectionHeader("LaTeX project", symbol: "doc.on.doc")
+
+            inspectorCard {
+                valueRow(
+                    title: "Main file",
+                    value: editor.mainFile?.relativePath ?? "Not selected",
+                    symbol: "target"
+                )
+                rowDivider
+                valueRow(
+                    title: "Bibliography",
+                    value: editor.texProjectAnalysis?.bibliography.inspectorTitle ?? "None",
+                    symbol: "books.vertical"
+                )
+                if let analysis = editor.texProjectAnalysis,
+                    !analysis.missingDependencies.isEmpty
+                {
+                    rowDivider
+                    valueRow(
+                        title: "Missing files",
+                        value: "\(analysis.missingDependencies.count)",
+                        symbol: "exclamationmark.triangle"
+                    )
+                }
             }
         }
     }
@@ -381,5 +415,16 @@ struct TextInspector: View {
 
     private var languageChoices: [LanguageID] {
         [.plainText] + LanguageID.treeSitterGrammars
+    }
+}
+
+extension BibMode {
+    fileprivate var inspectorTitle: String {
+        switch self {
+        case .auto: "Automatic"
+        case .biber: "Biber"
+        case .bibtex: "BibTeX"
+        case .none: "None"
+        }
     }
 }

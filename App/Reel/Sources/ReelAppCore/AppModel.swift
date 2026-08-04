@@ -1550,6 +1550,16 @@ public final class AppModel {
         else { return }
         Task {
             do {
+                let sourceURL = try await runtime.url(for: assetID)
+                if ["tex", "latex", "sty", "cls", "bib"].contains(
+                    sourceURL.pathExtension.lowercased()
+                ) {
+                    try await openTeXProjectEditor(
+                        sourceURL: sourceURL,
+                        runtime: runtime
+                    )
+                    return
+                }
                 let loaded = try await runtime.loadTextContents(for: assetID)
                 let document =
                     try await runtime.textDocument(for: assetID)
@@ -1571,7 +1581,7 @@ public final class AppModel {
                 let textEditor = TextEditorViewModel(
                     document: document,
                     text: loaded.text,
-                    sourceURL: try await runtime.url(for: assetID),
+                    sourceURL: sourceURL,
                     hashingWith: { SampledFileHasher.hash($0) },
                     persistingStructure: { document in
                         try await runtime.saveTextDocument(document, for: assetID)
@@ -1606,6 +1616,118 @@ public final class AppModel {
                 lastMessage = "The selected text file could not be opened."
             }
         }
+    }
+
+    private func openTeXProjectEditor(
+        sourceURL: URL,
+        runtime: AppRuntime
+    ) async throws {
+        let mediaRoot = LibraryLayout.media(in: libraryRoot)
+        let project = try await Task.detached(priority: .userInitiated) {
+            try TeXProjectFolderLoader.loadProject(
+                containing: sourceURL,
+                boundaryURL: mediaRoot
+            )
+        }.value
+        let projectPath =
+            project.rootURL == mediaRoot
+            ? "" : String(project.rootURL.path.dropFirst(mediaRoot.path.count + 1))
+        let projectFolder = projectPath.isEmpty ? "Media" : "Media/\(projectPath)"
+        let persisted = try await runtime.texProjectDocument(for: projectFolder)
+        let persistedFiles = Dictionary(
+            uniqueKeysWithValues: (persisted?.files ?? []).map { ($0.relativePath, $0) }
+        )
+        let assetByPath = Dictionary(uniqueKeysWithValues: assets.map { ($0.relativePath, $0) })
+        var files: [TextFile] = []
+        var contents: [FileID: String] = [:]
+        var sourceURLs: [FileID: URL] = [:]
+        var backing: [FileID: (assetID: AssetID?, url: URL)] = [:]
+
+        for relativePath in project.textFiles.keys.sorted(by: {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }) {
+            guard let loaded = project.textFiles[relativePath],
+                let fileURL = project.fileURLs[relativePath]
+            else { continue }
+            let libraryPath =
+                projectFolder.isEmpty
+                ? relativePath : "\(projectFolder)/\(relativePath)"
+            let assetID = assetByPath[libraryPath]?.id
+            var file = persistedFiles[relativePath] ?? TextFile(relativePath: relativePath)
+            file.assetID = assetID
+            file.relativePath = relativePath
+            if !file.languageIsExplicit {
+                file.language = LanguageDetector.detect(
+                    path: relativePath,
+                    contents: loaded.text
+                )
+            }
+            file.encoding = loaded.encoding
+            file.lineEnding = loaded.lineEnding
+            file.byteOrderMark = loaded.byteOrderMark
+            files.append(file)
+            contents[file.id] = loaded.text
+            sourceURLs[file.id] = fileURL
+            backing[file.id] = (assetID, fileURL)
+        }
+
+        let selectedRelativePath = String(
+            sourceURL.path.dropFirst(project.rootURL.path.count + 1)
+        )
+        let selectedID =
+            files.first(where: { $0.relativePath == selectedRelativePath })?.id
+            ?? files[0].id
+        let sources = Dictionary(
+            uniqueKeysWithValues: files.compactMap { file in
+                contents[file.id].map { (file.relativePath, $0) }
+            }
+        )
+        let persistedMainPath = persisted?.mainFileID.flatMap { id in
+            persisted?.files.first(where: { $0.id == id })?.relativePath
+        }
+        let mainPath = TeXProjectAnalyzer.inferMainFile(
+            sources: sources,
+            selectedMainFile: persistedMainPath
+        )
+        let mainID = mainPath.flatMap { path in files.first(where: { $0.relativePath == path })?.id
+        }
+        let document = try TextDocument(
+            id: persisted?.id ?? .generate(),
+            files: files,
+            mainFileID: mainID,
+            settings: persisted?.settings ?? EditorSettings()
+        )
+        let projectBacking = backing
+        let textEditor = TextEditorViewModel(
+            document: document,
+            contents: contents,
+            activeFileID: selectedID,
+            sourceURLs: sourceURLs,
+            projectFileURLs: project.fileURLs,
+            hashingWith: { SampledFileHasher.hash($0) },
+            persistingStructure: { document in
+                try await runtime.saveTeXProjectDocument(document, for: projectFolder)
+            },
+            persistingContents: { fileID, data, contentHash in
+                guard let target = projectBacking[fileID] else { return }
+                if let assetID = target.assetID {
+                    try await runtime.saveTextContents(
+                        data,
+                        for: assetID,
+                        contentHash: contentHash
+                    )
+                } else {
+                    try await Task.detached(priority: .utility) {
+                        try data.write(to: target.url, options: .atomic)
+                    }.value
+                }
+            }
+        )
+        textEditor.configureTeXEngine(makeTeXEngine())
+        self.textEditor = textEditor
+        selectedWorkspace = .text
+        try await runtime.saveTeXProjectDocument(document, for: projectFolder)
+        textEditor.start()
     }
 
     /// Closes the current text editor and refreshes the scratch list.
@@ -1708,9 +1830,9 @@ public final class AppModel {
         textEditor.start()
     }
 
-    private func makeTeXEngine() -> TectonicEngine {
+    private func makeTeXEngine() -> any TeXEngine {
         let ledger = aiSettings.ledger
-        return TectonicEngine(
+        let tectonic = TectonicEngine(
             cacheDirectory: LibraryLayout.texCache(in: libraryRoot),
             networkAccessObserver: {
                 await ledger.record(
@@ -1723,6 +1845,14 @@ public final class AppModel {
                 )
             }
         )
+        #if DIRECT_BUILD
+            return BibliographyRoutingTeXEngine(
+                primary: tectonic,
+                biberEngine: SystemTeXEngine(isEnabled: true)
+            )
+        #else
+            return BibliographyRoutingTeXEngine(primary: tectonic)
+        #endif
     }
 
     /// Clears cached TeX packages without touching source files or compiled PDFs.

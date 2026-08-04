@@ -42,7 +42,7 @@ public enum LanguageDetector {
     /// for them and the shared one highlights correctly.
     private static let languagesByExtension: [String: LanguageID] = [
         "md": .markdown, "markdown": .markdown, "mdown": .markdown,
-        "tex": .latex, "latex": .latex, "sty": .latex, "cls": .latex,
+        "tex": .latex, "latex": .latex, "sty": .latex, "cls": .latex, "bib": .latex,
         "swift": .swift,
         "js": .javascript, "mjs": .javascript, "cjs": .javascript, "jsx": .javascript,
         "ts": .typescript, "tsx": .typescript,
