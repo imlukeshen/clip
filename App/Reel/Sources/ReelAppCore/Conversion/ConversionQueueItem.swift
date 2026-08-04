@@ -37,23 +37,9 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
     }
 
     public var availableTargets: [TargetFormat] {
-        switch asset.kind {
-        case .video:
-            [
-                .mp4H264, .mp4HEVC, .movH264, .movProRes422,
-                .webMVP9, .webMAV1, .animatedGIF, .matroska,
-            ]
-        case .image:
-            [.png, .jpeg, .heic, .tiff, .animatedGIF]
-        case .audio:
-            [.flac]
-        case .document:
-            [.png]
-        case .text:
-            // Text export (Markdown/LaTeX → PDF) arrives with T2/T3; until then
-            // text assets offer no conversion target and read as unsupported.
-            []
-        }
+        guard let source = FormatID(asset: asset) else { return [] }
+        let reachable = Set(ConversionPlanner().reachableTargets(from: source))
+        return TargetFormat.allCases.filter { reachable.contains($0.formatID) }
     }
 
     public var sourceDescription: String {

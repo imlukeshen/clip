@@ -189,6 +189,11 @@ private struct ConversionQueueRow: View {
         case .videoToolbox: "VideoToolbox · hardware"
         case .imageIO: "ImageIO · instant"
         case .ffmpeg: "FFmpeg · LGPL"
+        case .pdfKit: "PDFKit · native"
+        case .attributedString: "Text · native"
+        case .webKit: "WebKit · native"
+        case .markdown: "Markdown · native"
+        case .libreOffice: "LibreOffice · external"
         case .unsupported: "Unavailable"
         }
     }
@@ -197,9 +202,9 @@ private struct ConversionQueueRow: View {
         switch item.plan.backend {
         case .remux: .remux
         case .videoToolbox: .hardware
-        case .imageIO: .imageIO
+        case .imageIO, .pdfKit, .attributedString, .webKit, .markdown: .imageIO
         case .ffmpeg: .ffmpeg
-        case .unsupported: .unsupported
+        case .libreOffice, .unsupported: .unsupported
         }
     }
 }

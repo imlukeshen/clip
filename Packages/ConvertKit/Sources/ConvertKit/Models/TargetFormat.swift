@@ -71,4 +71,22 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .tiff: "tiff"
         }
     }
+
+    public var formatID: FormatID {
+        switch self {
+        case .mp4H264: ConversionFormats.mp4H264
+        case .mp4HEVC: ConversionFormats.mp4HEVC
+        case .movH264: ConversionFormats.movH264
+        case .movProRes422: ConversionFormats.movProRes422
+        case .webMVP9: ConversionFormats.webMVP9
+        case .webMAV1: ConversionFormats.webMAV1
+        case .animatedGIF: ConversionFormats.animatedGIF
+        case .matroska: ConversionFormats.matroska
+        case .flac: ConversionFormats.flac
+        case .png: ConversionFormats.png
+        case .jpeg: ConversionFormats.jpeg
+        case .heic: ConversionFormats.heic
+        case .tiff: ConversionFormats.tiff
+        }
+    }
 }

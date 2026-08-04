@@ -27,6 +27,13 @@ public actor Converter {
             return await imageIO.transcode(input: input, output: output, format: format)
         case .ffmpeg(let recipe):
             return await ffmpeg.transcode(input: input, output: output, recipe: recipe)
+        case .pdfKit, .attributedString, .webKit, .markdown, .libreOffice:
+            return AsyncThrowingStream { continuation in
+                continuation.finish(
+                    throwing: ConversionError.backendUnavailable(
+                        "This conversion backend is not available yet"
+                    ))
+            }
         case .unsupported(let reason):
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: ConversionError.unsupported(reason))

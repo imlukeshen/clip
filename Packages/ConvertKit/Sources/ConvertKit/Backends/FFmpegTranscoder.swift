@@ -2,8 +2,84 @@ import Foundation
 import ReelFFmpeg
 
 /// In-process FFmpeg entry point backed by the bundled LGPL framework.
-public actor FFmpegTranscoder: FFmpegTranscoding {
+public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
     public init() {}
+
+    nonisolated public var id: BackendID { .ffmpeg }
+    nonisolated public var isAvailable: Bool { true }
+
+    nonisolated public func edges() -> [ConversionEdge] {
+        [
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.videoInputs),
+                to: ConversionFormats.webMVP9,
+                backend: id,
+                implementation: .ffmpeg(.webMVP9),
+                cost: .expensive,
+                isLossless: false,
+                warnings: ["This format requires re-encoding."],
+                supportedOptions: [
+                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                ]
+            ),
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.videoInputs),
+                to: ConversionFormats.webMAV1,
+                backend: id,
+                implementation: .ffmpeg(.webMAV1),
+                cost: .expensive,
+                isLossless: false,
+                warnings: ["This format requires re-encoding."],
+                supportedOptions: [
+                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                ]
+            ),
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.videoInputs + ConversionFormats.imageInputs),
+                to: ConversionFormats.animatedGIF,
+                backend: id,
+                implementation: .ffmpeg(.animatedGIF),
+                cost: .expensive,
+                isLossless: false,
+                warnings: ["This format requires re-encoding."],
+                supportedOptions: [
+                    .quality, .resize, .frameRate, .trim, .stripMetadata,
+                ]
+            ),
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.videoInputs),
+                to: ConversionFormats.matroska,
+                backend: id,
+                implementation: .ffmpeg(.matroska),
+                cost: .expensive,
+                isLossless: false,
+                warnings: ["This format requires re-encoding."],
+                supportedOptions: [
+                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                ]
+            ),
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.audioInputs),
+                to: ConversionFormats.flac,
+                backend: id,
+                implementation: .ffmpeg(.flac),
+                cost: .expensive,
+                isLossless: true,
+                supportedOptions: [.audio, .trim, .stripMetadata]
+            ),
+        ]
+    }
+
+    public func run(
+        _ step: PlannedStep,
+        input: URL,
+        output: URL
+    ) async -> AsyncThrowingStream<Double, Error> {
+        guard case .ffmpeg(let recipe) = step.implementation else {
+            return failedStream(ConversionError.invalidInput)
+        }
+        return await transcode(input: input, output: output, recipe: recipe)
+    }
 
     public func transcode(
         input: URL,

@@ -2,8 +2,42 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-public actor ImageIOTranscoder: ImageTranscoding {
+public actor ImageIOTranscoder: ImageTranscoding, ConversionBackend {
     public init() {}
+
+    nonisolated public var id: BackendID { .imageIO }
+    nonisolated public var isAvailable: Bool { true }
+
+    nonisolated public func edges() -> [ConversionEdge] {
+        [
+            (ConversionFormats.png, Backend.imageIO(.png), true),
+            (ConversionFormats.jpeg, Backend.imageIO(.jpeg), false),
+            (ConversionFormats.heic, Backend.imageIO(.heic), false),
+            (ConversionFormats.tiff, Backend.imageIO(.tiff), true),
+        ].map { target, implementation, lossless in
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.imageInputs + ConversionFormats.rawInputs),
+                to: target,
+                backend: id,
+                implementation: implementation,
+                cost: .cheap,
+                isLossless: lossless,
+                warnings: lossless ? [] : ["This image format uses lossy compression."],
+                supportedOptions: [.quality, .resize, .stripMetadata]
+            )
+        }
+    }
+
+    public func run(
+        _ step: PlannedStep,
+        input: URL,
+        output: URL
+    ) async -> AsyncThrowingStream<Double, Error> {
+        guard case .imageIO(let format) = step.implementation else {
+            return failedStream(ConversionError.invalidInput)
+        }
+        return await transcode(input: input, output: output, format: format)
+    }
 
     func transcode(
         input: URL,

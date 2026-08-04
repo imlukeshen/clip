@@ -4,7 +4,7 @@ import Foundation
 import LibraryStore
 import Testing
 
-@Suite("Conversion decision table")
+@Suite("Conversion graph planning")
 struct PlanningTests {
     @Test("H.264 container swaps use lossless passthrough")
     func h264Remux() {
@@ -58,18 +58,53 @@ struct PlanningTests {
                 == expected)
     }
 
-    @Test("PDF files route users to the dedicated workspace")
-    func pdfUnsupported() {
-        for target in TargetFormat.allCases {
-            let result = plan(
-                from: asset(kind: .document, container: "pdf", codec: nil),
-                to: target
+    @Test("PDF to PNG is reachable through its declared native edge")
+    func pdfToPNG() {
+        let result = plan(
+            from: asset(kind: .document, container: "pdf", codec: nil),
+            to: .png
+        )
+        #expect(result.backend == .pdfKit)
+        #expect(result.steps.map(\.backend) == [.pdfKit])
+    }
+
+    @Test("DOCX to PDF is a visible two-step native route")
+    func docxToPDF() throws {
+        let result = try #require(
+            ConversionPlanner().plan(
+                from: ConversionFormats.docx,
+                to: ConversionFormats.pdf
             )
-            #expect(
-                result.backend
-                    == .unsupported("Use the PDF workspace to export Markdown or an edited PDF")
+        )
+
+        #expect(result.steps.map(\.backend) == [.attributedString, .webKit])
+        #expect(result.steps.map(\.to) == [.init(type: .html), .init(type: .pdf)])
+        #expect(!result.isLossless)
+        #expect(result.warnings == ["Document layout may change during PDF rendering."])
+    }
+
+    @Test("Reachability is derived from the graph and paths stop at three hops")
+    func reachableAndBounded() {
+        let a = FormatID(type: ConversionFormats.type("graph-a"))
+        let b = FormatID(type: ConversionFormats.type("graph-b"))
+        let c = FormatID(type: ConversionFormats.type("graph-c"))
+        let d = FormatID(type: ConversionFormats.type("graph-d"))
+        let e = FormatID(type: ConversionFormats.type("graph-e"))
+        let edges = [(a, b), (b, c), (c, d), (d, e)].map { source, target in
+            ConversionEdge(
+                from: .exact(source),
+                to: target,
+                backend: .markdown,
+                implementation: .markdown,
+                cost: .cheap,
+                isLossless: true
             )
         }
+        let planner = ConversionPlanner(edges: edges)
+
+        #expect(planner.plan(from: a, to: d)?.steps.count == 3)
+        #expect(planner.plan(from: a, to: e) == nil)
+        #expect(Set(planner.reachableTargets(from: a)) == Set([b, c, d]))
     }
 
     @Test("Conversion failures expose useful descriptions to the queue")

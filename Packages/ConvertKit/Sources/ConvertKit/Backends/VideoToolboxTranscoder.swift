@@ -1,8 +1,44 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-public actor VideoToolboxTranscoder: VideoTranscoding {
+public actor VideoToolboxTranscoder: VideoTranscoding, ConversionBackend {
     public init() {}
+
+    nonisolated public var id: BackendID { .videoToolbox }
+    nonisolated public var isAvailable: Bool { true }
+
+    nonisolated public func edges() -> [ConversionEdge] {
+        [
+            (ConversionFormats.mp4H264, Backend.videoToolbox(.h264)),
+            (ConversionFormats.mp4HEVC, Backend.videoToolbox(.hevc)),
+            (ConversionFormats.movH264, Backend.videoToolbox(.h264)),
+            (ConversionFormats.movProRes422, Backend.videoToolbox(.proRes422)),
+        ].map { target, implementation in
+            ConversionEdge(
+                from: .oneOf(ConversionFormats.videoInputs),
+                to: target,
+                backend: id,
+                implementation: implementation,
+                cost: .hardware,
+                isLossless: false,
+                warnings: ["The video will be re-encoded."],
+                supportedOptions: [
+                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                ]
+            )
+        }
+    }
+
+    public func run(
+        _ step: PlannedStep,
+        input: URL,
+        output: URL
+    ) async -> AsyncThrowingStream<Double, Error> {
+        guard case .videoToolbox(let codec) = step.implementation else {
+            return failedStream(ConversionError.invalidInput)
+        }
+        return await transcode(input: input, output: output, codec: codec)
+    }
 
     func transcode(
         input: URL,
