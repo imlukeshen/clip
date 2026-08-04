@@ -19,6 +19,35 @@ import Testing
     #expect(decoded.text == "Hi")
 }
 
+@Test func byteOrderMarksAreConsumedAndRestoredOnSave() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("textengine-bom-\(UUID().uuidString).txt")
+    try Data([0xEF, 0xBB, 0xBF] + Array("Clip".utf8)).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let loaded = try TextFileLoader.load(from: url)
+    let encoded = try #require(
+        TextFileEncoder.encode(
+            loaded.text,
+            using: loaded.encoding,
+            byteOrderMark: loaded.byteOrderMark
+        )
+    )
+
+    #expect(loaded.text == "Clip")
+    #expect(loaded.byteOrderMark == .utf8)
+    #expect(Array(encoded.prefix(3)) == [0xEF, 0xBB, 0xBF])
+}
+
+@Test func bomlessUTF16IsDetectedWithoutBeingMistakenForBinary() throws {
+    let data = try #require("Hello UTF-16".data(using: .utf16LittleEndian))
+    let decoded = try #require(TextFileLoader.decode(data))
+
+    #expect(!TextFileLoader.looksLikeBinary(data))
+    #expect(decoded.encoding == .utf16LittleEndian)
+    #expect(decoded.text == "Hello UTF-16")
+}
+
 @Test func isoLatin1IsTheLosslessFallbackForNonUTF8Bytes() throws {
     // 0xFF is not valid standalone UTF-8 but decodes cleanly as ISO Latin-1.
     let data = Data([0x63, 0x61, 0x66, 0xE9])  // "café" in Latin-1
@@ -63,6 +92,32 @@ import Testing
         }
         return byteSize == Int64(count) && limit == TextFileLoader.maximumByteSize
     }
+}
+
+@Test func loadRefusesBinaryFilesWithNullBytesInTheHeader() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("textengine-binary-\(UUID().uuidString).bin")
+    try Data([0x89, 0x50, 0x4E, 0x47, 0, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    #expect {
+        try TextFileLoader.load(from: url)
+    } throws: { error in
+        error as? TextEngineError == .binaryFile(url)
+    }
+}
+
+@Test func fiveMegabyteTextFilesRemainEditableT0Inputs() throws {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("textengine-five-megabytes-\(UUID().uuidString).txt")
+    let data = Data(repeating: 0x61, count: 5 * 1024 * 1024)
+    try data.write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let loaded = try TextFileLoader.load(from: url)
+
+    #expect(loaded.encoding == .utf8)
+    #expect(loaded.text.utf8.count == data.count)
 }
 
 @Test func unreadablePathThrows() {

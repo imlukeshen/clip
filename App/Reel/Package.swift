@@ -59,6 +59,7 @@ let package = Package(
             dependencies: [
                 "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine", "PDFEngine",
                 "AIKit",
+                "TextEngine",
             ]
         ),
     ],

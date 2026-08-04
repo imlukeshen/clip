@@ -1,7 +1,11 @@
+import CoreModel
 import Foundation
 
 /// Pure text transformations shared by the AppKit editor and regression tests.
 public enum TextEditingOperations {
+    /// A malformed regular expression entered in find/replace.
+    public struct InvalidSearchPattern: Error, Sendable, Equatable {}
+
     /// A vertical direction used when moving the selected lines.
     public enum LineDirection: Sendable {
         /// Moves the selection toward the beginning of the document.
@@ -176,6 +180,105 @@ public enum TextEditingOperations {
             bytes.removeSubrange(whitespaceStart...)
         }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// Rewrites every line separator to one explicitly selected style.
+    public static func normalizingLineEndings(in text: String, to target: LineEnding) -> String {
+        guard target != .mixed else { return text }
+        let replacement: [UInt8]
+        switch target {
+        case .lf: replacement = [0x0A]
+        case .crlf: replacement = [0x0D, 0x0A]
+        case .cr: replacement = [0x0D]
+        case .mixed: return text
+        }
+        let source = Array(text.utf8)
+        var result: [UInt8] = []
+        result.reserveCapacity(source.count)
+        var index = 0
+        while index < source.count {
+            let byte = source[index]
+            if byte == 0x0D {
+                if index + 1 < source.count, source[index + 1] == 0x0A {
+                    index += 1
+                }
+                result.append(contentsOf: replacement)
+            } else if byte == 0x0A {
+                result.append(contentsOf: replacement)
+            } else {
+                result.append(byte)
+            }
+            index += 1
+        }
+        return String(decoding: result, as: UTF8.self)
+    }
+
+    /// Returns every non-overlapping match for plain text or a regular expression.
+    public static func matchingRanges(
+        in text: String,
+        query: String,
+        usesRegularExpression: Bool,
+        caseSensitive: Bool = false
+    ) throws -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        let pattern = usesRegularExpression ? query : NSRegularExpression.escapedPattern(for: query)
+        let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+        let expression: NSRegularExpression
+        do {
+            expression = try NSRegularExpression(pattern: pattern, options: options)
+        } catch {
+            throw InvalidSearchPattern()
+        }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return expression.matches(in: text, range: range).map(\.range)
+    }
+
+    /// Finds the bracket touching either side of the caret and its balanced partner.
+    public static func matchingBracketRanges(
+        in text: String,
+        caretLocation: Int
+    ) -> [NSRange] {
+        let source = text as NSString
+        guard source.length > 0 else { return [] }
+        let caret = min(max(caretLocation, 0), source.length)
+        let candidates = [caret, caret - 1].filter { (0..<source.length).contains($0) }
+        let openings: [unichar: unichar] = [0x28: 0x29, 0x5B: 0x5D, 0x7B: 0x7D]
+        let closings = Dictionary(uniqueKeysWithValues: openings.map { ($0.value, $0.key) })
+        guard
+            let location = candidates.first(where: { index in
+                let character = source.character(at: index)
+                return openings[character] != nil || closings[character] != nil
+            })
+        else { return [] }
+        let character = source.character(at: location)
+        if let closing = openings[character] {
+            var depth = 0
+            for index in location..<source.length {
+                let current = source.character(at: index)
+                if current == character { depth += 1 }
+                if current == closing { depth -= 1 }
+                if depth == 0 {
+                    return [
+                        NSRange(location: location, length: 1),
+                        NSRange(location: index, length: 1),
+                    ]
+                }
+            }
+        } else if let opening = closings[character] {
+            var depth = 0
+            for index in stride(from: location, through: 0, by: -1) {
+                let current = source.character(at: index)
+                if current == character { depth += 1 }
+                if current == opening { depth -= 1 }
+                if depth == 0 {
+                    return [
+                        NSRange(location: index, length: 1),
+                        NSRange(location: location, length: 1),
+                    ]
+                }
+            }
+        }
+        return []
     }
 
     private static func transformSelectedLines(

@@ -12,8 +12,29 @@ final class CodeTextView: NSTextView {
     var showsInvisibleMarkers = false
     var lineIndex = TextLineIndex()
     var onSave: (String) -> Void = { _ in }
+    var onLargePaste: () -> Void = {}
+    var onPasteRefused: () -> Void = {}
+    private var findPanelController: CodeFindPanelController?
 
     override var undoManager: UndoManager? { providedUndoManager ?? super.undoManager }
+
+    override func paste(_ sender: Any?) {
+        guard let value = NSPasteboard.general.string(forType: .string) else {
+            super.paste(sender)
+            return
+        }
+        let byteCount = value.lengthOfBytes(using: .utf8)
+        guard byteCount <= 20 * 1024 * 1024 else {
+            NSSound.beep()
+            onPasteRefused()
+            return
+        }
+        super.paste(sender)
+        if byteCount > 2 * 1024 * 1024 {
+            isEditable = false
+            onLargePaste()
+        }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
@@ -22,6 +43,7 @@ final class CodeTextView: NSTextView {
             currentLineColor.setFill()
             currentLineRect.intersection(dirtyRect).fill()
         }
+        drawBracketMatches(in: dirtyRect)
         super.draw(dirtyRect)
         if showsInvisibleMarkers {
             drawInvisibleMarkers(in: dirtyRect)
@@ -69,6 +91,15 @@ final class CodeTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
+        if flags == .command, key == "f" {
+            presentFindReplace()
+            return true
+        }
+        if flags == .command, key == "g" {
+            presentFindReplace()
+            findPanelController?.findNextFromEditor()
+            return true
+        }
         if flags == .command, key == "s" {
             onSave(string)
             return true
@@ -173,6 +204,14 @@ final class CodeTextView: NSTextView {
         }
     }
 
+    private func presentFindReplace() {
+        guard let window else { return }
+        if findPanelController == nil {
+            findPanelController = CodeFindPanelController(textView: self)
+        }
+        findPanelController?.show(relativeTo: window)
+    }
+
     private func moveCaret(toLine requestedLine: Int) {
         let location = lineIndex.location(ofLine: requestedLine)
         setSelectedRange(NSRange(location: location, length: 0))
@@ -216,5 +255,255 @@ final class CodeTextView: NSTextView {
             markersDrawn += 1
             if markersDrawn == 1_200 { break }
         }
+    }
+
+    private func drawBracketMatches(in dirtyRect: NSRect) {
+        guard window != nil else { return }
+        let ranges = TextEditingOperations.matchingBracketRanges(
+            in: string,
+            caretLocation: selectedRange().location
+        )
+        guard !ranges.isEmpty else { return }
+        insertionPointColor.withAlphaComponent(0.22).setFill()
+        for range in ranges {
+            guard let rect = localRect(for: range) else { continue }
+            rect.insetBy(dx: -1, dy: 0).intersection(dirtyRect).fill()
+        }
+    }
+
+    private func localRect(for range: NSRange) -> NSRect? {
+        guard let window else { return nil }
+        var actual = NSRange()
+        let screenRect = firstRect(forCharacterRange: range, actualRange: &actual)
+        return convert(window.convertFromScreen(screenRect), from: nil)
+    }
+}
+
+@MainActor
+private final class CodeFindPanelController: NSObject, NSWindowDelegate {
+    private weak var textView: CodeTextView?
+    private let findField = NSSearchField()
+    private let replaceField = NSTextField()
+    private let regexButton = NSButton(
+        checkboxWithTitle: "Regular expression", target: nil, action: nil)
+    private let statusLabel = NSTextField(labelWithString: "")
+    private lazy var panel = makePanel()
+
+    init(textView: CodeTextView) {
+        self.textView = textView
+        super.init()
+    }
+
+    func show(relativeTo parent: NSWindow) {
+        if panel.parent !== parent {
+            panel.parent?.removeChildWindow(panel)
+            parent.addChildWindow(panel, ordered: .above)
+        }
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(findField)
+    }
+
+    func findNextFromEditor() {
+        findNext(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        panel.parent?.removeChildWindow(panel)
+        textView?.window?.makeFirstResponder(textView)
+    }
+
+    @objc private func findNext(_ sender: Any?) {
+        guard let textView, let matches = matches(in: textView.string), !matches.isEmpty else {
+            return
+        }
+        let selectionEnd = NSMaxRange(textView.selectedRange())
+        let match = matches.first { $0.location >= selectionEnd } ?? matches[0]
+        textView.setSelectedRange(match)
+        textView.scrollRangeToVisible(match)
+        textView.showFindIndicator(for: match)
+        let position = (matches.firstIndex(of: match) ?? 0) + 1
+        setStatus("\(position) of \(matches.count)", isError: false)
+    }
+
+    @objc private func replaceSelection(_ sender: Any?) {
+        guard let textView, let matches = matches(in: textView.string) else { return }
+        let selection = textView.selectedRange()
+        guard matches.contains(selection) else {
+            findNext(sender)
+            return
+        }
+        guard let replacement = replacement(for: selection, in: textView.string) else { return }
+        let attributed = NSAttributedString(
+            string: replacement, attributes: textView.typingAttributes)
+        guard textView.performValidatedReplacement(in: selection, with: attributed) else { return }
+        textView.setSelectedRange(
+            NSRange(location: selection.location + replacement.utf16.count, length: 0)
+        )
+        findNext(sender)
+    }
+
+    @objc private func replaceAll(_ sender: Any?) {
+        guard let textView, let ranges = matches(in: textView.string), !ranges.isEmpty else {
+            return
+        }
+        let source = textView.string
+        let updated: String
+        if usesRegularExpression {
+            guard let expression = expression() else { return }
+            updated = expression.stringByReplacingMatches(
+                in: source,
+                range: NSRange(location: 0, length: (source as NSString).length),
+                withTemplate: replaceField.stringValue
+            )
+        } else {
+            let mutable = NSMutableString(string: source)
+            for range in ranges.reversed() {
+                mutable.replaceCharacters(in: range, with: replaceField.stringValue)
+            }
+            updated = mutable as String
+        }
+        let fullRange = NSRange(location: 0, length: (source as NSString).length)
+        let attributed = NSAttributedString(string: updated, attributes: textView.typingAttributes)
+        guard textView.performValidatedReplacement(in: fullRange, with: attributed) else { return }
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        setStatus("Replaced \(ranges.count) matches", isError: false)
+    }
+
+    @objc private func closePanel(_ sender: Any?) {
+        panel.close()
+    }
+
+    private var usesRegularExpression: Bool { regexButton.state == .on }
+
+    private func matches(in text: String) -> [NSRange]? {
+        do {
+            let matches = try TextEditingOperations.matchingRanges(
+                in: text,
+                query: findField.stringValue,
+                usesRegularExpression: usesRegularExpression
+            )
+            if matches.isEmpty {
+                setStatus(
+                    findField.stringValue.isEmpty ? "Enter text to find" : "No matches",
+                    isError: false)
+            }
+            return matches
+        } catch {
+            setStatus("Invalid regular expression", isError: true)
+            return nil
+        }
+    }
+
+    private func replacement(for range: NSRange, in source: String) -> String? {
+        guard usesRegularExpression else { return replaceField.stringValue }
+        guard let expression = expression(),
+            let match = expression.firstMatch(in: source, range: range), match.range == range
+        else { return nil }
+        return expression.replacementString(
+            for: match,
+            in: source,
+            offset: 0,
+            template: replaceField.stringValue
+        )
+    }
+
+    private func expression() -> NSRegularExpression? {
+        do {
+            return try NSRegularExpression(
+                pattern: findField.stringValue,
+                options: [.caseInsensitive]
+            )
+        } catch {
+            setStatus("Invalid regular expression", isError: true)
+            return nil
+        }
+    }
+
+    private func setStatus(_ text: String, isError: Bool) {
+        statusLabel.stringValue = text
+        statusLabel.textColor = isError ? .systemRed : .secondaryLabelColor
+    }
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 430, height: 198),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Find and Replace"
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.delegate = self
+        panel.setAccessibilityIdentifier("text-find-replace-panel")
+
+        findField.placeholderString = "Find"
+        findField.setAccessibilityIdentifier("text-find-field")
+        replaceField.placeholderString = "Replace with"
+        replaceField.setAccessibilityIdentifier("text-replace-field")
+        regexButton.setAccessibilityIdentifier("text-find-regex")
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.font = .systemFont(ofSize: 11)
+
+        let findRow = fieldRow(title: "Find", field: findField)
+        let replaceRow = fieldRow(title: "Replace", field: replaceField)
+        let buttons = NSStackView(views: [
+            actionButton("Find Next", action: #selector(findNext(_:)), keyEquivalent: "\r"),
+            actionButton("Replace", action: #selector(replaceSelection(_:))),
+            actionButton("Replace All", action: #selector(replaceAll(_:))),
+            actionButton("Done", action: #selector(closePanel(_:)), keyEquivalent: "\u{1b}"),
+        ])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        buttons.alignment = .centerY
+
+        let footer = NSStackView(views: [statusLabel, NSView(), buttons])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 8
+        statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        buttons.setContentHuggingPriority(.required, for: .horizontal)
+
+        let stack = NSStackView(views: [findRow, replaceRow, regexButton, footer])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        guard let contentView = panel.contentView else { return panel }
+        contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -16),
+            findRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            replaceRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            footer.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        return panel
+    }
+
+    private func fieldRow(title: String, field: NSTextField) -> NSStackView {
+        let label = NSTextField(labelWithString: title)
+        label.alignment = .right
+        label.textColor = .secondaryLabelColor
+        label.widthAnchor.constraint(equalToConstant: 54).isActive = true
+        let row = NSStackView(views: [label, field])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 10
+        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
+        return row
+    }
+
+    private func actionButton(
+        _ title: String,
+        action: Selector,
+        keyEquivalent: String = ""
+    ) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.keyEquivalent = keyEquivalent
+        return button
     }
 }

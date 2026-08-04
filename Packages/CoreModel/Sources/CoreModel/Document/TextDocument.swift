@@ -59,6 +59,16 @@ public enum TextEncoding: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
+/// A byte-order mark that was present when a text file was opened.
+public enum TextByteOrderMark: String, Codable, Sendable, Equatable {
+    /// UTF-8 signature (`EF BB BF`).
+    case utf8
+    /// UTF-16 little-endian signature (`FF FE`).
+    case utf16LittleEndian
+    /// UTF-16 big-endian signature (`FE FF`).
+    case utf16BigEndian
+}
+
 /// Names the highlighting grammar and dropdown entry for a file's language.
 ///
 /// A stable lowercase identifier such as `swift` or `typescript`, not a UUID.
@@ -176,6 +186,8 @@ public struct TextFile: Codable, Sendable, Equatable, Identifiable {
     public var encoding: TextEncoding
     /// How the file's lines are terminated.
     public var lineEnding: LineEnding
+    /// The original byte-order mark, retained so saving does not silently remove it.
+    public var byteOrderMark: TextByteOrderMark?
 
     /// Creates a text file record.
     ///
@@ -194,7 +206,8 @@ public struct TextFile: Codable, Sendable, Equatable, Identifiable {
         language: LanguageID = .plainText,
         languageIsExplicit: Bool = false,
         encoding: TextEncoding = .utf8,
-        lineEnding: LineEnding = .lf
+        lineEnding: LineEnding = .lf,
+        byteOrderMark: TextByteOrderMark? = nil
     ) {
         self.id = id
         self.assetID = assetID
@@ -203,6 +216,7 @@ public struct TextFile: Codable, Sendable, Equatable, Identifiable {
         self.languageIsExplicit = languageIsExplicit
         self.encoding = encoding
         self.lineEnding = lineEnding
+        self.byteOrderMark = byteOrderMark
     }
 }
 
@@ -229,6 +243,10 @@ public enum TextPatch: DocumentPatch {
     case setLanguage(FileID, LanguageID, explicit: Bool)
     /// Replaces the editor settings.
     case setSettings(EditorSettings)
+    /// Records the line ending used by one file after an explicit normalization.
+    case setLineEnding(FileID, LineEnding)
+    /// Records the encoding and byte-order mark detected for one file.
+    case setEncoding(FileID, TextEncoding, byteOrderMark: TextByteOrderMark?)
     /// Changes a file's relative path.
     case renameFile(FileID, String)
 }
@@ -355,6 +373,28 @@ public struct TextDocument: EditableDocument {
             let previous = self.settings
             self.settings = settings
             return .setSettings(previous)
+
+        case .setLineEnding(let id, let lineEnding):
+            guard let index = files.firstIndex(where: { $0.id == id }) else {
+                throw TextDocumentError.fileNotFound(id)
+            }
+            let previous = files[index].lineEnding
+            files[index].lineEnding = lineEnding
+            return .setLineEnding(id, previous)
+
+        case .setEncoding(let id, let encoding, let byteOrderMark):
+            guard let index = files.firstIndex(where: { $0.id == id }) else {
+                throw TextDocumentError.fileNotFound(id)
+            }
+            let previousEncoding = files[index].encoding
+            let previousByteOrderMark = files[index].byteOrderMark
+            files[index].encoding = encoding
+            files[index].byteOrderMark = byteOrderMark
+            return .setEncoding(
+                id,
+                previousEncoding,
+                byteOrderMark: previousByteOrderMark
+            )
 
         case .renameFile(let id, let path):
             guard let index = files.firstIndex(where: { $0.id == id }) else {

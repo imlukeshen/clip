@@ -1,3 +1,4 @@
+import AppKit
 import CoreModel
 import DesignSystem
 import ReelAppCore
@@ -9,18 +10,34 @@ struct TextEditorWorkspace: View {
     @Bindable var editor: TextEditorViewModel
     @State private var cursorLine = 1
     @State private var cursorColumn = 1
+    @State private var showsExternalConflictAlert = false
+    @State private var showsExternalDiff = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 header
                 Divider().overlay(theme.palette.line)
+                if editor.isDetached {
+                    detachedBanner
+                    Divider().overlay(theme.palette.line)
+                } else if editor.hasExternalConflict {
+                    externalConflictBanner
+                    Divider().overlay(theme.palette.line)
+                } else if editor.isReadOnly {
+                    readOnlyBanner
+                    Divider().overlay(theme.palette.line)
+                }
                 CodeEditor(
                     text: $editor.text,
                     language: editor.language,
                     settings: editor.settings,
+                    isReadOnly: editor.isReadOnly,
                     undoManager: editor.undoManager,
-                    onSave: editor.saveNow
+                    onSave: editor.saveNow,
+                    onLongLineModeChange: editor.setSoftWrapSuppressed,
+                    onLargePaste: editor.enterLargePasteReadOnlyMode,
+                    onPasteRefused: editor.reportPasteRefused
                 ) { line, column in
                     cursorLine = line
                     cursorColumn = column
@@ -42,6 +59,23 @@ struct TextEditorWorkspace: View {
             }
         }
         .background(theme.palette.surfaceBase)
+        .onChange(of: editor.hasExternalConflict, initial: true) { _, hasConflict in
+            if hasConflict { showsExternalConflictAlert = true }
+        }
+        .alert("File Changed on Disk", isPresented: $showsExternalConflictAlert) {
+            Button("Keep Mine", action: editor.keepCurrentVersion)
+            Button("Use Disk Version", role: .destructive, action: editor.useExternalVersion)
+            Button("Compare…") { showsExternalDiff = true }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You have unsaved edits. Choose which version to keep, or compare them first.")
+        }
+        .sheet(isPresented: $showsExternalDiff) {
+            if let external = editor.pendingExternalContents {
+                ExternalTextComparisonView(editor: editor, externalText: external.text)
+                    .environment(\.theme, theme)
+            }
+        }
     }
 
     private var header: some View {
@@ -92,6 +126,71 @@ struct TextEditorWorkspace: View {
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(height: 48)
         .background(theme.palette.surfacePanel)
+    }
+
+    private var detachedBanner: some View {
+        HStack(spacing: theme.metrics.spacing.md) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(theme.palette.textSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Backing file unavailable")
+                    .font(theme.type.label.font)
+                Text("The buffer is safe in memory. Save a copy before closing.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+            }
+            Spacer()
+            Button("Save As…", action: presentDetachedSavePanel)
+                .buttonStyle(ReelBorderedButtonStyle())
+                .accessibilityIdentifier("text-detached-save-as")
+        }
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(minHeight: 52)
+        .background(theme.palette.surfaceRaised)
+    }
+
+    private var externalConflictBanner: some View {
+        HStack(spacing: theme.metrics.spacing.md) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(theme.palette.textSecondary)
+            Text("This file changed on disk while you were editing.")
+                .font(theme.type.label.font)
+            Spacer()
+            Button("Review") { showsExternalConflictAlert = true }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .accessibilityIdentifier("text-external-change-review")
+        }
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(minHeight: 44)
+        .background(theme.palette.surfaceRaised)
+    }
+
+    private var readOnlyBanner: some View {
+        HStack(spacing: theme.metrics.spacing.md) {
+            Image(systemName: "doc.badge.ellipsis")
+                .foregroundStyle(theme.palette.textSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Large paste opened read-only")
+                    .font(theme.type.label.font)
+                Text("Pastes over 2 MB are protected from expensive live editing.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(minHeight: 52)
+        .background(theme.palette.surfaceRaised)
+    }
+
+    private func presentDetachedSavePanel() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = editor.activeFile?.relativePath ?? "Untitled.txt"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            editor.saveDetachedCopy(to: url)
+        }
     }
 
     @ViewBuilder private var saveControl: some View {
@@ -174,5 +273,71 @@ extension LanguageID {
         case .yaml: "YAML"
         default: rawValue.capitalized
         }
+    }
+}
+
+private struct ExternalTextComparisonView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
+    @Bindable var editor: TextEditorViewModel
+    let externalText: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Compare Versions")
+                        .font(theme.type.title.font)
+                    Text("Review your unsaved buffer beside the current file on disk.")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textSecondary)
+                }
+                Spacer()
+                Button("Cancel", action: dismiss.callAsFunction)
+                    .buttonStyle(ReelBorderedButtonStyle())
+                Button("Keep Mine") {
+                    editor.keepCurrentVersion()
+                    dismiss()
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                Button("Use Disk Version") {
+                    editor.useExternalVersion()
+                    dismiss()
+                }
+                .buttonStyle(ReelProminentButtonStyle())
+            }
+            .padding(theme.metrics.spacing.lg)
+
+            Divider().overlay(theme.palette.line)
+
+            HStack(spacing: 0) {
+                comparisonColumn(title: "My Unsaved Version", text: editor.text)
+                Divider().overlay(theme.palette.line)
+                comparisonColumn(title: "Version on Disk", text: externalText)
+            }
+        }
+        .frame(minWidth: 820, idealWidth: 940, minHeight: 520, idealHeight: 620)
+        .background(theme.palette.surfaceBase)
+    }
+
+    private func comparisonColumn(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(theme.type.label.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .padding(.horizontal, theme.metrics.spacing.lg)
+                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                .background(theme.palette.surfacePanel)
+            Divider().overlay(theme.palette.line)
+            ScrollView([.horizontal, .vertical]) {
+                Text(text)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .textSelection(.enabled)
+                    .padding(theme.metrics.spacing.lg)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

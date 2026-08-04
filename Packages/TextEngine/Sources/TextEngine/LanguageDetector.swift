@@ -29,6 +29,9 @@ public enum LanguageDetector {
         if let language = detectByShebang(contents) {
             return language
         }
+        if let language = detectByContent(contents) {
+            return language
+        }
         return .plainText
     }
 
@@ -90,5 +93,23 @@ public enum LanguageDetector {
         if firstLine.contains("node") { return .javascript }
         if firstLine.contains("swift") { return .swift }
         return nil
+    }
+
+    /// Applies the deliberately small, high-confidence content heuristic tier.
+    private static func detectByContent(_ contents: String) -> LanguageID? {
+        let prefix = String(contents.prefix(64 * 1024))
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("\\documentclass") || trimmed.contains("\\documentclass{") {
+            return .latex
+        }
+        if trimmed.hasPrefix("<?xml") {
+            return .xml
+        }
+        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
+        // Parsing is bounded so language detection cannot stall a large buffer.
+        guard contents.utf8.count <= 1024 * 1024, let data = contents.data(using: .utf8),
+            (try? JSONSerialization.jsonObject(with: data)) != nil
+        else { return nil }
+        return .json
     }
 }

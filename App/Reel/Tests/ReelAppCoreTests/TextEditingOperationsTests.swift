@@ -1,3 +1,4 @@
+import CoreModel
 import Foundation
 import Testing
 
@@ -109,6 +110,67 @@ struct TextEditingOperationsTests {
         #expect(
             TextEditingOperations.trimmingTrailingWhitespace(in: source)
                 == "alpha\r\nbeta\r\nfinal"
+        )
+    }
+
+    @Test("Line ending normalization handles mixed CRLF, LF, and CR")
+    func lineEndingNormalization() {
+        let source = "one\r\ntwo\nthree\rfour"
+
+        #expect(
+            TextEditingOperations.normalizingLineEndings(in: source, to: .lf)
+                == "one\ntwo\nthree\nfour"
+        )
+        #expect(
+            TextEditingOperations.normalizingLineEndings(in: source, to: .crlf)
+                == "one\r\ntwo\r\nthree\r\nfour"
+        )
+        #expect(
+            TextEditingOperations.normalizingLineEndings(in: source, to: .cr)
+                == "one\rtwo\rthree\rfour"
+        )
+        #expect(TextEditingOperations.normalizingLineEndings(in: source, to: .mixed) == source)
+    }
+
+    @Test("Find supports literal text, regular expressions, and invalid patterns")
+    func findPatterns() throws {
+        let source = "Clip clip clop 123 456"
+        let literal = try TextEditingOperations.matchingRanges(
+            in: source,
+            query: "clip",
+            usesRegularExpression: false
+        )
+        let numbers = try TextEditingOperations.matchingRanges(
+            in: source,
+            query: "\\d+",
+            usesRegularExpression: true
+        )
+
+        #expect(literal.count == 2)
+        #expect(numbers.map(\.length) == [3, 3])
+        #expect {
+            try TextEditingOperations.matchingRanges(
+                in: source,
+                query: "[",
+                usesRegularExpression: true
+            )
+        } throws: { $0 is TextEditingOperations.InvalidSearchPattern }
+    }
+
+    @Test("Bracket matching follows nesting from either side of the caret")
+    func bracketMatching() {
+        let source = "call(one[2], { three })"
+        #expect(
+            TextEditingOperations.matchingBracketRanges(in: source, caretLocation: 4)
+                == [NSRange(location: 4, length: 1), NSRange(location: 22, length: 1)]
+        )
+        #expect(
+            TextEditingOperations.matchingBracketRanges(in: source, caretLocation: 11)
+                == [NSRange(location: 8, length: 1), NSRange(location: 10, length: 1)]
+        )
+        #expect(
+            TextEditingOperations.matchingBracketRanges(in: "(unclosed", caretLocation: 0)
+                .isEmpty
         )
     }
 }

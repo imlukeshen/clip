@@ -67,11 +67,41 @@ struct TextInspector: View {
                 .padding(.horizontal, theme.metrics.spacing.md)
                 .padding(.vertical, theme.metrics.spacing.md)
 
+                if editor.activeFile?.lineEnding == .mixed {
+                    rowDivider
+                    lineEndingMenu
+                }
+
                 rowDivider
 
                 languageMenu
             }
         }
+    }
+
+    private var lineEndingMenu: some View {
+        HStack(spacing: theme.metrics.spacing.md) {
+            settingIcon("arrow.left.arrow.right")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Mixed line endings")
+                    .font(theme.type.label.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                Text("Choose a format to normalize")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+            Spacer(minLength: theme.metrics.spacing.sm)
+            Menu("Normalize") {
+                Button("LF") { editor.normalizeLineEndings(to: .lf) }
+                Button("CRLF") { editor.normalizeLineEndings(to: .crlf) }
+                Button("CR") { editor.normalizeLineEndings(to: .cr) }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, theme.metrics.spacing.md)
+        .frame(minHeight: 50)
+        .accessibilityIdentifier("text-normalize-line-endings")
     }
 
     private var editorSection: some View {
@@ -81,9 +111,11 @@ struct TextInspector: View {
             inspectorCard {
                 toggleRow(
                     title: "Soft wrap",
-                    detail: "Keep long lines visible",
+                    detail: editor.isSoftWrapSuppressed
+                        ? "Disabled for an extremely long line" : "Keep long lines visible",
                     symbol: "arrow.turn.down.left",
-                    isOn: settingBinding(\.softWrap)
+                    isOn: settingBinding(\.softWrap),
+                    isEnabled: !editor.isSoftWrapSuppressed
                 )
 
                 rowDivider
@@ -216,7 +248,8 @@ struct TextInspector: View {
         title: String,
         detail: String,
         symbol: String,
-        isOn: Binding<Bool>
+        isOn: Binding<Bool>,
+        isEnabled: Bool = true
     ) -> some View {
         HStack(spacing: theme.metrics.spacing.md) {
             settingIcon(symbol)
@@ -237,6 +270,7 @@ struct TextInspector: View {
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .fixedSize()
+                .disabled(!isEnabled)
         }
         .padding(.horizontal, theme.metrics.spacing.md)
         .frame(minHeight: 50)

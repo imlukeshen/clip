@@ -10,8 +10,12 @@ struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
     let language: LanguageID
     let settings: EditorSettings
+    let isReadOnly: Bool
     let undoManager: UndoManager
     let onSave: () -> Void
+    let onLongLineModeChange: (Bool) -> Void
+    let onLargePaste: () -> Void
+    let onPasteRefused: () -> Void
     let onCursorChange: (Int, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -23,7 +27,9 @@ struct CodeEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.providedUndoManager = undoManager
         textView.onSave = context.coordinator.save
-        textView.isEditable = true
+        textView.onLargePaste = context.coordinator.largePaste
+        textView.onPasteRefused = context.coordinator.refusePaste
+        textView.isEditable = !isReadOnly
         textView.isSelectable = true
         textView.setAccessibilityIdentifier("text-editor")
         textView.isRichText = false
@@ -81,6 +87,7 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.parent = self
         let scrollView = container.scrollView
         guard let textView = scrollView.documentView as? CodeTextView else { return }
+        textView.isEditable = !isReadOnly
         if !context.coordinator.isApplyingText, textView.string != text {
             context.coordinator.apply(text, to: textView)
         }
@@ -110,6 +117,7 @@ struct CodeEditor: NSViewRepresentable {
         private var lineIndex = TextLineIndex()
         private var lineIndexRevision = 0
         private var lineIndexTask: Task<Void, Never>?
+        private var suppressesSoftWrap = false
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -176,14 +184,15 @@ struct CodeEditor: NSViewRepresentable {
                 .font: font,
                 .foregroundColor: foreground,
             ]
-            textView.isHorizontallyResizable = !settings.softWrap
-            textView.textContainer?.widthTracksTextView = settings.softWrap
+            let softWrap = settings.softWrap && !suppressesSoftWrap
+            textView.isHorizontallyResizable = !softWrap
+            textView.textContainer?.widthTracksTextView = softWrap
             textView.textContainer?.containerSize = NSSize(
-                width: settings.softWrap
+                width: softWrap
                     ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude,
                 height: CGFloat.greatestFiniteMagnitude
             )
-            scrollView.hasHorizontalScroller = !settings.softWrap
+            scrollView.hasHorizontalScroller = !softWrap
             scrollView.backgroundColor = background
             ruler?.update(
                 background: NSColor(theme.palette.surfacePanel),
@@ -217,6 +226,10 @@ struct CodeEditor: NSViewRepresentable {
             parent.onSave()
         }
 
+        func largePaste() { parent.onLargePaste() }
+
+        func refusePaste() { parent.onPasteRefused() }
+
         private func rebuildLineIndex(for value: String) {
             lineIndexRevision += 1
             let revision = lineIndexRevision
@@ -231,6 +244,20 @@ struct CodeEditor: NSViewRepresentable {
                 lineIndex = index
                 textView?.lineIndex = index
                 ruler?.lineIndex = index
+                let shouldSuppressSoftWrap = index.longestLineLength > 10_000
+                if suppressesSoftWrap != shouldSuppressSoftWrap {
+                    suppressesSoftWrap = shouldSuppressSoftWrap
+                    parent.onLongLineModeChange(shouldSuppressSoftWrap)
+                    if let textView, let scrollView = textView.enclosingScrollView {
+                        updateAppearance(
+                            textView: textView,
+                            scrollView: scrollView,
+                            theme: parent.theme,
+                            language: parent.language,
+                            settings: parent.settings
+                        )
+                    }
+                }
                 ruler?.needsDisplay = true
                 if let textView {
                     reportSelection(textView.selectedRange())

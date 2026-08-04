@@ -64,6 +64,41 @@ import Testing
     #expect(document == original)
 }
 
+@Test func lineEndingPatchAndInverseRestoreTheDetectedStyle() throws {
+    let fileID = FileID(rawValue: "mixed")
+    var document = try TextDocument(
+        files: [TextFile(id: fileID, relativePath: "mixed.txt", lineEnding: .mixed)]
+    )
+
+    let inverse = try document.apply(.setLineEnding(fileID, .lf))
+    #expect(document.files[0].lineEnding == .lf)
+
+    _ = try document.apply(inverse)
+    #expect(document.files[0].lineEnding == .mixed)
+}
+
+@Test func encodingPatchAndInversePreserveTheOriginalByteOrderMark() throws {
+    let fileID = FileID(rawValue: "encoded")
+    var document = try TextDocument(
+        files: [
+            TextFile(
+                id: fileID,
+                relativePath: "encoded.txt",
+                encoding: .utf16LittleEndian,
+                byteOrderMark: .utf16LittleEndian
+            )
+        ]
+    )
+
+    let inverse = try document.apply(.setEncoding(fileID, .utf8, byteOrderMark: nil))
+    #expect(document.files[0].encoding == .utf8)
+    #expect(document.files[0].byteOrderMark == nil)
+
+    _ = try document.apply(inverse)
+    #expect(document.files[0].encoding == .utf16LittleEndian)
+    #expect(document.files[0].byteOrderMark == .utf16LittleEndian)
+}
+
 private func randomPatch(
     sequence: Int,
     step: Int,

@@ -3,6 +3,7 @@ import Foundation
 struct TextLineIndex: Sendable {
     private(set) var starts = [0]
     private(set) var length = 0
+    private(set) var longestLineLength = 0
 
     static func make(for text: String) -> TextLineIndex? {
         var result = TextLineIndex()
@@ -10,6 +11,7 @@ struct TextLineIndex: Sendable {
         let utf16 = text.utf16
         var index = utf16.startIndex
         var offset = 0
+        var currentLineLength = 0
         while index < utf16.endIndex {
             if offset.isMultiple(of: 4_096), Task<Never, Never>.isCancelled {
                 return nil
@@ -18,14 +20,21 @@ struct TextLineIndex: Sendable {
             index = utf16.index(after: index)
             offset += 1
             if scalar == 0x0D, index < utf16.endIndex, utf16[index] == 0x0A {
+                result.longestLineLength = max(result.longestLineLength, currentLineLength)
+                currentLineLength = 0
                 index = utf16.index(after: index)
                 offset += 1
                 result.starts.append(offset)
             } else if scalar == 0x0D || scalar == 0x0A {
+                result.longestLineLength = max(result.longestLineLength, currentLineLength)
+                currentLineLength = 0
                 result.starts.append(offset)
+            } else {
+                currentLineLength += 1
             }
         }
         result.length = offset
+        result.longestLineLength = max(result.longestLineLength, currentLineLength)
         return result
     }
 

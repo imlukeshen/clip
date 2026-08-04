@@ -1,5 +1,7 @@
 import AppKit
 import CoreModel
+import Darwin
+import Dispatch
 import Foundation
 import LibraryStore
 import Observation
@@ -31,6 +33,8 @@ public final class TextEditorViewModel {
     public var text: String {
         didSet {
             guard text != oldValue else { return }
+            if isDetached { hasSavedDetachedCopy = false }
+            guard !isApplyingExternalText else { return }
             isDirty = true
             scheduleContentAutosave()
         }
@@ -41,6 +45,16 @@ public final class TextEditorViewModel {
     public private(set) var notice: String?
     /// Whether the buffer has unsaved changes since the last content save.
     public private(set) var isDirty = false
+    /// Whether wrapping is suppressed to keep a pathological line responsive.
+    public private(set) var isSoftWrapSuppressed = false
+    /// Whether the buffer is protected from editing after a very large paste.
+    public private(set) var isReadOnly = false
+    /// The disk version awaiting a choice because the local buffer is dirty.
+    public private(set) var pendingExternalContents: LoadedTextFile?
+    /// Whether the backing file disappeared while its buffer was open.
+    public private(set) var isDetached = false
+    /// Whether the current detached contents have been copied somewhere safe.
+    public private(set) var hasSavedDetachedCopy = false
 
     /// The source file on disk, or `nil` for an unsaved scratch buffer.
     public let sourceURL: URL?
@@ -57,6 +71,9 @@ public final class TextEditorViewModel {
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
+    private var externalReloadTask: Task<Void, Never>?
+    private var fileMonitor: TextFileMonitor?
+    private var isApplyingExternalText = false
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
     private let autosaveInterval: Duration = .seconds(2)
@@ -105,13 +122,23 @@ public final class TextEditorViewModel {
     }
 
     /// Starts editor-owned background work.
-    public func start() {}
+    public func start() {
+        guard fileMonitor == nil, let sourceURL else { return }
+        fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.scheduleExternalReload()
+            }
+        }
+    }
 
     /// Stops background work and flushes any dirty content before closing.
     public func stop() {
         structureTask?.cancel()
         contentTask?.cancel()
         cleanupTask?.cancel()
+        externalReloadTask?.cancel()
+        fileMonitor?.cancel()
+        fileMonitor = nil
         // A pending edit must not be lost when the editor closes.
         flushContentAutosave()
     }
@@ -153,6 +180,113 @@ public final class TextEditorViewModel {
     /// Clears the transient editor notice.
     public func clearNotice() { notice = nil }
 
+    /// Updates the layout safety mode reported by the native editor.
+    public func setSoftWrapSuppressed(_ suppressed: Bool) {
+        guard isSoftWrapSuppressed != suppressed else { return }
+        isSoftWrapSuppressed = suppressed
+        if suppressed {
+            notice =
+                "Soft wrap was disabled because this file contains a line over 10,000 characters."
+        }
+    }
+
+    /// Protects TextKit after accepting a paste larger than the editable threshold.
+    public func enterLargePasteReadOnlyMode() {
+        isReadOnly = true
+        notice = "The large paste was accepted in read-only mode."
+    }
+
+    /// Reports that a paste exceeded the hard in-app size limit.
+    public func reportPasteRefused() {
+        notice = "Pastes over 20 MB cannot be opened in Clip."
+    }
+
+    /// Explicitly normalizes mixed separators and keeps text plus metadata in one undo step.
+    public func normalizeLineEndings(to lineEnding: LineEnding) {
+        guard lineEnding != .mixed else { return }
+        let normalized = TextEditingOperations.normalizingLineEndings(in: text, to: lineEnding)
+        applyLineEndingState(
+            text: normalized,
+            lineEnding: lineEnding,
+            actionName: "Normalize Line Endings"
+        )
+    }
+
+    /// Whether an external version is waiting for the user's decision.
+    public var hasExternalConflict: Bool { pendingExternalContents != nil }
+
+    /// Keeps local edits after an external change and resumes autosave.
+    public func keepCurrentVersion() {
+        guard pendingExternalContents != nil else { return }
+        pendingExternalContents = nil
+        scheduleContentAutosave()
+        notice = "Keeping your version."
+    }
+
+    /// Replaces the current buffer with the version read from disk.
+    public func useExternalVersion() {
+        guard let pendingExternalContents else { return }
+        applyExternalContents(pendingExternalContents)
+        notice = "Reloaded the version from disk."
+    }
+
+    /// Stages a newly read disk version, or reloads it immediately when clean.
+    public func receiveExternalContents(_ contents: LoadedTextFile) {
+        guard contents.text != text else {
+            updateDetectedFormat(from: contents)
+            return
+        }
+        if isDirty {
+            contentTask?.cancel()
+            pendingExternalContents = contents
+        } else {
+            applyExternalContents(contents)
+            notice = "Reloaded changes from disk."
+        }
+    }
+
+    /// Keeps the in-memory buffer alive after its backing file disappears.
+    public func receiveExternalDeletion() {
+        guard !isDetached else { return }
+        contentTask?.cancel()
+        pendingExternalContents = nil
+        isDetached = true
+        hasSavedDetachedCopy = false
+        notice = "The file was deleted or moved. Save a copy to keep this buffer."
+    }
+
+    /// Writes a detached buffer to a user-selected location without touching the missing asset.
+    public func saveDetachedCopy(to url: URL) {
+        let value = text
+        let encoding = activeFile?.encoding ?? .utf8
+        let byteOrderMark = activeFile?.byteOrderMark
+        Task { [weak self] in
+            let didWrite = await Task.detached(priority: .userInitiated) {
+                guard
+                    let data = TextFileEncoder.encode(
+                        value,
+                        using: encoding,
+                        byteOrderMark: byteOrderMark
+                    )
+                else { return false }
+                do {
+                    try data.write(to: url, options: .atomic)
+                    return true
+                } catch {
+                    return false
+                }
+            }.value
+            guard let self else { return }
+            if didWrite, text == value {
+                isDirty = false
+                hasSavedDetachedCopy = true
+                notice = "Saved a copy as \(url.lastPathComponent)."
+            } else if !didWrite {
+                notice = "The detached buffer could not be saved."
+            }
+        }
+    }
+
     // MARK: - Content persistence
 
     /// Immediately writes the buffer to disk, cancelling any pending autosave.
@@ -193,15 +327,24 @@ public final class TextEditorViewModel {
     }
 
     private func writeContents() {
-        guard isDirty else { return }
+        guard isDirty, !isDetached, pendingExternalContents == nil else { return }
         let encoding = activeFile?.encoding.stringEncoding ?? .utf8
+        let textEncoding = activeFile?.encoding ?? .utf8
+        let byteOrderMark = activeFile?.byteOrderMark
         let value = text
         isDirty = false
         let hashData = hashData
         let persistContents = persistContents
         Task { [weak self] in
             let payload = await Task.detached(priority: .utility) {
-                guard let data = value.data(using: encoding) ?? value.data(using: .utf8) else {
+                guard
+                    let data =
+                        TextFileEncoder.encode(
+                            value,
+                            using: textEncoding,
+                            byteOrderMark: byteOrderMark
+                        ) ?? value.data(using: encoding) ?? value.data(using: .utf8)
+                else {
                     return Optional<(Data, String)>.none
                 }
                 return (data, hashData(data))
@@ -235,6 +378,101 @@ public final class TextEditorViewModel {
         }
     }
 
+    private func applyLineEndingState(
+        text updatedText: String,
+        lineEnding: LineEnding,
+        actionName: String
+    ) {
+        guard let activeFile else { return }
+        let previousText = text
+        let previousLineEnding = activeFile.lineEnding
+        guard updatedText != previousText || lineEnding != previousLineEnding else { return }
+        do {
+            _ = try document.apply(.setLineEnding(activeFile.id, lineEnding))
+            text = updatedText
+            undoManager.registerUndo(withTarget: self) { target in
+                target.applyLineEndingState(
+                    text: previousText,
+                    lineEnding: previousLineEnding,
+                    actionName: actionName
+                )
+            }
+            undoManager.setActionName(actionName)
+            persistStructureNow()
+        } catch {
+            notice = "The line endings could not be normalized."
+        }
+    }
+
+    private func scheduleExternalReload() {
+        guard let sourceURL else { return }
+        externalReloadTask?.cancel()
+        externalReloadTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                let loaded = try await Task.detached(priority: .utility) {
+                    try TextFileLoader.load(from: sourceURL)
+                }.value
+                guard !Task.isCancelled else { return }
+                self?.receiveExternalContents(loaded)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !FileManager.default.fileExists(atPath: sourceURL.path) else { return }
+                self?.receiveExternalDeletion()
+            }
+        }
+    }
+
+    private func applyExternalContents(_ contents: LoadedTextFile) {
+        contentTask?.cancel()
+        cleanupTask?.cancel()
+        pendingExternalContents = nil
+        isApplyingExternalText = true
+        text = contents.text
+        isApplyingExternalText = false
+        isDirty = false
+        hasSavedDetachedCopy = false
+        undoManager.removeAllActions()
+        updateDetectedFormat(from: contents)
+    }
+
+    private func updateDetectedFormat(from contents: LoadedTextFile) {
+        guard let activeFile else { return }
+        do {
+            var didChange = false
+            if activeFile.encoding != contents.encoding
+                || activeFile.byteOrderMark != contents.byteOrderMark
+            {
+                _ = try document.apply(
+                    .setEncoding(
+                        activeFile.id,
+                        contents.encoding,
+                        byteOrderMark: contents.byteOrderMark
+                    )
+                )
+                didChange = true
+            }
+            if self.activeFile?.lineEnding != contents.lineEnding {
+                _ = try document.apply(.setLineEnding(activeFile.id, contents.lineEnding))
+                didChange = true
+            }
+            if self.activeFile?.languageIsExplicit == false {
+                let detected = LanguageDetector.detect(
+                    path: activeFile.relativePath,
+                    contents: contents.text
+                )
+                if self.activeFile?.language != detected {
+                    _ = try document.apply(.setLanguage(activeFile.id, detected, explicit: false))
+                    didChange = true
+                }
+            }
+            if didChange { persistStructureNow() }
+        } catch {
+            notice = "The file format metadata could not be refreshed."
+        }
+    }
+
     private func registerUndo(_ patch: TextPatch, actionName: String) {
         undoManager.registerUndo(withTarget: self) { target in
             do {
@@ -247,4 +485,31 @@ public final class TextEditorViewModel {
             }
         }
     }
+}
+
+private final class TextFileMonitor: @unchecked Sendable {
+    private let descriptor: Int32
+    private let source: DispatchSourceFileSystemObject
+    private var isCancelled = false
+
+    init?(url: URL, onChange: @escaping @Sendable () -> Void) {
+        descriptor = open(url.deletingLastPathComponent().path, O_EVTONLY)
+        guard descriptor >= 0 else { return nil }
+        source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .delete, .rename],
+            queue: DispatchQueue(label: "app.clip.text-file-monitor", qos: .utility)
+        )
+        source.setEventHandler(handler: onChange)
+        source.setCancelHandler { [descriptor] in close(descriptor) }
+        source.resume()
+    }
+
+    func cancel() {
+        guard !isCancelled else { return }
+        isCancelled = true
+        source.cancel()
+    }
+
+    deinit { cancel() }
 }

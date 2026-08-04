@@ -1125,7 +1125,8 @@ public final class AppModel {
                                     contents: loaded.text
                                 ),
                                 encoding: loaded.encoding,
-                                lineEnding: loaded.lineEnding
+                                lineEnding: loaded.lineEnding,
+                                byteOrderMark: loaded.byteOrderMark
                             )
                         ]
                     )
@@ -1149,6 +1150,19 @@ public final class AppModel {
                 selectedWorkspace = .text
                 try await runtime.saveTextDocument(document, for: assetID)
                 textEditor.start()
+            } catch let error as TextEngineError {
+                switch error {
+                case .binaryFile:
+                    lastMessage = "This looks like a binary file, so Clip did not open it as text."
+                case .tooLarge:
+                    lastMessage = "This file is larger than 20 MB. Open it in an external editor."
+                case .undecodable:
+                    lastMessage = "Clip could not detect a supported text encoding."
+                case .unreadable:
+                    lastMessage = "The selected text file could not be read."
+                case .unencodable, .invalidScratchBuffer:
+                    lastMessage = "The selected text file could not be opened."
+                }
             } catch {
                 lastMessage = "The selected text file could not be opened."
             }
@@ -1157,6 +1171,14 @@ public final class AppModel {
 
     /// Closes the current text editor and refreshes the scratch list.
     public func closeTextEditor() {
+        if let textEditor, textEditor.hasExternalConflict {
+            lastMessage = "Resolve the file change before closing the editor."
+            return
+        }
+        if let textEditor, textEditor.isDetached, !textEditor.hasSavedDetachedCopy {
+            lastMessage = "Save a copy of this detached buffer before closing."
+            return
+        }
         textEditor?.stop()
         textEditor = nil
         Task { await refreshScratchBuffers() }

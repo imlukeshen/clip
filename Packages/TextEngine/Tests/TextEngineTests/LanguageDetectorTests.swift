@@ -42,3 +42,18 @@ import Testing
     #expect(LanguageDetector.detect(path: "mystery.qwerty") == .plainText)
     #expect(LanguageDetector.detect(path: "noextension", contents: "just words") == .plainText)
 }
+
+@Test func highConfidenceContentHeuristicsResolveExtensionlessFiles() {
+    #expect(
+        LanguageDetector.detect(
+            path: "paper",
+            contents: "\\documentclass{article}\n\\begin{document}\nHello"
+        ) == .latex
+    )
+    #expect(
+        LanguageDetector.detect(path: "feed", contents: "  <?xml version=\"1.0\"?><feed />")
+            == .xml
+    )
+    #expect(LanguageDetector.detect(path: "payload", contents: " {\"clip\": true} ") == .json)
+    #expect(LanguageDetector.detect(path: "notes", contents: "[not valid json]") == .plainText)
+}
