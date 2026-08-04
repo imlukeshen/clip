@@ -45,64 +45,105 @@ struct TextEditorWorkspace: View {
     }
 
     private var header: some View {
-        HStack(spacing: theme.metrics.spacing.md) {
+        HStack(spacing: theme.metrics.spacing.sm) {
             Button(action: model.closeTextEditor) {
-                Image(systemName: "chevron.left")
+                HStack(spacing: theme.metrics.spacing.sm) {
+                    Image(systemName: "chevron.left")
+                    Text("Text library")
+                }
+                .frame(height: 28)
+                .padding(.horizontal, theme.metrics.spacing.sm)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .help("Back to text library")
 
-            Text(editor.activeFile?.relativePath ?? "Untitled.txt")
-                .font(theme.type.label.font)
-                .lineLimit(1)
-            if editor.isDirty {
-                Circle()
-                    .fill(theme.palette.textTertiary)
-                    .frame(width: 5, height: 5)
-                    .accessibilityLabel("Unsaved changes")
-            }
+            Rectangle()
+                .fill(theme.palette.line)
+                .frame(width: theme.metrics.hairline, height: 18)
+
+            Label(editor.language.editorDisplayName, systemImage: "textformat")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .padding(.horizontal, 9)
+                .frame(height: 26)
+                .background(theme.palette.surfaceRaised)
+                .clipShape(Capsule())
+
             Spacer()
-            Text(editor.language.rawValue.uppercased())
-                .font(theme.type.numeric.font)
-                .foregroundStyle(theme.palette.textTertiary)
-            Button("Save", action: editor.saveNow)
-                .buttonStyle(ReelBorderedButtonStyle())
-                .disabled(!editor.isDirty)
+
+            saveControl
+
             Button(action: editor.undo) {
                 Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .help("Undo")
+
             Button(action: editor.redo) {
                 Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .help("Redo")
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
-        .frame(height: 42)
+        .frame(height: 48)
+        .background(theme.palette.surfacePanel)
+    }
+
+    @ViewBuilder private var saveControl: some View {
+        if editor.isDirty {
+            Button(action: editor.saveNow) {
+                Label("Save", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(ReelProminentButtonStyle())
+            .help("Save now")
+            .accessibilityIdentifier("text-save")
+        } else {
+            Label("Saved", systemImage: "checkmark")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .frame(minWidth: 58, minHeight: 28, alignment: .trailing)
+                .accessibilityLabel("All changes saved")
+        }
     }
 
     private var statusBar: some View {
         HStack(spacing: theme.metrics.spacing.lg) {
             Text("Ln \(cursorLine), Col \(cursorColumn)")
             Spacer()
-            Text(editor.activeFile?.encoding.displayName ?? "UTF-8")
-            Text(editor.activeFile?.lineEnding.displayName ?? "LF")
-            Text(editor.settings.softWrap ? "Wrap" : "No wrap")
+            statusItem(editor.activeFile?.encoding.editorDisplayName ?? "UTF-8")
+            statusDivider
+            statusItem(editor.activeFile?.lineEnding.editorDisplayName ?? "LF")
+            statusDivider
+            statusItem(editor.settings.softWrap ? "Wrap" : "No wrap")
         }
         .font(theme.type.numeric.font)
         .foregroundStyle(theme.palette.textTertiary)
         .padding(.horizontal, theme.metrics.spacing.lg)
-        .frame(height: 26)
+        .frame(height: 28)
         .background(theme.palette.surfacePanel)
+    }
+
+    private func statusItem(_ title: String) -> some View {
+        Text(title)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private var statusDivider: some View {
+        Circle()
+            .fill(theme.palette.textTertiary.opacity(0.55))
+            .frame(width: 2, height: 2)
+            .accessibilityHidden(true)
     }
 }
 
 extension TextEncoding {
-    fileprivate var displayName: String {
+    var editorDisplayName: String {
         switch self {
         case .utf8: "UTF-8"
         case .utf16: "UTF-16"
@@ -117,5 +158,21 @@ extension TextEncoding {
 }
 
 extension LineEnding {
-    fileprivate var displayName: String { rawValue.uppercased() }
+    var editorDisplayName: String { rawValue.uppercased() }
+}
+
+extension LanguageID {
+    var editorDisplayName: String {
+        switch self {
+        case .plainText: "Plain Text"
+        case .cpp: "C++"
+        case .css: "CSS"
+        case .html: "HTML"
+        case .json: "JSON"
+        case .sql: "SQL"
+        case .xml: "XML"
+        case .yaml: "YAML"
+        default: rawValue.capitalized
+        }
+    }
 }

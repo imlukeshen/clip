@@ -24,6 +24,11 @@ struct InspectorLayoutTests {
         #expect(InspectorLayout.defaultWidth <= InspectorLayout.maximumWidth)
     }
 
+    @Test("The minimum keeps editor controls readable")
+    func minimumSupportsRichControls() {
+        #expect(InspectorLayout.minimumWidth >= 240)
+    }
+
     @Test("A fresh install starts at the default rather than at zero")
     func restoresDefaultWhenUnset() {
         let defaults = makeDefaults()

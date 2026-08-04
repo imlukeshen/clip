@@ -6,8 +6,10 @@ import Foundation
 /// these bounds give Clip the same behaviour while keeping the column wide
 /// enough for the editor tool panels that share it.
 public enum InspectorLayout {
-    /// Below this the two-column information list starts wrapping its labels.
-    public static let minimumWidth = 208.0
+    /// Below this the richer editor controls start wrapping labels and losing
+    /// their trailing values. Keep the pane compact, but never let a resize
+    /// collapse it into an unusable strip.
+    public static let minimumWidth = 240.0
     public static let maximumWidth = 420.0
     public static let defaultWidth = 248.0
 
