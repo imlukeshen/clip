@@ -1,4 +1,8 @@
-# Reel — Phase V: Universal Conversion
+# Clip — Phase V: Universal Conversion
+
+> **Delivery status:** V0–V5 are complete and validated for both distribution
+> channels. LibreOffice remains optional and is exposed only by the direct build
+> when an installation is detected.
 
 Replaces `DESIGN.md` §8 (`ConvertKit`). Slots into [`ROADMAP.md`](./ROADMAP.md)
 as R6.
@@ -229,6 +233,15 @@ in the App Store listing rather than letting people discover it.
 ---
 
 ## 8. Milestones
+
+| Milestone | Status |
+|---|---|
+| V0 — Graph and planner | Complete |
+| V1 — Image and document backends | Complete |
+| V2 — Options and presets | Complete |
+| V3 — Batch UX | Complete |
+| V4 — Agent commands | Complete |
+| V5 — LibreOffice | Complete |
 
 **V0 — Graph and planner.** `FormatID`, `ConversionEdge`, `ConversionBackend`,
 Dijkstra planner, `reachableTargets`. Existing backends re-expressed as edges.

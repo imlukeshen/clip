@@ -1,4 +1,21 @@
-# Reel — Roadmap
+# Clip — Roadmap
+
+## Delivery status
+
+Implementation is complete through the committed roadmap, including the Phase S,
+V, and T work delivered on `feat/text-editor-t0`. The only unbuilt item below is
+R9/S6, which is deliberately gated on evidence that local vision summaries improve
+real search results; it is not part of the committed R5 search scope.
+
+| Release | Status | Delivery note |
+|---|---|---|
+| R1–R4 | Complete | Navigation, commands, folders, photo editing, and their acceptance coverage shipped before this roadmap pass. |
+| R5 | Complete | S0–S5: resumable indexing, OCR, keyword/moment search, Live Text, semantic retrieval, and agent search. |
+| R6 | Complete | V0–V5: conversion graph, native backends, options, batch workflow, agent commands, and direct-build LibreOffice gating. |
+| R7 | Complete | T0–T7: native editing, highlighting, Markdown, LaTeX, SyncTeX, projects, snippet workflows, direct text indexing, and text agent tools. |
+| R8 | Complete | Multi-track schema, precision editing/snapping, and general keyframes are implemented. |
+| R9 | Evidence-gated | S6 remains intentionally deferred until an opt-in local VLM demonstrates measurable search-quality value. |
+| R10 | Complete | The PDF document model, PDFium workspace, page editing, OCR, export, and Markdown workflow are implemented. |
 
 Three documents define milestones: `DESIGN.md` §14 (v1, shipped), `PHASE-2.md`
 (A/B/C), and `PHASE-2-EDITING.md` (E0–E6). **This file is the merged ordering.**

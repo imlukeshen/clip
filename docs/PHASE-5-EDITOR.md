@@ -1,4 +1,9 @@
-# Reel — Phase T: Text Editor & LaTeX
+# Clip — Phase T: Text Editor & LaTeX
+
+> **Delivery status:** T0–T7 are complete and validated. The editor supports
+> native typing and undo, syntax-aware editing, offline Markdown preview, confined
+> LaTeX compilation, SyncTeX and diagnostics, multi-file projects, snippet export,
+> direct library indexing, and the six text agent commands.
 
 Slots into [`ROADMAP.md`](./ROADMAP.md) as R7. Depends on B0 (`EditableDocument`)
 and reuses Phase V's conversion graph and Phase S's index.
@@ -358,6 +363,17 @@ editor-specific agent plumbing.
 ---
 
 ## 9. Milestones
+
+| Milestone | Status |
+|---|---|
+| T0 — Editor core | Complete |
+| T1 — Highlighting | Complete |
+| T2 — Markdown | Complete |
+| T3 — LaTeX compile | Complete |
+| T4 — SyncTeX and diagnostics | Complete |
+| T5 — Multi-file and bibliography | Complete |
+| T6 — Snippet features | Complete |
+| T7 — Library and agent integration | Complete |
 
 **T0 — Editor core.** TextKit 2 view, gutter, find/replace, editing commands,
 `TextDocument`, `TextPatch`, scratch buffers with autosave.

@@ -1,4 +1,7 @@
-# Reel — Phase S: Search & Indexing
+# Clip — Phase S: Search & Indexing
+
+> **Delivery status:** S0–S5 are complete and validated. S6 remains the roadmap's
+> explicit evidence-gated experiment and is not required for R5 completion.
 
 Slots into [`ROADMAP.md`](./ROADMAP.md) as R5. The indexing pipeline is backend
 work independent of the shell; the search UI needs R3's shell to land first.
@@ -332,6 +335,16 @@ into plain, greppable text. Treat it accordingly:
 ---
 
 ## 9. Milestones
+
+| Milestone | Status |
+|---|---|
+| S0 — Pipeline skeleton | Complete |
+| S1 — OCR | Complete |
+| S2 — Keyword search | Complete |
+| S3 — Live Text | Complete |
+| S4 — Semantic search | Complete |
+| S5 — Agentic search | Complete |
+| S6 — Vision summaries | Evidence-gated; deliberately deferred |
 
 **S0 — Pipeline skeleton.** `IndexPipeline`, `index_job` table, scheduling,
 resume-on-launch, sidebar progress.

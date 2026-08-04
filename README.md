@@ -40,6 +40,14 @@ Implemented milestones:
 - **Phase 2 workspaces:** nested folders and export destinations, a non-destructive
   photo editor with local redaction tools, and a PDFium editor with page edits,
   flattened export, font/subset analysis, local OCR, and layout-aware Markdown.
+- **Phase 3 search:** resumable on-device indexing, OCR and Live Text, exact and
+  semantic moment search, and agentic search commands.
+- **Phase 4 conversion:** a capability-graph planner, image/document backends,
+  presets and metadata controls, resilient mixed-file batches, agent commands,
+  and optional direct-build LibreOffice integration.
+- **Phase 5 text:** a native text editor with syntax highlighting, offline Markdown
+  preview, confined LaTeX compilation, SyncTeX diagnostics, multi-file projects,
+  rich snippet workflows, direct text indexing, and text-aware agent commands.
 
 ## Run the app
 
