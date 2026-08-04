@@ -96,9 +96,11 @@ let package = Package(
         ),
     ],
     targets: [
+        .systemLibrary(name: "CZlib"),
         .target(
             name: "TextEngine",
             dependencies: [
+                "CZlib",
                 "CoreModel",
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),

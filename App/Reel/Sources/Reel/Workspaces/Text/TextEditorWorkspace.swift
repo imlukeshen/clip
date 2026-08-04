@@ -16,6 +16,10 @@ struct TextEditorWorkspace: View {
     @State private var showsExternalDiff = false
     @State private var showsMarkdownPreview = true
     @State private var synchronizedLine = 1
+    @State private var sourceNavigation: TextEditorNavigation?
+    @State private var texForwardSearch: TeXForwardSearchRequest?
+    @State private var showsTeXOutput = false
+    @State private var texOutputTab: TeXOutputTab = .problems
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -33,6 +37,16 @@ struct TextEditorWorkspace: View {
                     Divider().overlay(theme.palette.line)
                 }
                 editorSurface
+                if editor.language == .latex, showsTeXOutput {
+                    Divider().overlay(theme.palette.line)
+                    TeXDiagnosticsPanel(
+                        diagnostics: editor.texDiagnostics,
+                        log: editor.texLog,
+                        selectedTab: $texOutputTab,
+                        onSelectDiagnostic: navigateToDiagnostic,
+                        onClose: { showsTeXOutput = false }
+                    )
+                }
                 Divider().overlay(theme.palette.line)
                 statusBar
             }
@@ -52,6 +66,17 @@ struct TextEditorWorkspace: View {
         .background(theme.palette.surfaceBase)
         .onChange(of: editor.hasExternalConflict, initial: true) { _, hasConflict in
             if hasConflict { showsExternalConflictAlert = true }
+        }
+        .onChange(of: editor.texDiagnostics) { _, diagnostics in
+            guard !diagnostics.isEmpty else { return }
+            texOutputTab = .problems
+            showsTeXOutput = true
+        }
+        .onChange(of: editor.texCompilationState) { _, state in
+            if case .failed = state, editor.texDiagnostics.isEmpty, !editor.texLog.isEmpty {
+                texOutputTab = .log
+                showsTeXOutput = true
+            }
         }
         .alert("File Changed on Disk", isPresented: $showsExternalConflictAlert) {
             Button("Keep Mine", action: editor.keepCurrentVersion)
@@ -94,8 +119,12 @@ struct TextEditorWorkspace: View {
             HSplitView {
                 codeEditor
                     .frame(minWidth: 340)
-                TeXPDFPreview(editor: editor)
-                    .frame(minWidth: 340)
+                TeXPDFPreview(
+                    editor: editor,
+                    forwardSearch: texForwardSearch,
+                    onInverseSearch: runInverseSearch
+                )
+                .frame(minWidth: 340)
             }
             .accessibilityIdentifier("latex-split-editor")
         } else if editor.language == .markdown, showsMarkdownPreview {
@@ -128,8 +157,10 @@ struct TextEditorWorkspace: View {
             onLongLineModeChange: editor.setSoftWrapSuppressed,
             onLargePaste: editor.enterLargePasteReadOnlyMode,
             onPasteRefused: editor.reportPasteRefused,
+            diagnostics: editor.language == .latex ? editor.texDiagnostics : [],
             scrollToLine: editor.language == .markdown && showsMarkdownPreview
                 ? synchronizedLine : nil,
+            navigation: sourceNavigation,
             onVisibleLineChange: { line in
                 guard editor.language == .markdown, showsMarkdownPreview else { return }
                 synchronizedLine = line
@@ -199,6 +230,30 @@ struct TextEditorWorkspace: View {
             }
 
             if editor.language == .latex {
+                Button(action: runForwardSearch) {
+                    Label("Locate in PDF", systemImage: "arrow.right.doc.on.clipboard")
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.texSyncTeXIndex == nil)
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .help("Locate the current source line in the PDF (Command-Shift-J)")
+                .accessibilityIdentifier("latex-forward-search")
+
+                Button {
+                    texOutputTab = editor.texDiagnostics.isEmpty ? .log : .problems
+                    showsTeXOutput.toggle()
+                } label: {
+                    Label(
+                        editor.texDiagnostics.isEmpty
+                            ? "Build Log" : "Problems \(editor.texDiagnostics.count)",
+                        systemImage: "exclamationmark.bubble"
+                    )
+                }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.texLog.isEmpty && editor.texDiagnostics.isEmpty)
+                .help("Show diagnostics and raw engine output")
+                .accessibilityIdentifier("latex-build-output-toggle")
+
                 Menu {
                     Button("Automatic") { editor.setTeXCompileMode(.automatic) }
                     Button("On Save") { editor.setTeXCompileMode(.onSave) }
@@ -253,6 +308,24 @@ struct TextEditorWorkspace: View {
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(height: 48)
         .background(theme.palette.surfacePanel)
+    }
+
+    private func runForwardSearch() {
+        guard let location = editor.forwardTeXSearch(line: cursorLine) else { return }
+        texForwardSearch = TeXForwardSearchRequest(location: location)
+    }
+
+    private func runInverseSearch(page: Int, x: Double, y: Double) {
+        guard let location = editor.inverseTeXSearch(page: page, x: x, y: y) else { return }
+        sourceNavigation = TextEditorNavigation(
+            line: location.line,
+            column: location.column ?? 1
+        )
+    }
+
+    private func navigateToDiagnostic(_ diagnostic: TeXDiagnostic) {
+        guard let line = diagnostic.line else { return }
+        sourceNavigation = TextEditorNavigation(line: line)
     }
 
     private var detachedBanner: some View {

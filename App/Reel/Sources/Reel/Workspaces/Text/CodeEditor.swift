@@ -17,7 +17,9 @@ struct CodeEditor: NSViewRepresentable {
     let onLongLineModeChange: (Bool) -> Void
     let onLargePaste: () -> Void
     let onPasteRefused: () -> Void
+    let diagnostics: [TeXDiagnostic]
     let scrollToLine: Int?
+    let navigation: TextEditorNavigation?
     let onVisibleLineChange: (Int) -> Void
     let onCursorChange: (Int, Int) -> Void
 
@@ -84,7 +86,9 @@ struct CodeEditor: NSViewRepresentable {
             language: language,
             settings: settings
         )
+        ruler.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
+        context.coordinator.navigateToRequestedLocation()
         return CodeEditorContainerView(scrollView: scrollView)
     }
 
@@ -103,7 +107,9 @@ struct CodeEditor: NSViewRepresentable {
             language: language,
             settings: settings
         )
+        context.coordinator.ruler?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
+        context.coordinator.navigateToRequestedLocation()
     }
 
     static func dismantleNSView(
@@ -135,6 +141,7 @@ struct CodeEditor: NSViewRepresentable {
         private var syntaxBaseColor: NSColor?
         private var syntaxColors: [SyntaxTokenKind: NSColor] = [:]
         private var lastRequestedScrollLine: Int?
+        private var lastNavigationID: UUID?
         private var lastReportedVisibleLine: Int?
 
         init(_ parent: CodeEditor) {
@@ -322,6 +329,22 @@ struct CodeEditor: NSViewRepresentable {
             textView.scrollRangeToVisible(NSRange(location: range.location, length: 0))
         }
 
+        func navigateToRequestedLocation() {
+            guard let navigation = parent.navigation,
+                navigation.id != lastNavigationID,
+                let textView
+            else { return }
+            lastNavigationID = navigation.id
+            let lineRange = lineIndex.range(ofLine: navigation.line)
+            let location = min(
+                lineRange.location + max(navigation.column - 1, 0),
+                NSMaxRange(lineRange)
+            )
+            textView.setSelectedRange(NSRange(location: location, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+            textView.window?.makeFirstResponder(textView)
+        }
+
         private func rebuildLineIndex(for value: String) {
             lineIndexRevision += 1
             let revision = lineIndexRevision
@@ -469,5 +492,16 @@ struct CodeEditor: NSViewRepresentable {
             default: ("//", "")
             }
         }
+    }
+}
+
+struct TextEditorNavigation: Equatable {
+    let id = UUID()
+    var line: Int
+    var column: Int
+
+    init(line: Int, column: Int = 1) {
+        self.line = line
+        self.column = column
     }
 }

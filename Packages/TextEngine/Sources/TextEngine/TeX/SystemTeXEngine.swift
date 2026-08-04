@@ -50,6 +50,9 @@ public struct SystemTeXEngine: TeXEngine {
                     where !line.isEmpty {
                         continuation.yield(.logLine(line))
                     }
+                    for diagnostic in TeXLogParser.diagnostics(in: result.combinedOutput) {
+                        continuation.yield(.diagnostic(diagnostic))
+                    }
                     guard result.status == 0 else {
                         throw TeXEngineError.compilationFailed(
                             status: result.status,

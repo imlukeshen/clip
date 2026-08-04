@@ -70,6 +70,8 @@ public final class TextEditorViewModel {
     public private(set) var texPDFURL: URL?
     /// Most recent SyncTeX sidecar, consumed by T4 source navigation.
     public private(set) var texSyncTeXURL: URL?
+    /// Parsed source/PDF map from the most recent successful build.
+    public private(set) var texSyncTeXIndex: SyncTeXIndex?
     /// Complete engine output. T4 adds structured presentation on top of this log.
     public private(set) var texLog = ""
     /// Parsed diagnostics emitted by the engine.
@@ -102,6 +104,7 @@ public final class TextEditorViewModel {
     @ObservationIgnored private var texEngine: (any TeXEngine)?
     private var texCompileTask: Task<Void, Never>?
     private var texCompileGeneration = UUID()
+    private var texSuccessfulSource: String?
     private let texPreferences: UserDefaults
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
@@ -269,6 +272,41 @@ public final class TextEditorViewModel {
     public func cancelTeXCompilation() {
         cancelTeXCompilation(resetState: false)
         texCompilationState = texPDFURL == nil ? .idle : .succeeded
+    }
+
+    /// Resolves the active source line into the last successful PDF.
+    public func forwardTeXSearch(line: Int) -> SyncTeXPDFLocation? {
+        guard let texSyncTeXIndex, let sourceURL else {
+            notice = "No current SyncTeX mapping is available. Build the document first."
+            return nil
+        }
+        guard texSuccessfulSource == text else {
+            notice = "The SyncTeX map is stale. Build the changed source before navigating."
+            return nil
+        }
+        guard let location = texSyncTeXIndex.forwardSearch(file: sourceURL.path, line: line)
+        else {
+            notice = "The last build has no PDF mapping for line \(line)."
+            return nil
+        }
+        return location
+    }
+
+    /// Resolves a command-click expressed from the PDF page's top-left edge.
+    public func inverseTeXSearch(page: Int, x: Double, y: Double) -> SyncTeXSourceLocation? {
+        guard let texSyncTeXIndex else {
+            notice = "No current SyncTeX mapping is available. Build the document first."
+            return nil
+        }
+        guard texSuccessfulSource == text else {
+            notice = "The SyncTeX map is stale. Build the changed source before navigating."
+            return nil
+        }
+        guard let location = texSyncTeXIndex.inverseSearch(page: page, x: x, y: y) else {
+            notice = "No source mapping is available at that PDF position."
+            return nil
+        }
+        return location
     }
 
     /// Updates the layout safety mode reported by the native editor.
@@ -458,7 +496,14 @@ public final class TextEditorViewModel {
                     case .diagnostic(let diagnostic):
                         texDiagnostics.append(diagnostic)
                     case .finished(let pdf, let synctex):
+                        let index = await Task.detached(priority: .userInitiated) {
+                            guard let synctex else { return Optional<SyncTeXIndex>.none }
+                            return try? SyncTeXIndex(contentsOf: synctex)
+                        }.value
+                        guard texCompileGeneration == generation else { return }
                         replaceTeXResults(pdf: pdf, synctex: synctex)
+                        texSyncTeXIndex = index
+                        texSuccessfulSource = source
                         texCompilationState = .succeeded
                     }
                 }
@@ -494,6 +539,8 @@ public final class TextEditorViewModel {
         }
         texPDFURL = nil
         texSyncTeXURL = nil
+        texSyncTeXIndex = nil
+        texSuccessfulSource = nil
     }
 
     private func scheduleContentAutosave() {
