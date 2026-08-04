@@ -32,7 +32,22 @@ struct CodeEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> CodeEditorContainerView {
-        let textView = CodeTextView(usingTextLayoutManager: true)
+        // NSTextView's mature layout-manager path remains the most reliable
+        // editable surface on macOS 14. The TextKit 2 convenience initializer
+        // can accept input while failing to paint newly inserted glyphs after
+        // SwiftUI reparents the view inside a split view. That looks exactly
+        // like typing is disabled even though the buffer and caret advance.
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            containerSize: NSSize(
+                width: 0,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+        )
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: .zero, textContainer: textContainer)
         textView.delegate = context.coordinator
         textView.providedUndoManager = undoManager
         textView.onSave = context.coordinator.save
@@ -60,6 +75,7 @@ struct CodeEditor: NSViewRepresentable {
             width: theme.metrics.spacing.lg,
             height: theme.metrics.spacing.md
         )
+        textView.textContainer?.lineFragmentPadding = 0
         textView.minSize = .zero
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -86,7 +102,6 @@ struct CodeEditor: NSViewRepresentable {
         textView.textStorage?.delegate = context.coordinator
         context.coordinator.ruler = ruler
         context.coordinator.observeScrolling(in: scrollView)
-        context.coordinator.apply(text, to: textView)
         context.coordinator.updateAppearance(
             textView: textView,
             scrollView: scrollView,
@@ -94,6 +109,7 @@ struct CodeEditor: NSViewRepresentable {
             language: language,
             settings: settings
         )
+        context.coordinator.apply(text, to: textView)
         ruler.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
@@ -185,7 +201,13 @@ struct CodeEditor: NSViewRepresentable {
             let manager = textView.undoManager
             manager?.disableUndoRegistration()
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
-            let replacement = NSAttributedString(string: value)
+            // Carry the editor's explicit foreground and font into programmatic
+            // updates. An unstyled attributed replacement defaults to black,
+            // which is effectively invisible in Clip's dark editor.
+            let replacement = NSAttributedString(
+                string: value,
+                attributes: textView.typingAttributes
+            )
             _ = textView.performValidatedReplacement(in: fullRange, with: replacement)
             manager?.enableUndoRegistration()
             textView.setSelectedRange(

@@ -137,14 +137,8 @@ struct TextEditorWorkspace: View {
             HSplitView {
                 codeEditor
                     .frame(minWidth: 340)
-                MarkdownPreview(
-                    markdown: editor.text,
-                    baseDirectory: editor.sourceURL?.deletingLastPathComponent(),
-                    sourceLine: synchronizedLine
-                ) { line in
-                    synchronizedLine = line
-                }
-                .frame(minWidth: 340)
+                markdownPreview
+                    .frame(minWidth: 340)
             }
             .accessibilityIdentifier("markdown-split-editor")
         } else {
@@ -198,13 +192,7 @@ struct TextEditorWorkspace: View {
                 .fill(theme.palette.line)
                 .frame(width: theme.metrics.hairline, height: 18)
 
-            Label(editor.language.editorDisplayName, systemImage: "textformat")
-                .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.textSecondary)
-                .padding(.horizontal, 9)
-                .frame(height: 26)
-                .background(theme.palette.surfaceRaised)
-                .clipShape(Capsule())
+            languageMenu
 
             Spacer()
 
@@ -292,7 +280,6 @@ struct TextEditorWorkspace: View {
                         Label("Build", systemImage: "hammer")
                     }
                     .buttonStyle(ReelBorderedButtonStyle())
-                    .disabled(editor.sourceURL == nil)
                     .keyboardShortcut("b", modifiers: .command)
                     .help("Compile LaTeX (Command-B)")
                     .accessibilityIdentifier("latex-compile")
@@ -318,8 +305,83 @@ struct TextEditorWorkspace: View {
             .help("Redo")
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
-        .frame(height: 48)
+        .frame(height: 52)
         .background(theme.palette.surfacePanel)
+    }
+
+    private var languageMenu: some View {
+        Menu {
+            languageButton("Plain Text", language: .plainText)
+            languageButton("Markdown", language: .markdown)
+            languageButton("LaTeX", language: .latex)
+            Divider()
+            languageButton("Swift", language: .swift)
+            languageButton("JavaScript", language: .javascript)
+            languageButton("TypeScript", language: .typescript)
+            languageButton("Python", language: .python)
+            languageButton("JSON", language: .json)
+            languageButton("HTML", language: .html)
+            languageButton("CSS", language: .css)
+            languageButton("SQL", language: .sql)
+            languageButton("Shell", language: .bash)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: editor.language == .latex ? "function" : "textformat")
+                Text(editor.language.editorDisplayName)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textSecondary)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(theme.palette.surfaceRaised)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose syntax and preview mode")
+        .accessibilityIdentifier("text-language-menu")
+    }
+
+    private func languageButton(_ title: String, language: LanguageID) -> some View {
+        Button {
+            editor.setLanguage(language)
+        } label: {
+            if editor.language == language {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private var markdownPreview: some View {
+        ZStack {
+            MarkdownPreview(
+                markdown: editor.text,
+                baseDirectory: editor.sourceURL?.deletingLastPathComponent(),
+                sourceLine: synchronizedLine
+            ) { line in
+                synchronizedLine = line
+            }
+            if editor.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(spacing: theme.metrics.spacing.md) {
+                    Image(systemName: "doc.richtext")
+                        .font(.system(size: 28))
+                        .foregroundStyle(theme.palette.textTertiary)
+                    Text("Markdown preview")
+                        .font(theme.type.title.font)
+                    Text("Start typing on the left. Rich text appears here automatically.")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textSecondary)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .background(theme.palette.surfaceSunken)
     }
 
     private func runForwardSearch() {

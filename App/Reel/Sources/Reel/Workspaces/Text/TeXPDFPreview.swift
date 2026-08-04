@@ -96,7 +96,6 @@ struct TeXPDFPreview: View {
                     .foregroundStyle(theme.palette.textSecondary)
                 Button("Build", action: editor.requestTeXCompile)
                     .buttonStyle(ReelBorderedButtonStyle())
-                    .disabled(editor.sourceURL == nil)
             }
         }
     }

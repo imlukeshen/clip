@@ -21,7 +21,12 @@ struct TextEditorViewModelTests {
             persistingStructure: { _ in },
             persistingContents: { _, _ in }
         )
-        let textView = UndoBackedTextView(usingTextLayoutManager: true)
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer()
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        let textView = UndoBackedTextView(frame: .zero, textContainer: container)
         textView.providedUndoManager = editor.undoManager
         textView.isEditable = true
 
@@ -177,6 +182,39 @@ struct TextEditorViewModelTests {
             fixture.preferences.string(forKey: "clip.tex.packageAccess")
                 == TeXPackageAccess.cachedOnly.rawValue
         )
+    }
+
+    @Test("A scratch buffer switches preview modes and compiles without becoming an asset")
+    func scratchPreviewModesAndLatexBuild() async throws {
+        let file = TextFile(id: FileID(rawValue: "scratch"), relativePath: "Untitled.txt")
+        let preferences = try makeTeXPreferences(packageAccess: .cachedOnly)
+        let recorder = TeXJobRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "# Clip",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in },
+            texPreferences: preferences
+        )
+
+        editor.setLanguage(.markdown)
+        #expect(editor.activeFile?.relativePath == "Untitled.md")
+        #expect(editor.language == .markdown)
+
+        editor.text = "\\documentclass{article}\\begin{document}Clip\\end{document}"
+        editor.setLanguage(.latex)
+        editor.configureTeXEngine(RecordingTeXEngine(recorder: recorder))
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+
+        let job = try #require(recorder.job)
+        #expect(editor.activeFile?.relativePath == "Untitled.tex")
+        #expect(job.mainFile.lastPathComponent == "Untitled.tex")
+        #expect(recorder.mainSource?.contains("\\documentclass{article}") == true)
+        #expect(editor.texPDFURL != nil)
+        editor.stop()
     }
 
     @Test("A failed rebuild keeps the last successful LaTeX PDF visible")
@@ -349,6 +387,7 @@ private func makeTeXPreferences(packageAccess: TeXPackageAccess) throws -> UserD
 private final class TeXJobRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storedJob: TeXJob?
+    private var storedMainSource: String?
 
     var job: TeXJob? {
         lock.lock()
@@ -356,9 +395,16 @@ private final class TeXJobRecorder: @unchecked Sendable {
         return storedJob
     }
 
+    var mainSource: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedMainSource
+    }
+
     func record(_ job: TeXJob) {
         lock.lock()
         storedJob = job
+        storedMainSource = try? String(contentsOf: job.mainFile, encoding: .utf8)
         lock.unlock()
     }
 }

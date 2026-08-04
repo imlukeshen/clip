@@ -274,10 +274,22 @@ public final class TextEditorViewModel {
     /// Sets the active file's highlighting language as an explicit user choice.
     public func setLanguage(_ language: LanguageID) {
         guard let activeFile, activeFile.language != language else { return }
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
         perform(
             .setLanguage(activeFileID, language, explicit: true),
             actionName: "Set Language"
         )
+        if sourceURL == nil,
+            Self.isDefaultScratchName(activeFile.relativePath),
+            let pathExtension = Self.preferredScratchExtension(for: language)
+        {
+            perform(
+                .renameFile(activeFileID, "Untitled.\(pathExtension)"),
+                actionName: "Set Language"
+            )
+        }
+        rebuildTeXProjectAnalysis()
         if language == .latex {
             scheduleTeXCompilation()
         } else {
@@ -459,10 +471,6 @@ public final class TextEditorViewModel {
     /// Requests a build, showing the package-network decision before first use.
     public func requestTeXCompile() {
         guard language == .latex else { return }
-        guard sourceURL != nil else {
-            notice = "Save this LaTeX scratch buffer before compiling it."
-            return
-        }
         guard texPackageAccess != nil else {
             needsTeXPackageConsent = true
             return
@@ -697,7 +705,7 @@ public final class TextEditorViewModel {
 
     private func scheduleTeXCompilation() {
         guard language == .latex, texCompileMode == .automatic,
-            texPackageAccess != nil, sourceURL != nil, texEngine != nil
+            texPackageAccess != nil, texEngine != nil
         else { return }
         texCompileTask?.cancel()
         let generation = UUID()
@@ -728,8 +736,7 @@ public final class TextEditorViewModel {
         rebuildTeXProjectAnalysis()
         guard let analysis = texProjectAnalysis,
             let mainPath = analysis.mainFile,
-            let mainFile = document.files.first(where: { $0.relativePath == mainPath }),
-            let mainURL = sourceURLs[mainFile.id]
+            let mainFile = document.files.first(where: { $0.relativePath == mainPath })
         else {
             texCompilationState = .failed(
                 "Choose a main LaTeX file containing \\documentclass before building."
@@ -740,11 +747,18 @@ public final class TextEditorViewModel {
         let generation = UUID()
         texCompileGeneration = generation
         let sourceSnapshot = textBuffers
-        let projectDirectory = Self.projectRoot(
-            for: mainPath,
-            sourceURL: mainURL
-        )
-        let reachableURLs = analysis.reachableFiles.compactMap { projectFileURLs[$0] }
+        let input: TeXInputSnapshot
+        do {
+            input = try makeTeXInputSnapshot(
+                mainFile: mainFile,
+                mainPath: mainPath,
+                reachablePaths: analysis.reachableFiles,
+                sourceSnapshot: sourceSnapshot
+            )
+        } catch {
+            texCompilationState = .failed("Clip could not prepare the LaTeX source workspace.")
+            return
+        }
         let overrides: [String: Data] = Dictionary(
             uniqueKeysWithValues: document.files.compactMap { file in
                 guard analysis.reachableFiles.contains(file.relativePath),
@@ -754,9 +768,9 @@ public final class TextEditorViewModel {
             }
         )
         let job = TeXJob(
-            mainFile: mainURL,
-            workingDirectory: projectDirectory,
-            projectFiles: reachableURLs,
+            mainFile: input.mainFile,
+            workingDirectory: input.projectDirectory,
+            projectFiles: input.projectFiles,
             sourceOverrides: overrides,
             bibliography: analysis.bibliography,
             timeout: .seconds(120),
@@ -766,6 +780,11 @@ public final class TextEditorViewModel {
         texLog = ""
         texDiagnostics = []
         texCompileTask = Task { [weak self] in
+            defer {
+                if let ephemeralRoot = input.ephemeralRoot {
+                    try? FileManager.default.removeItem(at: ephemeralRoot)
+                }
+            }
             do {
                 for try await event in texEngine.compile(job) {
                     guard let self, texCompileGeneration == generation else { return }
@@ -1084,9 +1103,93 @@ public final class TextEditorViewModel {
         }
         texProjectAnalysis = TeXProjectAnalyzer.analyze(
             sources: sources,
-            availableFiles: Set(projectFileURLs.keys),
+            availableFiles: Set(projectFileURLs.keys).union(sources.keys),
             selectedMainFile: selectedMain
         )
+    }
+
+    private struct TeXInputSnapshot {
+        var mainFile: URL
+        var projectDirectory: URL
+        var projectFiles: [URL]
+        var ephemeralRoot: URL?
+    }
+
+    /// Materializes scratch buffers only for the lifetime of a compile. This
+    /// gives an unsaved `Untitled.tex` the same confined compiler path as a
+    /// library file without turning the scratch buffer into a permanent asset.
+    private func makeTeXInputSnapshot(
+        mainFile: TextFile,
+        mainPath: String,
+        reachablePaths: Set<String>,
+        sourceSnapshot: [FileID: String]
+    ) throws -> TeXInputSnapshot {
+        if let mainURL = sourceURLs[mainFile.id] {
+            return TeXInputSnapshot(
+                mainFile: mainURL,
+                projectDirectory: Self.projectRoot(for: mainPath, sourceURL: mainURL),
+                projectFiles: reachablePaths.compactMap { projectFileURLs[$0] },
+                ephemeralRoot: nil
+            )
+        }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-text-source-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            var urls: [URL] = []
+            for file in document.files where reachablePaths.contains(file.relativePath) {
+                guard let value = sourceSnapshot[file.id],
+                    let destination = Self.safeTeXDestination(file.relativePath, below: root)
+                else {
+                    throw TextEditorCommandError.fileNotFound(file.relativePath)
+                }
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try Data(value.utf8).write(to: destination, options: .atomic)
+                urls.append(destination)
+            }
+            guard let mainURL = Self.safeTeXDestination(mainPath, below: root),
+                FileManager.default.isReadableFile(atPath: mainURL.path)
+            else {
+                throw TextEditorCommandError.fileNotFound(mainPath)
+            }
+            return TeXInputSnapshot(
+                mainFile: mainURL,
+                projectDirectory: root,
+                projectFiles: urls,
+                ephemeralRoot: root
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: root)
+            throw error
+        }
+    }
+
+    private static func safeTeXDestination(_ path: String, below root: URL) -> URL? {
+        guard !path.isEmpty, !path.hasPrefix("/"), URL(string: path)?.scheme == nil else {
+            return nil
+        }
+        let destination = root.appendingPathComponent(path).standardizedFileURL
+        let prefix = root.standardizedFileURL.path + "/"
+        return destination.path.hasPrefix(prefix) ? destination : nil
+    }
+
+    private static func isDefaultScratchName(_ path: String) -> Bool {
+        ["untitled", "untitled.txt", "untitled.md", "untitled.tex"].contains(path.lowercased())
+    }
+
+    private static func preferredScratchExtension(for language: LanguageID) -> String? {
+        switch language {
+        case .markdown: "md"
+        case .latex: "tex"
+        case .plainText: "txt"
+        default: nil
+        }
     }
 
     private func startFileMonitor() {
