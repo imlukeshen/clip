@@ -4,6 +4,7 @@ import CoreModel
 import CryptoKit
 import Foundation
 import LibraryStore
+import MediaEngine
 import SearchEngine
 import TextEngine
 
@@ -296,6 +297,59 @@ public actor AppRuntime {
         let associated = await clickTracking.associate(record, sourceURL: url)
         await indexPipeline.enqueue(associated.id, stages: Self.indexStages(for: associated))
         return associated
+    }
+
+    /// Materializes a still as a short movie so the existing timeline graph,
+    /// compositor, effects, and exporter can edit it exactly like a video clip.
+    public func ingestTimelineImage(
+        _ imageURL: URL,
+        source: IngestSource
+    ) async throws -> AssetRecord {
+        let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ClipTimelineStill/\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: stagingRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: stagingRoot) }
+        let sourceName = imageURL.deletingPathExtension().lastPathComponent
+        let outputURL = stagingRoot.appendingPathComponent("\(sourceName).mov")
+        try await StillImageClipBuilder().build(
+            imageAt: imageURL,
+            outputURL: outputURL
+        )
+        return try await ingest(outputURL, source: source)
+    }
+
+    /// The pasteboard may offer pixels without a file URL. Stage those bytes
+    /// only long enough to build the timeline-compatible still clip.
+    public func ingestTimelineImageData(
+        _ data: Data,
+        pathExtension: String,
+        source: IngestSource = .pasteboard
+    ) async throws -> AssetRecord {
+        let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ClipTimelinePaste/\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: stagingRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: stagingRoot) }
+        let normalizedExtension = pathExtension.lowercased() == "tiff" ? "tiff" : "png"
+        let inputURL = stagingRoot.appendingPathComponent(
+            "Pasted Image.\(normalizedExtension)"
+        )
+        try data.write(to: inputURL, options: .atomic)
+        let outputURL = stagingRoot.appendingPathComponent("Pasted Image.mov")
+        try await StillImageClipBuilder().build(
+            imageAt: inputURL,
+            outputURL: outputURL
+        )
+        return try await ingest(outputURL, source: source)
     }
 
     public func indexProgress() -> AsyncStream<IndexProgress> {

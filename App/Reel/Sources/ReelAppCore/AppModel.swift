@@ -10,6 +10,7 @@ import Observation
 import PDFEngine
 import SearchEngine
 import TextEngine
+import UniformTypeIdentifiers
 
 enum SystemCaptureRoute: Sendable, Equatable {
     case timeline
@@ -92,7 +93,21 @@ public final class AppModel {
     public private(set) var captureDirectory = SystemCaptureDestination.current()
     public private(set) var isCaptureDirectoryWatched = false
     public private(set) var captureHistory: [CaptureHistoryItem] = []
+    public private(set) var isAddingTimelineMedia = false
     public var isCaptureHistoryPresented = false
+    /// Whether Clip owns the system-wide Command-Shift-C shortcut. This stays
+    /// separate from clipboard capture so users can keep Maccy or another
+    /// clipboard manager on that key combination without disabling Clip's
+    /// history itself.
+    public var isGlobalClipboardShortcutEnabled: Bool {
+        didSet {
+            guard isGlobalClipboardShortcutEnabled != oldValue else { return }
+            UserDefaults.standard.set(
+                isGlobalClipboardShortcutEnabled,
+                forKey: Self.globalClipboardShortcutPreferenceKey
+            )
+        }
+    }
     /// Where a finished recording goes when no editor is open to take it.
     public private(set) var captureDestination = CaptureDestination.restored()
     public let selection = SelectionModel()
@@ -122,6 +137,9 @@ public final class AppModel {
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
     private var folderForwardHistory: [String?] = []
+
+    private static let globalClipboardShortcutPreferenceKey =
+        "clip.globalClipboardShortcutEnabled"
 
     public init(
         libraryRoot: URL = AppModel.defaultLibraryRoot,
@@ -164,6 +182,9 @@ public final class AppModel {
         self.appearance =
             UserDefaults.standard.string(forKey: "reel.appearance")
             .flatMap(AppearancePreference.init(rawValue:)) ?? .system
+        self.isGlobalClipboardShortcutEnabled =
+            UserDefaults.standard.object(forKey: Self.globalClipboardShortcutPreferenceKey)
+            as? Bool ?? true
         self.inspectorWidth = InspectorLayout.restoredWidth()
         self.undoManager.groupsByEvent = false
     }
@@ -392,8 +413,8 @@ public final class AppModel {
     }
 
     /// Makes the palette's “Open Video Editor” command literal: it focuses an
-    /// existing timeline, opens the selected/first recording, or falls back to
-    /// the video library when there is nothing playable yet.
+    /// existing timeline or creates an empty project that is immediately ready
+    /// for pasted and dropped media.
     public func openVideoEditorFromCommandPalette() {
         if editor != nil {
             selectedWorkspace = .video
@@ -406,15 +427,7 @@ public final class AppModel {
             lastMessage = "Resolve the open document before switching to video editing."
             return
         }
-        let selectedVideo = selection.anchor.flatMap { selectedID in
-            assets.first { $0.id == selectedID && $0.kind == .video }
-        }
-        guard let video = selectedVideo ?? assets.first(where: { $0.kind == .video }) else {
-            selectedWorkspace = .video
-            lastMessage = "Add or record a video to start a timeline."
-            return
-        }
-        openEditor(for: video.id)
+        createEmptyVideoEditor()
     }
 
     /// Decides what happens to a file macOS just wrote for a screenshot or
@@ -475,6 +488,115 @@ public final class AppModel {
         guard destination != captureDestination else { return }
         captureDestination = destination
         destination.store()
+    }
+
+    public func setGlobalClipboardShortcutEnabled(_ isEnabled: Bool) {
+        isGlobalClipboardShortcutEnabled = isEnabled
+    }
+
+    /// Reads the richest media representation from the system pasteboard and
+    /// appends it to the open timeline. Finder file copies stay file-backed;
+    /// raw screenshot pixels are accepted as a still clip as well.
+    public func pasteMediaIntoTimeline() {
+        guard editor != nil else {
+            lastMessage = "Open the video editor before pasting media."
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL], !urls.isEmpty {
+            addMediaToOpenTimeline(urls, source: .pasteboard)
+            return
+        }
+        if let data = pasteboard.data(forType: .png) {
+            addImageDataToOpenTimeline(data, pathExtension: "png")
+            return
+        }
+        if let data = pasteboard.data(forType: .tiff) {
+            addImageDataToOpenTimeline(data, pathExtension: "tiff")
+            return
+        }
+        lastMessage = "Copy a video or photo, then paste it into the timeline."
+    }
+
+    public func addMediaToOpenTimeline(_ urls: [URL], source: IngestSource) {
+        guard !urls.isEmpty, !isAddingTimelineMedia, let activeEditor = editor,
+            let runtime
+        else { return }
+        isAddingTimelineMedia = true
+        Task {
+            defer { isAddingTimelineMedia = false }
+            var insertedCount = 0
+            var failedFileName: String?
+            for url in urls {
+                let didStartSecurityScope =
+                    (source == .picker || source == .pasteboard)
+                    && url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartSecurityScope { url.stopAccessingSecurityScopedResource() }
+                }
+                do {
+                    let record: AssetRecord
+                    if Self.isImageURL(url) {
+                        record = try await runtime.ingestTimelineImage(url, source: source)
+                    } else if Self.isVideoURL(url) {
+                        record = try await runtime.ingest(url, source: source)
+                    } else {
+                        continue
+                    }
+                    await refreshAssets()
+                    guard editor === activeEditor else { return }
+                    if activeEditor.insert(record) { insertedCount += 1 }
+                } catch {
+                    failedFileName = url.lastPathComponent
+                }
+            }
+            if insertedCount > 0 {
+                lastMessage =
+                    insertedCount == 1
+                    ? "Added media to the timeline."
+                    : "Added \(insertedCount) items to the timeline."
+            } else if let failedFileName {
+                lastMessage = "Couldn't add \(failedFileName) to the timeline."
+            } else {
+                lastMessage = "Paste or drop a video or photo into the timeline."
+            }
+        }
+    }
+
+    private func addImageDataToOpenTimeline(_ data: Data, pathExtension: String) {
+        guard !isAddingTimelineMedia, let activeEditor = editor, let runtime else { return }
+        isAddingTimelineMedia = true
+        Task {
+            defer { isAddingTimelineMedia = false }
+            do {
+                let record = try await runtime.ingestTimelineImageData(
+                    data,
+                    pathExtension: pathExtension
+                )
+                await refreshAssets()
+                guard editor === activeEditor else { return }
+                if activeEditor.insert(record) {
+                    lastMessage = "Added the pasted image as a three-second clip."
+                }
+            } catch {
+                lastMessage = "The pasted image could not be added to the timeline."
+            }
+        }
+    }
+
+    private static func isImageURL(_ url: URL) -> Bool {
+        let pathExtension = url.pathExtension.lowercased()
+        return UTType(filenameExtension: pathExtension)?.conforms(to: .image) == true
+            || ["png", "jpg", "jpeg", "heic", "tif", "tiff", "webp"].contains(pathExtension)
+    }
+
+    private static func isVideoURL(_ url: URL) -> Bool {
+        let pathExtension = url.pathExtension.lowercased()
+        return UTType(filenameExtension: pathExtension)?.conforms(to: .movie) == true
+            || ["mov", "mp4", "m4v", "webm", "mkv"].contains(pathExtension)
     }
 
     /// Puts an entry on the system pasteboard so it can be pasted in any app.
@@ -1773,6 +1895,53 @@ public final class AppModel {
             }
         } catch {
             lastMessage = "The selected clip could not be opened."
+        }
+    }
+
+    private func createEmptyVideoEditor() {
+        guard editor == nil, imageEditor == nil, pdfEditor == nil, textEditor == nil else {
+            return
+        }
+        guard let runtime else {
+            selectedWorkspace = .video
+            lastMessage = "The library is still opening. Try again in a moment."
+            return
+        }
+        let now = Date()
+        do {
+            let document = try ProjectDocument(
+                id: .generate(),
+                name: "Untitled Project",
+                createdAt: now,
+                modifiedAt: now
+            )
+            let assetMap = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+            let editor = EditorViewModel(
+                document: document,
+                assets: assetMap,
+                clickTrackingState: clickTrackingState,
+                resolving: { id in try await runtime.url(for: id) },
+                persisting: { document, inverse in
+                    try await runtime.saveProject(document)
+                    if let inverse {
+                        try await runtime.appendHistory(inverse, project: document.id)
+                    }
+                }
+            )
+            self.editor = editor
+            selectedWorkspace = .video
+            selection.deselectAll()
+            Task {
+                do {
+                    try await runtime.saveProject(document)
+                } catch {
+                    guard self.editor === editor else { return }
+                    lastMessage = "The empty project could not be created."
+                    self.editor = nil
+                }
+            }
+        } catch {
+            lastMessage = "The empty project could not be created."
         }
     }
 

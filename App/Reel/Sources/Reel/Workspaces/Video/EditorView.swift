@@ -14,6 +14,7 @@ struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: EditorViewModel
     @State private var showsExportSheet = false
+    @State private var showsMediaImporter = false
     @State private var exportCompletionAction = CompletionAction.reveal
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
@@ -54,6 +55,19 @@ struct EditorView: View {
             )
             .environment(\.theme, theme)
         }
+        .fileImporter(
+            isPresented: $showsMediaImporter,
+            allowedContentTypes: [.movie, .image],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                model.addMediaToOpenTimeline(urls, source: .picker)
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            model.addMediaToOpenTimeline(urls, source: .drop)
+            return !urls.isEmpty
+        }
         .onChange(of: editor.lastExportURL) { _, url in
             guard let url else { return }
             switch exportCompletionAction {
@@ -88,6 +102,13 @@ struct EditorView: View {
             Spacer()
 
             Menu {
+                Button("Paste Video or Photo") {
+                    model.pasteMediaIntoTimeline()
+                }
+                Button("Choose Video or Photo…") {
+                    showsMediaImporter = true
+                }
+                Divider()
                 ForEach(editor.availableVideoAssets) { asset in
                     Button(asset.displayName) { editor.insert(asset) }
                 }
@@ -95,7 +116,7 @@ struct EditorView: View {
                     Text("All video assets are in this project")
                 }
             } label: {
-                Label("Add clip", systemImage: "plus")
+                Label("Add media", systemImage: "plus")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -233,6 +254,29 @@ struct EditorView: View {
                     if editor.isBuilding {
                         ProgressView()
                             .controlSize(.small)
+                    }
+
+                    if editor.document.timeline.video.isEmpty {
+                        VStack(spacing: theme.metrics.spacing.md) {
+                            if model.isAddingTimelineMedia {
+                                ProgressView().controlSize(.small)
+                                Text("Adding media…")
+                                    .font(theme.type.label.font)
+                            } else {
+                                Image(systemName: "film.stack")
+                                    .font(.system(size: 30, weight: .regular))
+                                    .foregroundStyle(theme.palette.textTertiary)
+                                Text("Paste a video or photo")
+                                    .font(theme.type.title.font)
+                                Text("Press Command-V, drop files here, or choose Add media.")
+                                    .font(theme.type.caption.font)
+                                    .foregroundStyle(theme.palette.textSecondary)
+                                Button("Paste", action: model.pasteMediaIntoTimeline)
+                                    .buttonStyle(ReelBorderedButtonStyle())
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("video-empty-timeline")
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -1,4 +1,5 @@
 import AIKit
+import AppKit
 import CaptureKit
 import ConvertKit
 import Foundation
@@ -72,6 +73,26 @@ struct ClipApp: App {
                 }
             }
             CaptureCommands(model: model)
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") {
+                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("x", modifiers: .command)
+                .disabled(model.editor != nil)
+                Button("Copy") {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: .command)
+                .disabled(model.editor != nil)
+                Button(model.editor == nil ? "Paste" : "Paste into Timeline") {
+                    if model.editor != nil {
+                        model.pasteMediaIntoTimeline()
+                    } else {
+                        NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                    }
+                }
+                .keyboardShortcut("v", modifiers: .command)
+            }
             CommandGroup(replacing: .undoRedo) {
                 Button(commandTitle("edit.undo")) {
                     AppCommandRouter.run("edit.undo", in: model)

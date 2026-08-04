@@ -12,10 +12,16 @@ struct CaptureCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Capture") {
-            Button(title("capture.history")) {
-                ClipAppDelegate.toggleClipboard()
+            if model.isGlobalClipboardShortcutEnabled {
+                Button(title("capture.history")) {
+                    ClipAppDelegate.toggleClipboard()
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            } else {
+                Button(title("capture.history")) {
+                    ClipAppDelegate.toggleClipboard()
+                }
             }
-            .keyboardShortcut("c", modifiers: [.command, .shift])
             Button(title("capture.clearHistory"), role: .destructive) {
                 AppCommandRouter.run("capture.clearHistory", in: model)
             }

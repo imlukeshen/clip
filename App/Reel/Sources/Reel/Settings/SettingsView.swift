@@ -47,6 +47,17 @@ private struct SettingsContent: View {
                 }
             }
             Section("Capture") {
+                Toggle(
+                    "Global Clip Clipboard shortcut (Command-Shift-C)",
+                    isOn: clipboardShortcutBinding
+                )
+                .accessibilityIdentifier("settings-global-clipboard-shortcut")
+                Text(
+                    "Turn this off if Maccy or another clipboard manager uses Command-Shift-C. "
+                        + "Clip Clipboard remains available from the sidebar and Capture menu."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
                 Picker("New recordings", selection: captureDestinationBinding) {
                     ForEach(CaptureDestination.allCases) { destination in
                         Text(destination.title).tag(destination)
@@ -169,6 +180,16 @@ private struct SettingsContent: View {
         Binding(
             get: { model.captureDestination },
             set: { model.setCaptureDestination($0) }
+        )
+    }
+
+    private var clipboardShortcutBinding: Binding<Bool> {
+        Binding(
+            get: { model.isGlobalClipboardShortcutEnabled },
+            set: { isEnabled in
+                model.setGlobalClipboardShortcutEnabled(isEnabled)
+                ClipAppDelegate.refreshClipboardShortcutRegistration()
+            }
         )
     }
 

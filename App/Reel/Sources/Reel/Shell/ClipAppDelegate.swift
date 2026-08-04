@@ -39,6 +39,13 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         activeDelegate?.handleHotKey()
     }
 
+    /// Applies the current Settings preference immediately. The shortcut is
+    /// registered process-wide only while enabled; disabling it gives the key
+    /// combination back to Maccy or any other clipboard manager.
+    static func refreshClipboardShortcutRegistration() {
+        activeDelegate?.syncHotKeyRegistration()
+    }
+
     /// The process-shared model prepared by `ClipApp`. The delegate holds it
     /// weakly and creates the floating panel as soon as the model is available.
     weak var model: AppModel? {
@@ -53,14 +60,12 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     /// systems where the scene appears after `applicationDidFinishLaunching`.
     func install(model: AppModel) {
         self.model = model
-        registerHotKey()
+        syncHotKeyRegistration()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let preparedModel = Self.preparedModel {
             install(model: preparedModel)
-        } else {
-            registerHotKey()
         }
 
         // A SwiftUI `WindowGroup` can restore the valid state "no windows".
@@ -123,6 +128,14 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             Self.log.error("Global clipboard hotkey could not be registered.")
         }
+    }
+
+    private func syncHotKeyRegistration() {
+        guard model?.isGlobalClipboardShortcutEnabled == true else {
+            hotKey.unregister()
+            return
+        }
+        registerHotKey()
     }
 
     private func showOrCreateMainWindow(in application: NSApplication) {

@@ -1,4 +1,6 @@
 import AVFoundation
+import AppKit
+import CoreImage
 import Foundation
 import XCTest
 
@@ -10,10 +12,16 @@ final class TextEditorTypingTests: XCTestCase {
             "clip-clipboard-shortcut-\(UUID().uuidString)",
             isDirectory: true
         )
-        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
         app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-clip.globalClipboardShortcutEnabled", "YES",
+        ]
         app.launch()
 
         XCTAssertEqual(app.state, .runningForeground)
@@ -27,13 +35,43 @@ final class TextEditorTypingTests: XCTestCase {
     }
 
     @MainActor
+    func testClipboardShortcutCanBeReleasedForAnotherClipboardManager() throws {
+        let (app, libraryRoot) = launchClip(named: "clipboard-shortcut-setting")
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
+
+        XCTAssertTrue(app.buttons["sidebar-route-all-media"].waitForExistence(timeout: 10))
+        app.typeKey(",", modifierFlags: .command)
+
+        let toggle = app.descendants(matching: .any)["settings-global-clipboard-shortcut"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        toggle.click()
+
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertFalse(app.staticTexts["Clip Clipboard"].waitForExistence(timeout: 2))
+
+        app.activate()
+        toggle.click()
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        let clipboardTitle = app.staticTexts["Clip Clipboard"]
+        XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(clipboardTitle.waitForNonExistence(timeout: 5))
+    }
+
+    @MainActor
     func testScratchEditorAcceptsTypingAndUndo() throws {
         let app = XCUIApplication()
         let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
             "clip-text-editor-\(UUID().uuidString)",
             isDirectory: true
         )
-        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
         app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
@@ -55,12 +93,40 @@ final class TextEditorTypingTests: XCTestCase {
 
         app.typeKey("z", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, "")
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("Clip paste works", forType: .string)
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(editor.value as? String, "Clip paste works")
     }
 
     @MainActor
     func testCommandPaletteOpensVideoEditorAndDismissesOutside() throws {
-        let (app, libraryRoot) = launchClip(named: "command-palette")
-        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-command-palette-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let libraryRoot = temporaryRoot.appendingPathComponent("Library", isDirectory: true)
+        let videoURL = temporaryRoot.appendingPathComponent("Pasted Video.mov")
+        let imageURL = temporaryRoot.appendingPathComponent("Pasted Photo.png")
+        try FileManager.default.createDirectory(
+            at: temporaryRoot, withIntermediateDirectories: true)
+        try makeTestRecording(at: videoURL)
+        try makeTestImage(at: imageURL)
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: temporaryRoot)
+        }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["CLIP_UI_TESTING"] = "1"
+        app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-clip.globalClipboardShortcutEnabled", "YES",
+        ]
+        app.launch()
 
         XCTAssertTrue(app.buttons["sidebar-route-all-media"].waitForExistence(timeout: 10))
         app.typeKey("k", modifierFlags: .command)
@@ -73,6 +139,29 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(
             app.descendants(matching: .any)["workspace-content-video"]
                 .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["video-empty-timeline"]
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.staticTexts["0 clips"].waitForExistence(timeout: 5))
+
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.writeObjects([videoURL as NSURL]))
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(
+            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            "Command-V did not add the pasted video to the empty timeline"
+        )
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(try Data(contentsOf: imageURL), forType: .png)
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(
+            app.staticTexts["2 clips"].waitForExistence(timeout: 20),
+            "Command-V did not turn the pasted photo into a timeline clip"
         )
 
         app.typeKey("k", modifierFlags: .command)
@@ -221,9 +310,25 @@ final class TextEditorTypingTests: XCTestCase {
         )
         app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"] + arguments
+        app.launchArguments +=
+            [
+                "-ApplePersistenceIgnoreState", "YES",
+                "-clip.globalClipboardShortcutEnabled", "YES",
+            ] + arguments
         app.launch()
         return (app, libraryRoot)
+    }
+
+    private func makeTestImage(at url: URL) throws {
+        let image = CIImage(color: .cyan).cropped(
+            to: CGRect(x: 0, y: 0, width: 96, height: 64)
+        )
+        try CIContext().writePNGRepresentation(
+            of: image,
+            to: url,
+            format: .RGBA8,
+            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!
+        )
     }
 
     private func makeTestRecording(at url: URL) throws {
