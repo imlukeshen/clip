@@ -1,6 +1,7 @@
 import CaptureKit
 import Foundation
 import Testing
+
 @testable import ReelAppCore
 
 @Test @MainActor func sidebarRoutesSwitchWorkspacesFiftyTimesWithoutDroppingState() {

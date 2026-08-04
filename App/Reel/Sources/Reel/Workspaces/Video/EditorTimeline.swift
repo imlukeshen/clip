@@ -27,6 +27,7 @@ struct EditorTimeline: NSViewRepresentable {
     let click: NSColor
     let caption: NSColor
     let playheadColor: NSColor
+    let clipCornerRadius: CGFloat
     let onSelect: (ItemID, Bool) -> Void
     let onSeek: (RationalTime, Bool) -> Void
     let onScrubbing: (Bool) -> Void
@@ -62,6 +63,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.clickColor = click
         view.captionColor = caption
         view.playheadColor = playheadColor
+        view.clipCornerRadius = clipCornerRadius
         view.onSelect = onSelect
         view.onSeek = onSeek
         view.onScrubbing = onScrubbing
@@ -85,8 +87,8 @@ final class TimelineCanvas: NSView {
     var clickMarkers: [TimelineClickMarker] = []
     var isSnappingEnabled = true
     var activeTool = TimelineTool.select
-    var accent = NSColor.systemBlue
-    var accentDim = NSColor.systemBlue.withAlphaComponent(0.2)
+    var accent = NSColor.white
+    var accentDim = NSColor.white.withAlphaComponent(0.16)
     var surface = NSColor.black
     var clipColor = NSColor.darkGray
     var lineColor = NSColor.gray
@@ -94,8 +96,11 @@ final class TimelineCanvas: NSView {
     var textTertiary = NSColor.lightGray
     var audioColor = NSColor.green
     var clickColor = NSColor.orange
-    var captionColor = NSColor.blue
+    var captionColor = NSColor.white
     var playheadColor = NSColor.red
+    /// Corner radius for clip rectangles, supplied from the theme so the
+    /// timeline rounds in step with the rest of the app.
+    var clipCornerRadius: CGFloat = 5
     var onSelect: ((ItemID, Bool) -> Void)?
     var onSeek: ((RationalTime, Bool) -> Void)?
     var onScrubbing: ((Bool) -> Void)?
@@ -397,7 +402,10 @@ final class TimelineCanvas: NSView {
         for clip in clipRects() {
             let selected = selection.contains(clip.item.id)
             let path = NSBezierPath(
-                roundedRect: clip.rect.insetBy(dx: 1, dy: 0), xRadius: 3, yRadius: 3)
+                roundedRect: clip.rect.insetBy(dx: 1, dy: 0),
+                xRadius: clipCornerRadius,
+                yRadius: clipCornerRadius
+            )
             (selected ? accentDim : clipColor).setFill()
             path.fill()
             (selected ? accent : lineColor).setStroke()

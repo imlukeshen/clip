@@ -3,6 +3,7 @@ import ConvertKit
 import CoreModel
 import Foundation
 import LibraryStore
+import TextEngine
 
 public struct CaptureDirectoryStatus: Sendable, Equatable {
     public var url: URL
@@ -28,11 +29,24 @@ public actor AppRuntime {
     private let converter = Converter()
     private let clickTracking: EventTrackAssociator
     private let libraryWatcher: LibraryRootWatcher
+    private let history: CaptureHistory
+    private let clipboardWatcher = ClipboardWatcher()
+    private var clipboardTask: Task<Void, Never>?
     private var captureDirectory: URL
 
+    private let didCaptureClipboard: @Sendable () async -> Void
+
+    /// - Parameters:
+    ///   - didCaptureSystemFile: Called with the file macOS wrote when the user
+    ///     takes a screenshot or finishes a recording. The app decides what
+    ///     happens to it; the runtime deliberately does not import it.
+    ///   - didCaptureClipboard: Called after the system-wide clipboard watcher
+    ///     records something the user copied, so the app can refresh the history.
     public init(
         libraryRoot: URL,
-        didAutomaticallyIngest: @escaping @Sendable (AssetRecord) async -> Void = { _ in }
+        didAutomaticallyIngest: @escaping @Sendable (AssetRecord) async -> Void = { _ in },
+        didCaptureSystemFile: @escaping @Sendable (URL) async -> Void = { _ in },
+        didCaptureClipboard: @escaping @Sendable () async -> Void = {}
     ) async throws {
         let root = libraryRoot.standardizedFileURL
         if let plan = try LibraryMigration.plan(at: root) {
@@ -51,22 +65,24 @@ public actor AppRuntime {
         let captureDirectory = preferredCaptureDirectory.url
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
-        let captureDirectories = Self.captureDirectories(
-            libraryInbox: inboxURL,
-            captureDirectory: captureDirectory,
-            captureUsesSecurityScope: preferredCaptureDirectory.usesSecurityScope,
-            includesSystemCaptureDirectory: !Self.isUITesting
+        let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
+        let captureInboxes =
+            Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
+            ? []
+            : [
+                InboxWatcher(
+                    url: captureDirectory,
+                    bookmarks: bookmarks,
+                    usesSecurityScope: preferredCaptureDirectory.usesSecurityScope
+                )
+            ]
+        let history = CaptureHistory(
+            directory: LibraryLayout.captureHistory(in: root),
+            limit: .clipboard
         )
-        let inboxes = captureDirectories.map {
-            InboxWatcher(
-                url: $0.url,
-                bookmarks: bookmarks,
-                usesSecurityScope: $0.usesSecurityScope
-            )
-        }
-        let pasteboard = PasteboardWatcher()
         let clickTracking = EventTrackAssociator(library: library)
 
+        self.didCaptureClipboard = didCaptureClipboard
         self.libraryRoot = root
         self.library = library
         self.bookmarks = bookmarks
@@ -77,14 +93,17 @@ public actor AppRuntime {
         self.libraryWatcher = LibraryRootWatcher(url: LibraryLayout.media(in: root)) {
             Task { await library.refreshLocations() }
         }
+        self.history = history
         self.coordinator = IngestCoordinator(
             pipeline: pipeline,
-            inboxes: inboxes,
-            pasteboard: pasteboard,
+            libraryInboxes: libraryInboxes,
+            captureInboxes: captureInboxes,
+            history: history,
             didIngest: { record, sourceURL in
                 let associated = await clickTracking.associate(record, sourceURL: sourceURL)
                 await didAutomaticallyIngest(associated)
-            }
+            },
+            didCapture: didCaptureSystemFile
         )
     }
 
@@ -105,24 +124,6 @@ public actor AppRuntime {
             return (saved.standardizedFileURL, true)
         }
         return (SystemCaptureDestination.current(), false)
-    }
-
-    private static func captureDirectories(
-        libraryInbox: URL,
-        captureDirectory: URL,
-        captureUsesSecurityScope: Bool,
-        includesSystemCaptureDirectory: Bool
-    ) -> [(url: URL, usesSecurityScope: Bool)] {
-        var seen: Set<String> = []
-        var directories = [(libraryInbox, false)]
-        if includesSystemCaptureDirectory {
-            directories.append((captureDirectory, captureUsesSecurityScope))
-        }
-        return directories.compactMap { directory, usesSecurityScope in
-            let standardized = directory.standardizedFileURL
-            return seen.insert(standardized.path).inserted
-                ? (standardized, usesSecurityScope) : nil
-        }
     }
 
     private static var isUITesting: Bool {
@@ -149,6 +150,7 @@ public actor AppRuntime {
         await library.refreshLocations()
         libraryWatcher.start()
         _ = await clickTracking.start()
+        beginClipboardCapture()
         do {
             let activeDirectories = try await coordinator.start()
             return CaptureDirectoryStatus(
@@ -161,6 +163,47 @@ public actor AppRuntime {
         }
     }
 
+    /// Starts recording everything the user copies system-wide into the history.
+    private func beginClipboardCapture() {
+        guard clipboardTask == nil else { return }
+        let changes = clipboardWatcher.changes
+        clipboardTask = Task { [weak self] in
+            await self?.clipboardWatcher.start()
+            for await change in changes {
+                guard !Task.isCancelled else { return }
+                await self?.recordClipboardChange(change)
+            }
+        }
+    }
+
+    private func recordClipboardChange(_ change: ClipboardChange) async {
+        do {
+            switch change {
+            case .text(let text):
+                try await history.record(text: text)
+            case .image(let data, let pathExtension):
+                try await history.record(
+                    imageData: data,
+                    pathExtension: pathExtension,
+                    displayName: "Copied image"
+                )
+            case .fileURLs(let urls):
+                try await history.record(fileURLs: urls)
+            }
+            await didCaptureClipboard()
+        } catch {
+            // A copy the history cannot store is not worth interrupting for; the
+            // original is untouched wherever it lives.
+        }
+    }
+
+    /// Puts a history entry back on the pasteboard and tells the watcher the
+    /// write was app-authored, so paste-back does not re-enter the history.
+    public func writeToPasteboard(_ item: CaptureHistoryItem) async {
+        let changeCount = CapturePasteboard.write(history.url(for: item), kind: item.kind)
+        await clipboardWatcher.markSelfCopy(expected: changeCount)
+    }
+
     public func grantCaptureDirectoryAccess(_ url: URL) async throws -> CaptureDirectoryStatus {
         let standardized = url.standardizedFileURL
         try await bookmarks.store(standardized, key: Self.captureBookmarkKey)
@@ -170,13 +213,45 @@ public actor AppRuntime {
             bookmarks: bookmarks,
             usesSecurityScope: true
         )
-        try await coordinator.addInbox(watcher)
+        try await coordinator.addCaptureInbox(watcher)
         captureDirectory = bookmarked
         return CaptureDirectoryStatus(url: bookmarked, isWatching: true)
     }
 
+    /// Recent captures, newest first. Reading also prunes anything expired.
+    public func captureHistory() async -> [CaptureHistoryItem] {
+        await history.items()
+    }
+
+    public nonisolated func captureHistoryURL(for item: CaptureHistoryItem) -> URL {
+        history.url(for: item)
+    }
+
+    /// Copies a system capture into the history.
+    @discardableResult
+    public func stageCapture(_ url: URL) async throws -> CaptureHistoryItem {
+        try await coordinator.stage(url)
+    }
+
+    public func removeCapture(_ id: UUID) async {
+        await history.remove(id)
+    }
+
+    public func clearCaptureHistory() async {
+        await history.clear()
+    }
+
+    /// Imports a history entry into the library, leaving the entry in place so
+    /// saving twice is not a way to lose it.
+    public func saveCaptureToLibrary(_ item: CaptureHistoryItem) async throws -> AssetRecord {
+        try await ingest(history.url(for: item), source: .inbox)
+    }
+
     public func stop() async {
         libraryWatcher.stop()
+        clipboardTask?.cancel()
+        clipboardTask = nil
+        await clipboardWatcher.stop()
         await coordinator.stop()
         await clickTracking.stop()
     }
@@ -321,6 +396,40 @@ public actor AppRuntime {
         try data.write(to: pdfDocumentURL(for: document.sourceAssetID), options: .atomic)
     }
 
+    public func textDocument(for assetID: AssetID) throws -> TextDocument? {
+        let url = textDocumentURL(for: assetID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(TextDocument.self, from: Data(contentsOf: url))
+    }
+
+    public func saveTextDocument(_ document: TextDocument, for assetID: AssetID) throws {
+        let directory = LibraryLayout.textDocuments(in: libraryRoot)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(document)
+        data.append(0x0A)
+        try data.write(to: textDocumentURL(for: assetID), options: .atomic)
+    }
+
+    /// Reads a text asset's bytes into an editable buffer, detecting its encoding
+    /// and line endings so a later save can reproduce the original file.
+    public func loadTextContents(for assetID: AssetID) async throws -> LoadedTextFile {
+        let url = try await library.url(for: assetID)
+        return try TextFileLoader.load(from: url)
+    }
+
+    /// Persists an edited text asset's bytes in place — the writable-text
+    /// exception to invariant I5 (ADR-0009). The caller supplies the content
+    /// hash so hashing stays in the App layer, matching ingest.
+    public func saveTextContents(
+        _ data: Data,
+        for assetID: AssetID,
+        contentHash: String
+    ) async throws {
+        _ = try await library.saveTextContents(data, for: assetID, contentHash: contentHash)
+    }
+
     public func changes() -> AsyncStream<LibraryChange> {
         library.changes
     }
@@ -333,6 +442,11 @@ public actor AppRuntime {
     private func pdfDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.pdfDocuments(in: libraryRoot)
             .appendingPathComponent("\(assetID.rawValue).reelpdf")
+    }
+
+    private func textDocumentURL(for assetID: AssetID) -> URL {
+        LibraryLayout.textDocuments(in: libraryRoot)
+            .appendingPathComponent("\(assetID.rawValue).reeltext")
     }
 }
 

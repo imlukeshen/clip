@@ -51,7 +51,10 @@ public struct AssetCard<Thumbnail: View>: View {
                                 if case .selected = state {
                                     Image(systemName: "checkmark.circle.fill")
                                         .symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, theme.palette.accent)
+                                        .foregroundStyle(
+                                            theme.palette.accentOn,
+                                            theme.palette.accent
+                                        )
                                         .font(.system(size: 17))
                                         .padding(7)
                                 }
@@ -76,7 +79,12 @@ public struct AssetCard<Thumbnail: View>: View {
                                 .padding(.vertical, 1)
                                 .padding(.horizontal, 4)
                                 .background(theme.palette.surfaceSunken.opacity(0.8))
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: theme.metrics.radius.small,
+                                        style: .continuous
+                                    )
+                                )
                                 .padding(5)
                         }
                         if case .ingesting(let progress) = state {
@@ -134,11 +142,6 @@ public struct AssetCard<Thumbnail: View>: View {
             RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: theme.metrics.hairline)
         }
-        .shadow(
-            color: .black.opacity(isHovered ? 0.14 : 0.05),
-            radius: isHovered ? 10 : 4,
-            y: isHovered ? 4 : 2
-        )
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .accessibilityElement(children: .contain)
@@ -149,7 +152,7 @@ public struct AssetCard<Thumbnail: View>: View {
         switch state {
         case .selected: theme.palette.accentLine
         case .failed: theme.palette.danger
-        case .normal, .ingesting: theme.palette.line
+        case .normal, .ingesting: isHovered ? theme.palette.lineStrong : theme.palette.line
         }
     }
 }

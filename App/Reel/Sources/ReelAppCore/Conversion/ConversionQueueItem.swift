@@ -49,6 +49,10 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
             [.flac]
         case .document:
             [.png]
+        case .text:
+            // Text export (Markdown/LaTeX → PDF) arrives with T2/T3; until then
+            // text assets offer no conversion target and read as unsupported.
+            []
         }
     }
 
@@ -84,6 +88,9 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         case .image: return .jpeg
         case .audio: return .flac
         case .document: return .png
+        // No text target exists yet (T2/T3); the planner reports it unsupported,
+        // so this placeholder is never actually offered or run.
+        case .text: return .png
         }
     }
 }

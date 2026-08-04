@@ -25,7 +25,7 @@ struct WorkspaceDropZone: View {
         }
         .fileImporter(
             isPresented: $isPicking,
-            allowedContentTypes: [.movie, .image, .audio, .pdf],
+            allowedContentTypes: allowedContentTypes,
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
@@ -36,11 +36,12 @@ struct WorkspaceDropZone: View {
 
     private var title: String {
         switch workspace {
-        case .inbox: "Drop recordings or screenshots"
-        case .video: "Drop clips to start a project"
-        case .photo: "Drop images to edit"
+        case .inbox: "Drop files"
+        case .video: "Drop clips"
+        case .photo: "Drop images"
         case .pdf: "Drop PDFs"
-        case .convert: "Drop anything to convert"
+        case .text: "Drop text files"
+        case .convert: "Drop files"
         }
     }
 
@@ -49,8 +50,16 @@ struct WorkspaceDropZone: View {
         case .inbox: "MOV, MP4, PNG, JPEG, HEIC"
         case .video: "MOV, MP4, M4V, WebM, MKV"
         case .photo: "PNG, JPEG, HEIC, TIFF, WebP"
-        case .pdf: "PDF pages stay local and source files remain unchanged"
+        case .pdf: "PDF"
+        case .text: "Markdown, LaTeX, code, plain text"
         case .convert: "Video, images, audio"
+        }
+    }
+
+    private var allowedContentTypes: [UTType] {
+        switch workspace {
+        case .text: [.text, .sourceCode, .plainText]
+        default: [.movie, .image, .audio, .pdf]
         }
     }
 

@@ -38,4 +38,24 @@ public enum LibraryLayout {
     public static func pdfDocuments(in root: URL) -> URL {
         internalDirectory(in: root).appendingPathComponent("pdfs", isDirectory: true)
     }
+
+    /// Persisted text-editor documents (`<assetID>.reeltext`), one per text asset.
+    public static func textDocuments(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("text", isDirectory: true)
+    }
+
+    /// Untitled scratch buffers, autosaved before they are ever named or imported.
+    ///
+    /// Like `history`, these are not assets and the library must never index them.
+    public static func scratch(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("scratch", isDirectory: true)
+    }
+
+    /// Copies of recent system captures, staged for pasting.
+    ///
+    /// Deliberately outside `Media/`: entries here are not assets, they expire,
+    /// and the library must never index them.
+    public static func captureHistory(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("history", isDirectory: true)
+    }
 }

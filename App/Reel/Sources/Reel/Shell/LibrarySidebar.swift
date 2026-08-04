@@ -43,6 +43,12 @@ struct LibrarySidebar: View {
                         count: model.assetCount(for: .pdf),
                         selected: model.selectedWorkspace == .pdf
                     ) { model.showWorkspace(.pdf) }
+                    smartRow(
+                        "Text",
+                        icon: "doc.text",
+                        count: model.assetCount(for: .text),
+                        selected: model.selectedWorkspace == .text
+                    ) { model.showWorkspace(.text) }
 
                     HStack {
                         SectionLabel(model.isSearching ? "Matching folders" : "Folders")
@@ -92,20 +98,15 @@ struct LibrarySidebar: View {
                 AppCommandRouter.run("navigation.convert", in: model)
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-            Divider().overlay(theme.palette.line)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.libraryRoot.path(percentEncoded: false))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Local only")
-            }
-            .font(theme.type.caption.font)
-            .foregroundStyle(theme.palette.textTertiary)
-            .padding(12)
+            libraryRow
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
         }
-        .frame(width: 252)
-        .background(theme.palette.surfacePanel)
+        .frame(width: 232)
+        // The fill reaches past the title bar so the traffic lights sit on the
+        // sidebar, the way they do in Finder and Xcode. Only the fill extends —
+        // the rows stay inside the safe area and clear the buttons.
+        .background(theme.palette.surfacePanel.ignoresSafeArea(.container, edges: .top))
         .alert("New Folder", isPresented: $showsNewFolder) {
             TextField("Folder name", text: $newFolderName)
             Button("Cancel", role: .cancel) {}
@@ -119,6 +120,33 @@ struct LibrarySidebar: View {
         }
     }
 
+    /// Where the library lives. This used to be the absolute path and the words
+    /// "Local only" printed under a rule — two lines of text that never changed
+    /// and that nobody reads twice. The folder name is the part worth keeping;
+    /// the path is on hover, and the folder itself is one click away.
+    private var libraryRow: some View {
+        Button(action: model.revealLibraryRootInFinder) {
+            HStack(spacing: 10) {
+                Image(systemName: "folder")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .frame(width: 16)
+                Text(model.libraryRoot.lastPathComponent)
+                    .font(theme.type.label.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ReelPlainButtonStyle())
+        .help("Reveal \(model.libraryRoot.path(percentEncoded: false)) in Finder")
+        .accessibilityIdentifier("sidebar-library-root")
+    }
+
     private func smartRow(
         _ title: String,
         icon: String,
@@ -129,11 +157,11 @@ struct LibrarySidebar: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(
-                        selected ? theme.palette.accent : theme.palette.textSecondary
+                        selected ? theme.palette.accent : theme.palette.textTertiary
                     )
-                    .frame(width: 18)
+                    .frame(width: 16)
                 Text(title)
                     .font(theme.type.label.font)
                     .foregroundStyle(
@@ -148,21 +176,13 @@ struct LibrarySidebar: View {
                         )
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 36)
+            .padding(.horizontal, 8)
+            .frame(height: 30)
             .background(selected ? theme.palette.accentDim : Color.clear)
             .clipShape(
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
-            .overlay(alignment: .leading) {
-                if selected {
-                    Capsule()
-                        .fill(theme.palette.accent)
-                        .frame(width: 3, height: 18)
-                        .padding(.leading, 2)
-                }
-            }
-            .animation(.easeOut(duration: 0.18), value: selected)
+            .animation(.easeOut(duration: 0.16), value: selected)
             .contentShape(Rectangle())
         }
         .buttonStyle(ReelPlainButtonStyle())

@@ -9,11 +9,6 @@ struct ConvertView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeader(
-                title: "Convert",
-                subtitle:
-                    "Pick a target format and see which local engine will run before committing."
-            )
             WorkspaceDropZone(model: model, workspace: .convert)
             HStack {
                 SectionLabel("Queue")
@@ -30,10 +25,7 @@ struct ConvertView: View {
             .padding(.bottom, 11)
 
             if model.conversionQueue.isEmpty {
-                EmptyState(
-                    headline: "Queue is empty",
-                    body: "Drop video, images, or audio above to choose an output format."
-                )
+                EmptyState(headline: "Queue is empty")
             } else {
                 ConversionQueue(model: model)
                 HStack {
@@ -187,6 +179,7 @@ private struct ConversionQueueRow: View {
         case .image: "photo"
         case .audio: "waveform"
         case .document: "doc"
+        case .text: "doc.text"
         }
     }
 

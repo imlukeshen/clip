@@ -30,7 +30,7 @@ public struct AVFoundationDerivativeGenerator: DerivativeGenerating {
                 assetID: assetID,
                 destinationFolder: destinationFolder
             )
-        case .audio, .document:
+        case .audio, .document, .text:
             thumbnail = nil
         }
 

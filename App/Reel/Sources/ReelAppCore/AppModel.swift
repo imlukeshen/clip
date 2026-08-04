@@ -2,10 +2,12 @@ import AIKit
 import CaptureKit
 import ConvertKit
 import CoreModel
+import DesignSystem
 import Foundation
 import LibraryStore
 import Observation
 import PDFEngine
+import TextEngine
 
 @MainActor
 @Observable
@@ -20,6 +22,13 @@ public final class AppModel {
     public var browserViewMode: BrowserViewMode = .grid
     public var assetSort: AssetSort = .modified
     public var isInspectorVisible = true
+    public private(set) var inspectorWidth = InspectorLayout.defaultWidth
+    public var appearance: AppearancePreference {
+        didSet {
+            guard appearance != oldValue else { return }
+            UserDefaults.standard.set(appearance.rawValue, forKey: "reel.appearance")
+        }
+    }
     public var isCommandPalettePresented = false
     public var commandQuery = ""
     public private(set) var shortcutRow: ShortcutRowModel
@@ -30,10 +39,15 @@ public final class AppModel {
     public private(set) var editor: EditorViewModel?
     public private(set) var imageEditor: ImageEditorViewModel?
     public private(set) var pdfEditor: PDFEditorViewModel?
+    public private(set) var textEditor: TextEditorViewModel?
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
     public private(set) var captureDirectory = SystemCaptureDestination.current()
     public private(set) var isCaptureDirectoryWatched = false
+    public private(set) var captureHistory: [CaptureHistoryItem] = []
+    public var isCaptureHistoryPresented = false
+    /// Where a finished recording goes when no editor is open to take it.
+    public private(set) var captureDestination = CaptureDestination.restored()
     public let selection = SelectionModel()
     public let undoManager = UndoManager()
     public private(set) var pendingTrashConfirmation: TrashConfirmation?
@@ -63,6 +77,10 @@ public final class AppModel {
         self.expandedFolders = Set(
             UserDefaults.standard.stringArray(forKey: "reel.expandedFolders") ?? [""]
         )
+        self.appearance =
+            UserDefaults.standard.string(forKey: "reel.appearance")
+            .flatMap(AppearancePreference.init(rawValue:)) ?? .system
+        self.inspectorWidth = InspectorLayout.restoredWidth()
         self.undoManager.groupsByEvent = false
     }
 
@@ -152,6 +170,7 @@ public final class AppModel {
         case .video: assets.count(where: { $0.kind == .video })
         case .photo: assets.count(where: { $0.kind == .image })
         case .pdf: assets.count(where: { $0.kind == .document })
+        case .text: assets.count(where: { $0.kind == .text })
         case .convert: conversionQueue.count
         }
     }
@@ -165,6 +184,12 @@ public final class AppModel {
                 libraryRoot: libraryRoot,
                 didAutomaticallyIngest: { [weak self] record in
                     await self?.handleAutomaticIngest(record)
+                },
+                didCaptureSystemFile: { [weak self] url in
+                    await self?.handleSystemCapture(url)
+                },
+                didCaptureClipboard: { [weak self] in
+                    await self?.refreshCaptureHistory()
                 }
             )
             self.runtime = runtime
@@ -203,12 +228,95 @@ public final class AppModel {
         }
     }
 
+    /// Decides what happens to a file macOS just wrote for a screenshot or
+    /// recording.
+    ///
+    /// A recording lands in the timeline if one is open, because that is what
+    /// you were about to do with it anyway. Everything else is staged in the
+    /// history, where it expires — the library only gains an asset when you
+    /// explicitly save one.
+    private func handleSystemCapture(_ url: URL) async {
+        guard let runtime else { return }
+        let isVideo = CaptureHistoryItem.kind(forPathExtension: url.pathExtension) == .video
+        if isVideo, editor != nil, imageEditor == nil, pdfEditor == nil, textEditor == nil {
+            do {
+                let record = try await runtime.ingest(url, source: .inbox)
+                await refreshAssets()
+                await handleAutomaticIngest(record)
+                return
+            } catch {
+                lastMessage = "That recording could not be opened in the timeline."
+                return
+            }
+        }
+        guard !isVideo || captureDestination == .clipboard else { return }
+        do {
+            let item = try await runtime.stageCapture(url)
+            await runtime.writeToPasteboard(item)
+            await refreshCaptureHistory()
+            lastMessage = "Copied to the clipboard."
+        } catch {
+            // A format the history cannot hold is not worth interrupting for;
+            // the file is still exactly where the system put it.
+        }
+    }
+
+    public func refreshCaptureHistory() async {
+        guard let runtime else { return }
+        captureHistory = await runtime.captureHistory()
+    }
+
+    public func captureHistoryURL(for item: CaptureHistoryItem) -> URL? {
+        runtime?.captureHistoryURL(for: item)
+    }
+
+    public func setCaptureDestination(_ destination: CaptureDestination) {
+        guard destination != captureDestination else { return }
+        captureDestination = destination
+        destination.store()
+    }
+
+    /// Puts an entry on the system pasteboard so it can be pasted in any app.
+    public func copyCaptureToPasteboard(_ item: CaptureHistoryItem) {
+        Task { await runtime?.writeToPasteboard(item) }
+        lastMessage = "Copied \(item.displayName)."
+    }
+
+    public func saveCaptureToLibrary(_ item: CaptureHistoryItem) {
+        guard let runtime else { return }
+        Task {
+            do {
+                _ = try await runtime.saveCaptureToLibrary(item)
+                await refreshAssets()
+                lastMessage = "Saved \(item.displayName) to your library."
+            } catch {
+                lastMessage = "\(item.displayName) could not be saved."
+            }
+        }
+    }
+
+    public func removeCapture(_ item: CaptureHistoryItem) {
+        guard let runtime else { return }
+        Task {
+            await runtime.removeCapture(item.id)
+            await refreshCaptureHistory()
+        }
+    }
+
+    public func clearCaptureHistory() {
+        guard let runtime else { return }
+        Task {
+            await runtime.clearCaptureHistory()
+            await refreshCaptureHistory()
+        }
+    }
+
     private func handleAutomaticIngest(_ record: AssetRecord) async {
         guard record.kind == .video else { return }
         if !assets.contains(where: { $0.id == record.id }) {
             await refreshAssets()
         }
-        guard imageEditor == nil, pdfEditor == nil else {
+        guard imageEditor == nil, pdfEditor == nil, textEditor == nil else {
             lastMessage = "Recording added to the library. Close the current editor to open it."
             return
         }
@@ -399,6 +507,37 @@ public final class AppModel {
         }
     }
 
+    /// Whether the right-hand inspector rail applies to the current workspace.
+    ///
+    /// Only the media editors carry a dedicated inspector (PDF layers, image
+    /// layers, timeline effects). While browsing the library, "Get Info" on an
+    /// item replaces the pane, so both the rail and its toolbar toggle hide.
+    public var showsEditorInspector: Bool {
+        editor != nil || imageEditor != nil || pdfEditor != nil || textEditor != nil
+    }
+
+    /// Resizes the inspector column, holding it inside the draggable range and
+    /// remembering the result for the next launch.
+    ///
+    /// Clamping lives here rather than in a `didSet`: `@Observable` turns the
+    /// property into a computed one, so assigning to it from its own observer
+    /// recurses until the stack runs out.
+    public func setInspectorWidth(_ width: Double) {
+        let width = InspectorLayout.clamped(width)
+        guard width != inspectorWidth else { return }
+        inspectorWidth = width
+        InspectorLayout.store(width)
+    }
+
+    /// The sidebar shows the library's folder name rather than its full path,
+    /// so opening it in Finder is how you get at the location itself.
+    public func revealLibraryRootInFinder() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [libraryRoot.path(percentEncoded: false)]
+        try? process.run()
+    }
+
     public func revealSelectionInFinder() {
         guard let runtime else { return }
         Task { await runtime.revealInFinder(Array(selection.selected)) }
@@ -548,6 +687,7 @@ public final class AppModel {
         case .videoEditor: openEditor(for: id)
         case .photoEditor: openImageEditor(for: id)
         case .pdfEditor: openPDFEditor(for: id)
+        case .textEditor: openTextEditor(for: id)
         case .none:
             showWorkspace(.convert)
             lastMessage = "Audio files are available in Convert."
@@ -826,7 +966,7 @@ public final class AppModel {
     }
 
     public func openEditor(for assetID: AssetID) {
-        guard editor == nil, imageEditor == nil, pdfEditor == nil,
+        guard editor == nil, imageEditor == nil, pdfEditor == nil, textEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .video }),
             let duration = asset.duration,
             let runtime
@@ -886,7 +1026,7 @@ public final class AppModel {
         for assetID: AssetID,
         initialTool: ImageEditorTool = .select
     ) {
-        guard imageEditor == nil, editor == nil, pdfEditor == nil,
+        guard imageEditor == nil, editor == nil, pdfEditor == nil, textEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .image }),
             let runtime
         else { return }
@@ -926,7 +1066,7 @@ public final class AppModel {
     }
 
     public func openPDFEditor(for assetID: AssetID) {
-        guard pdfEditor == nil, editor == nil, imageEditor == nil,
+        guard pdfEditor == nil, editor == nil, imageEditor == nil, textEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .document }),
             let runtime
         else { return }
@@ -962,10 +1102,66 @@ public final class AppModel {
         pdfEditor = nil
     }
 
+    public func openTextEditor(for assetID: AssetID) {
+        guard textEditor == nil, editor == nil, imageEditor == nil, pdfEditor == nil,
+            let asset = assets.first(where: { $0.id == assetID && $0.kind == .text }),
+            let runtime
+        else { return }
+        Task {
+            do {
+                let loaded = try await runtime.loadTextContents(for: assetID)
+                let document =
+                    try await runtime.textDocument(for: assetID)
+                    ?? TextDocument(
+                        files: [
+                            TextFile(
+                                assetID: assetID,
+                                relativePath: asset.displayName,
+                                language: LanguageDetector.detect(
+                                    path: asset.displayName,
+                                    contents: loaded.text
+                                ),
+                                encoding: loaded.encoding,
+                                lineEnding: loaded.lineEnding
+                            )
+                        ]
+                    )
+                let textEditor = TextEditorViewModel(
+                    document: document,
+                    text: loaded.text,
+                    sourceURL: try await runtime.url(for: assetID),
+                    hashingWith: { SampledFileHasher.hash($0) },
+                    persistingStructure: { document in
+                        try await runtime.saveTextDocument(document, for: assetID)
+                    },
+                    persistingContents: { data, contentHash in
+                        try await runtime.saveTextContents(
+                            data,
+                            for: assetID,
+                            contentHash: contentHash
+                        )
+                    }
+                )
+                self.textEditor = textEditor
+                selectedWorkspace = .text
+                try await runtime.saveTextDocument(document, for: assetID)
+                textEditor.start()
+            } catch {
+                lastMessage = "The selected text file could not be opened."
+            }
+        }
+    }
+
+    public func closeTextEditor() {
+        textEditor?.stop()
+        textEditor = nil
+    }
+
     private func closeOpenEditors() {
         closeEditor()
         closeImageEditor()
         closePDFEditor()
+        closeTextEditor()
     }
 
     private func refreshAssets() async {

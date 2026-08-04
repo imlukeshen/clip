@@ -333,26 +333,37 @@ private struct ImageCanvasView: View {
                     height: max(proxy.size.height, artboardSize.height + 128)
                 )
 
-                ScrollView([.horizontal, .vertical]) {
-                    ZStack {
-                        CanvasBackdrop()
-                        artboard(rendered, size: artboardSize)
-                            .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
-                        ScrollViewPanBridge(isEnabled: editor.activeTool == .pan)
-                            .frame(width: 0, height: 0)
+                ScrollViewReader { scroller in
+                    ScrollView([.horizontal, .vertical]) {
+                        ZStack {
+                            CanvasBackdrop()
+                            artboard(rendered, size: artboardSize)
+                                .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
+                            // Anchoring on the artboard centre keeps the picture in
+                            // view when a zoom change resizes the scrollable area.
+                            Color.clear
+                                .frame(width: 1, height: 1)
+                                .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
+                                .id(Self.centerAnchor)
+                            ScrollViewPanBridge(isEnabled: editor.activeTool == .pan)
+                                .frame(width: 0, height: 0)
+                        }
+                        .frame(width: workspaceSize.width, height: workspaceSize.height)
                     }
-                    .frame(width: workspaceSize.width, height: workspaceSize.height)
-                }
-                .scrollIndicators(.never)
-                .background(theme.palette.surfaceSunken)
-                .simultaneousGesture(magnificationGesture)
-                .overlay(alignment: .topTrailing) {
-                    canvasInfoBadge
-                        .padding(12)
-                }
-                .overlay(alignment: .bottom) {
-                    zoomControls
-                        .padding(.bottom, 14)
+                    .scrollIndicators(.never)
+                    .background(theme.palette.surfaceSunken)
+                    .simultaneousGesture(magnificationGesture)
+                    .onChange(of: zoomLevel) { _, _ in
+                        scroller.scrollTo(Self.centerAnchor, anchor: .center)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        canvasInfoBadge
+                            .padding(12)
+                    }
+                    .overlay(alignment: .bottom) {
+                        zoomControls(scroller: scroller)
+                            .padding(.bottom, 14)
+                    }
                 }
             } else {
                 ZStack {
@@ -401,9 +412,11 @@ private struct ImageCanvasView: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
                 .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.38), radius: 26, y: 12)
@@ -483,17 +496,25 @@ private struct ImageCanvasView: View {
                 ).insetBy(dx: -4, dy: -4)
 
                 ZStack {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(
-                            theme.palette.accent,
-                            style: StrokeStyle(lineWidth: 1.25, dash: [5, 3])
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
+                    // Marching ants rather than a tinted outline: the artwork
+                    // underneath can be any colour, so the marker carries its
+                    // own contrast instead of relying on the theme.
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.small, style: .continuous
+                    )
+                    .stroke(.black.opacity(0.5), lineWidth: 2)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.small, style: .continuous
+                    )
+                    .stroke(.white, style: StrokeStyle(lineWidth: 1.25, dash: [5, 3]))
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
                     ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
                         Circle()
-                            .fill(theme.palette.surfacePanel)
-                            .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1.25))
+                            .fill(.white)
+                            .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
                             .frame(width: 7, height: 7)
                             .position(point)
                     }
@@ -574,7 +595,7 @@ private struct ImageCanvasView: View {
     private var magnificationGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                zoomLevel = min(max(magnificationStart * value, 0.25), 4)
+                zoomLevel = CanvasZoom.pinched(from: magnificationStart, magnification: value)
             }
             .onEnded { _ in magnificationStart = zoomLevel }
     }
@@ -595,53 +616,92 @@ private struct ImageCanvasView: View {
         }
     }
 
-    private var zoomControls: some View {
+    private func zoomControls(scroller: ScrollViewProxy) -> some View {
         HStack(spacing: 5) {
             Button {
-                setZoom(zoomLevel - 0.25)
+                setZoom(CanvasZoom.zoomedOut(from: zoomLevel))
             } label: {
                 Image(systemName: "minus")
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel <= CanvasZoom.minimum)
+            .help("Zoom out")
 
-            Slider(value: $zoomLevel, in: 0.25...4)
+            Slider(value: zoomExponent, in: CanvasZoom.exponentRange)
                 .frame(width: 112)
-                .onChange(of: zoomLevel) { _, value in magnificationStart = value }
+                .accessibilityLabel("Zoom")
+                .accessibilityValue(zoomPercentage)
 
             Button {
-                setZoom(zoomLevel + 0.25)
+                setZoom(CanvasZoom.zoomedIn(from: zoomLevel))
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel >= CanvasZoom.maximum)
+            .help("Zoom in")
 
-            Text("\(Int((zoomLevel * 100).rounded()))%")
+            Text(zoomPercentage)
                 .font(theme.type.numeric.font)
                 .foregroundStyle(theme.palette.textSecondary)
                 .frame(width: 42, alignment: .trailing)
 
-            Button("Fit") { setZoom(1) }
+            Button("Recenter") { recenter(scroller) }
                 .buttonStyle(ReelPlainButtonStyle())
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textSecondary)
                 .padding(.horizontal, 4)
+                .help("Bring the image back to the middle of the canvas")
+
+            Button("Fit") {
+                setZoom(CanvasZoom.fit)
+                recenter(scroller)
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textSecondary)
+            .padding(.horizontal, 4)
+            .help("Fit the whole image in the canvas")
         }
         .padding(5)
         .background(theme.palette.surfacePanel.opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
         }
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
     }
 
+    private static let centerAnchor = "canvas.center"
+
+    private var zoomPercentage: String {
+        "\(Int((zoomLevel * 100).rounded()))%"
+    }
+
+    /// Drives the slider in octaves so the track is evenly split either side of 100%.
+    private var zoomExponent: Binding<Double> {
+        Binding(
+            get: { CanvasZoom.exponent(for: zoomLevel) },
+            set: { exponent in
+                zoomLevel = CanvasZoom.value(forExponent: exponent)
+                magnificationStart = zoomLevel
+            }
+        )
+    }
+
     private func setZoom(_ value: Double) {
         withAnimation(.smooth(duration: 0.2)) {
-            zoomLevel = min(max(value, 0.25), 4)
+            zoomLevel = CanvasZoom.clamped(value)
             magnificationStart = zoomLevel
+        }
+    }
+
+    private func recenter(_ scroller: ScrollViewProxy) {
+        withAnimation(.smooth(duration: 0.25)) {
+            scroller.scrollTo(Self.centerAnchor, anchor: .center)
         }
     }
 
@@ -759,7 +819,7 @@ private struct CropOverlay: View {
             ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
                 Circle()
                     .fill(.white)
-                    .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1))
+                    .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
                     .frame(width: 8, height: 8)
                     .position(point)
             }

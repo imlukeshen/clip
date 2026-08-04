@@ -20,12 +20,6 @@ struct PDFView: View {
 
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeader(
-                title: model.isSearching ? "PDF search" : "PDF",
-                subtitle: model.isSearching
-                    ? "Documents matching “\(model.searchQuery)”."
-                    : "Edit pages, add text and markup, export Markdown, and OCR scans locally."
-            )
             if !model.isSearching {
                 WorkspaceDropZone(model: model, workspace: .pdf)
                 HStack(spacing: theme.metrics.spacing.sm) {
@@ -35,19 +29,14 @@ struct PDFView: View {
                     }
                     .buttonStyle(ReelBorderedButtonStyle())
                     .disabled(selectedPDF == nil)
-                    Text("PDFium · local")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textTertiary)
                 }
-                .padding(.top, 18)
+                .padding(.top, 12)
             }
-            SectionLabel(model.isSearching ? "Results" : "Documents")
-                .padding(.top, 28)
-                .padding(.bottom, 11)
             AssetGrid(
                 model: model,
                 assets: model.visibleAssets.filter { $0.kind == .document }
             )
+            .padding(.top, 24)
         }
     }
 
@@ -312,11 +301,14 @@ private struct PDFPageThumbnail: View {
                     .frame(width: 92, height: 118)
                     .background(Color.white)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(
-                                isSelected ? theme.palette.accent : theme.palette.line,
-                                lineWidth: isSelected ? 2 : 1
-                            )
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.small,
+                            style: .continuous
+                        )
+                        .stroke(
+                            isSelected ? theme.palette.accent : theme.palette.line,
+                            lineWidth: isSelected ? 2 : 1
+                        )
                     }
                 Text("\(number)")
                     .font(theme.type.numeric.font)

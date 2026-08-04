@@ -13,6 +13,7 @@ public enum AssetActivationRoute: Sendable, Equatable {
     case videoEditor
     case photoEditor
     case pdfEditor
+    case textEditor
     case none
 
     public init(kind: AssetKind) {
@@ -20,6 +21,7 @@ public enum AssetActivationRoute: Sendable, Equatable {
         case .video: self = .videoEditor
         case .image: self = .photoEditor
         case .document: self = .pdfEditor
+        case .text: self = .textEditor
         case .audio: self = .none
         }
     }

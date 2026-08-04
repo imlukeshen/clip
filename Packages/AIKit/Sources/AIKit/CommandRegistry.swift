@@ -84,7 +84,15 @@ public enum CommandRegistry {
             "navigation.photo", "Open Photo Editor", .view, kind: .confirm, exposure: .onDemand),
         command("navigation.pdf", "Open PDF Workspace", .view, kind: .confirm, exposure: .onDemand),
         command(
+            "navigation.text", "Open Text Workspace", .view, kind: .confirm, exposure: .onDemand),
+        command(
             "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "capture.history", "Capture History", .app,
+            shortcut: .init("c", modifiers: ["command", "shift"]), kind: .read, exposure: .never),
+        command(
+            "capture.clearHistory", "Clear Capture History", .app, destructive: true,
+            kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
@@ -304,7 +312,8 @@ public enum CommandRegistry {
 
     /// Deliberately non-agent commands require a documented entry here.
     public static let explicitlyExcluded: [CommandID: String] = [
-        "app.commandPalette": "Opening UI chrome has no useful assistant-side effect."
+        "app.commandPalette": "Opening UI chrome has no useful assistant-side effect.",
+        "capture.history": "Opening UI chrome has no useful assistant-side effect.",
     ]
 
     public static func command(id: CommandID) -> CommandDefinition? {

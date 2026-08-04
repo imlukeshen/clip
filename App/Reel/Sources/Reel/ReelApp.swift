@@ -7,6 +7,7 @@ import SwiftUI
 @main
 struct ClipApp: App {
     @State private var model: AppModel
+    @NSApplicationDelegateAdaptor(ClipAppDelegate.self) private var appDelegate
 
     init() {
         #if APPSTORE_BUILD
@@ -33,6 +34,7 @@ struct ClipApp: App {
         WindowGroup {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
+                .onAppear { appDelegate.model = model }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
@@ -59,6 +61,7 @@ struct ClipApp: App {
                     AppCommandRouter.run("navigation.convert", in: model)
                 }
             }
+            CaptureCommands(model: model)
             CommandGroup(replacing: .undoRedo) {
                 Button(commandTitle("edit.undo")) {
                     AppCommandRouter.run("edit.undo", in: model)

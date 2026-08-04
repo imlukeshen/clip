@@ -1,6 +1,7 @@
 import CoreModel
 import Foundation
 import LibraryStore
+import TextEngine
 
 /// Coordinates stable-file detection, probing, dedupe, immutable import, and indexing.
 public actor IngestPipeline {
@@ -195,10 +196,13 @@ public actor IngestPipeline {
     }
 
     private func ensureSupported(_ url: URL) throws {
-        let supported: Set<String> = [
+        let media: Set<String> = [
             "mov", "mp4", "m4v", "webm", "mkv", "png", "jpg", "jpeg", "heic", "tif",
             "tiff", "wav", "m4a", "aac", "mp3", "flac", "pdf",
         ]
+        // Text and code files ingest as `AssetKind.text`; the recognized set is
+        // owned by the language detector so ingest and highlighting agree.
+        let supported = media.union(LanguageDetector.recognizedExtensions)
         let fileExtension = url.pathExtension.lowercased()
         guard supported.contains(fileExtension) else {
             throw IngestError.unsupportedType(fileExtension)

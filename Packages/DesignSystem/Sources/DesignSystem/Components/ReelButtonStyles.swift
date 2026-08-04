@@ -27,13 +27,17 @@ private struct ReelPlainButtonBody: View {
     var body: some View {
         configuration.label
             .contentShape(Rectangle())
-            .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.38)
-            .brightness(isEnabled && isHovered ? 0.06 : 0)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.965 : 1))
-            .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 0.75 : 0))
+            .opacity(opacity)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
             .animation(ReelMotion.buttonHover, value: isHovered)
             .onHover { isHovered = $0 }
+    }
+
+    private var opacity: Double {
+        guard isEnabled else { return 0.36 }
+        if configuration.isPressed { return 0.7 }
+        return isHovered ? 0.82 : 1
     }
 }
 
@@ -73,14 +77,7 @@ private struct ReelIconButtonBody: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
             .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.34)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.91 : 1))
-            .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 0.75 : 0))
-            .shadow(
-                color: isHovered && isEnabled && !configuration.isPressed
-                    ? .black.opacity(0.12) : .clear,
-                radius: configuration.isPressed ? 1 : 3,
-                y: configuration.isPressed ? 0 : 1
-            )
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.93 : 1))
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
             .animation(ReelMotion.buttonHover, value: isHovered)
             .animation(ReelMotion.buttonHover, value: isActive)
@@ -115,25 +112,25 @@ private struct ReelProminentButtonBody: View {
     var body: some View {
         configuration.label
             .font(theme.type.label.font)
-            .foregroundStyle(.white)
+            .foregroundStyle(theme.palette.accentOn)
             .padding(.vertical, theme.metrics.spacing.sm)
             .padding(.horizontal, theme.metrics.spacing.lg)
             .background(theme.palette.accent)
             .clipShape(
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
-            .brightness(isHovered && isEnabled ? 0.07 : 0)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.84 : 1) : 0.36)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.965 : 1))
-            .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 1 : 0))
-            .shadow(
-                color: isHovered && isEnabled && !configuration.isPressed
-                    ? theme.palette.accent.opacity(0.22) : .clear,
-                radius: configuration.isPressed ? 2 : 7,
-                y: configuration.isPressed ? 0 : 2
-            )
+            .opacity(prominenceOpacity)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
             .animation(ReelMotion.buttonHover, value: isHovered)
             .onHover { isHovered = $0 }
+    }
+
+    /// A solid neutral fill cannot brighten on hover, so the feedback comes
+    /// from the fill easing back instead.
+    private var prominenceOpacity: Double {
+        guard isEnabled else { return 0.36 }
+        if configuration.isPressed { return 0.78 }
+        return isHovered ? 0.88 : 1
     }
 }

@@ -15,40 +15,54 @@ struct ShortcutRow: View {
                         .foregroundStyle(theme.palette.textTertiary)
                         .lineLimit(2)
                     if let settingsURL = model.shortcutRow.settingsURL {
-                        Link("Open settings", destination: settingsURL)
+                        Link("Settings", destination: settingsURL)
                             .font(theme.type.caption.font)
                             .foregroundStyle(theme.palette.accent)
+                            .fixedSize()
                     }
                 }
             } else {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)],
+                    columns: [GridItem(.adaptive(minimum: 160), alignment: .leading)],
                     alignment: .leading,
                     spacing: 8
                 ) {
-                    ForEach(model.shortcutRow.items) { item in
-                        HStack(spacing: 6) {
-                            Text(item.title)
-                                .font(theme.type.caption.font)
-                                .foregroundStyle(theme.palette.textTertiary)
-                                .lineLimit(2)
-                            if let display = item.display {
-                                KbdChip(display)
-                            } else {
-                                KbdChip("Disabled", state: .disabled)
-                            }
+                    if assigned.isEmpty {
+                        Text("No capture shortcuts assigned")
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textTertiary)
+                            .lineLimit(1)
+                    } else {
+                        ForEach(assigned) { item in
+                            shortcut(item)
                         }
                     }
-                    Button("Re-detect") {
-                        model.refreshShortcuts()
-                    }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.accent)
+                    Button("Re-detect", action: model.refreshShortcuts)
+                        .buttonStyle(ReelPlainButtonStyle())
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textTertiary)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func shortcut(_ item: ShortcutItem) -> some View {
+        HStack(spacing: 5) {
+            Text(item.title)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let display = item.display {
+                KbdChip(display)
+                    .fixedSize()
+            }
+        }
+    }
+
+    private var assigned: [ShortcutItem] {
+        model.shortcutRow.items.filter { $0.display != nil }
     }
 }

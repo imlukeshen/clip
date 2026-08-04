@@ -29,29 +29,30 @@ public struct DropZone: View {
     }
 
     public var body: some View {
-        HStack(spacing: theme.metrics.spacing.lg) {
+        HStack(spacing: theme.metrics.spacing.md) {
             Image(systemName: iconName)
-                .font(theme.type.title.font)
+                .font(.system(size: 13))
                 .foregroundStyle(iconColor)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(theme.type.body.font)
-                    .foregroundStyle(theme.palette.textSecondary)
-                Text(detail)
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-            }
-            Spacer()
-            Button("Choose files", action: chooseFiles)
+            Text(title)
+                .font(theme.type.label.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .lineLimit(1)
+                .fixedSize()
+            Text(detail)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .lineLimit(1)
+                .layoutPriority(-1)
+            Spacer(minLength: theme.metrics.spacing.sm)
+            Button("Choose", action: chooseFiles)
                 .buttonStyle(ReelBorderedButtonStyle())
+                .fixedSize()
         }
-        .padding(22)
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(height: 46)
         .background(
-            state == .dragTargeted
-                ? theme.palette.accentDim
-                : (state == .hovered
-                    ? theme.palette.surfaceRaised : theme.palette.surfacePanel.opacity(0.55))
+            state == .dragTargeted ? theme.palette.accentDim : theme.palette.surfacePanel
         )
         .clipShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.dropZone, style: .continuous)
@@ -60,24 +61,23 @@ public struct DropZone: View {
             RoundedRectangle(cornerRadius: theme.metrics.radius.dropZone, style: .continuous)
                 .strokeBorder(
                     borderColor,
-                    style: StrokeStyle(lineWidth: 0.75, dash: [6, 5])
+                    lineWidth: state == .dragTargeted ? 1 : theme.metrics.hairline
                 )
         }
-        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
-        .animation(.easeOut(duration: 0.18), value: state)
+        .animation(.easeOut(duration: 0.16), value: state)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title). \(detail)")
     }
 
     private var iconName: String {
-        state == .rejecting ? "xmark" : "square.and.arrow.down"
+        state == .rejecting ? "xmark" : "tray.and.arrow.down"
     }
 
     private var borderColor: Color {
         switch state {
-        case .idle: theme.palette.lineStrong
-        case .hovered: theme.palette.textTertiary
+        case .idle: theme.palette.line
+        case .hovered: theme.palette.lineStrong
         case .dragTargeted: theme.palette.accent
         case .rejecting: theme.palette.danger
         }

@@ -15,11 +15,11 @@ public struct StatusStrip<Content: View>: View {
     }
 
     public var body: some View {
-        HStack(spacing: theme.metrics.spacing.xl) {
+        HStack(spacing: theme.metrics.spacing.lg) {
             content
         }
-        .padding(.vertical, 11)
         .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(height: 38)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.surfacePanel)
         .clipShape(
@@ -29,7 +29,6 @@ public struct StatusStrip<Content: View>: View {
             RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
         }
-        .shadow(color: .black.opacity(0.05), radius: 7, y: 2)
     }
 }
 
@@ -56,26 +55,31 @@ public struct StatusItem: View {
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(stateColor)
-                .frame(width: 6, height: 6)
+                .frame(width: 5, height: 5)
                 .accessibilityHidden(true)
             Text(title)
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textSecondary)
+                .fixedSize()
             if let detail {
                 Text(detail)
-                    .font(theme.type.numeric.font)
+                    .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
             }
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(ReelPlainButtonStyle())
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
+                    .fixedSize()
             }
         }
+        .lineLimit(1)
         .accessibilityElement(children: .combine)
         .accessibilityValue(accessibilityValue)
     }

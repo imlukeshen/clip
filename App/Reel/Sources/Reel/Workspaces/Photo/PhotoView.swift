@@ -18,12 +18,6 @@ struct PhotoView: View {
 
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeader(
-                title: model.isSearching ? "Photo search" : "Photo",
-                subtitle: model.isSearching
-                    ? "Images matching “\(model.searchQuery)”."
-                    : "Annotate, crop, and redact. Redaction flattens pixels rather than drawing over them."
-            )
             if !model.isSearching {
                 WorkspaceDropZone(model: model, workspace: .photo)
                 HStack(spacing: theme.metrics.spacing.sm) {
@@ -39,15 +33,13 @@ struct PhotoView: View {
                     Chip("Padding") { open(.padding) }
                         .disabled(selectedImage == nil)
                 }
-                .padding(.top, 18)
+                .padding(.top, 12)
             }
-            SectionLabel(model.isSearching ? "Results" : "Images")
-                .padding(.top, 28)
-                .padding(.bottom, 11)
             AssetGrid(
                 model: model,
                 assets: model.visibleAssets.filter { $0.kind == .image }
             )
+            .padding(.top, 24)
         }
     }
 

@@ -16,6 +16,7 @@ let package = Package(
         .package(path: "../../Packages/ConvertKit"),
         .package(path: "../../Packages/MediaEngine"),
         .package(path: "../../Packages/PDFEngine"),
+        .package(path: "../../Packages/TextEngine"),
         .package(path: "../../Packages/AIKit"),
         .package(path: "../../Packages/DesignSystem"),
     ],
@@ -29,6 +30,7 @@ let package = Package(
                 "ConvertKit",
                 "MediaEngine",
                 "PDFEngine",
+                "TextEngine",
                 "AIKit",
                 "DesignSystem",
             ]
@@ -43,6 +45,7 @@ let package = Package(
                 "ConvertKit",
                 "MediaEngine",
                 "PDFEngine",
+                "TextEngine",
                 "AIKit",
             ],
             resources: [

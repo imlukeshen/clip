@@ -360,8 +360,10 @@ struct EditorView: View {
             clickMarkers: editor.timelineClickMarkers,
             isSnappingEnabled: editor.isSnappingEnabled,
             activeTool: editor.activeTool,
-            accent: NSColor(theme.palette.accent),
-            accentDim: NSColor(theme.palette.accentDim),
+            // The timeline is always dark, so it takes the dark tokens whichever
+            // appearance the rest of the app is using.
+            accent: NSColor(Theme.dark.palette.accent),
+            accentDim: NSColor(Theme.dark.palette.accentDim),
             surface: NSColor(Theme.dark.palette.surfaceSunken),
             clip: NSColor(Theme.dark.palette.surfaceRaised),
             line: NSColor(Theme.dark.palette.lineStrong),
@@ -371,6 +373,7 @@ struct EditorView: View {
             click: NSColor(Theme.dark.palette.click),
             caption: NSColor(Theme.dark.palette.accent),
             playheadColor: NSColor(Theme.dark.palette.danger),
+            clipCornerRadius: theme.metrics.radius.small,
             onSelect: editor.select,
             onSeek: editor.seek,
             onScrubbing: editor.setScrubbing,
@@ -851,11 +854,8 @@ struct EditorInspector: View {
             }
             .padding(14)
         } else {
-            EmptyState(
-                headline: "Select a clip",
-                body: "Adjust its speed or split it at the playhead."
-            )
-            .padding(14)
+            EmptyState(headline: "No clip selected")
+                .padding(14)
             Spacer()
         }
     }

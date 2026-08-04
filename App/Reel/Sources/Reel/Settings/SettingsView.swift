@@ -1,4 +1,5 @@
 import AIKit
+import CaptureKit
 import DesignSystem
 import Foundation
 import ReelAppCore
@@ -10,7 +11,9 @@ struct SettingsView: View {
 
     var body: some View {
         SettingsContent(model: model, settings: model.aiSettings)
-            .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+            .environment(\.theme, model.appearance.theme(matching: colorScheme))
+            .tint(model.appearance.theme(matching: colorScheme).palette.accent)
+            .preferredColorScheme(model.appearance.colorScheme)
             .frame(width: 560, height: 520)
     }
 }
@@ -35,6 +38,28 @@ private struct SettingsContent: View {
                 Button("Revert library migration…", role: .destructive) {
                     model.revertLibraryMigration()
                 }
+            }
+            Picker("Appearance", selection: $model.appearance) {
+                ForEach(AppearancePreference.allCases, id: \.self) { preference in
+                    Text(preference.title).tag(preference)
+                }
+            }
+            Section("Capture") {
+                Picker("New recordings", selection: captureDestinationBinding) {
+                    ForEach(CaptureDestination.allCases) { destination in
+                        Text(destination.title).tag(destination)
+                    }
+                }
+                Text(model.captureDestination.detail)
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                Text(
+                    "Screenshots always go to the capture history. Nothing is added to "
+                        + "your library until you save it, and the file macOS wrote stays "
+                        + "where it is."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
             }
             Section("Assistant") {
                 Picker("Provider", selection: providerBinding) {
@@ -99,6 +124,15 @@ private struct SettingsContent: View {
             AcknowledgementsView()
                 .environment(\.theme, theme)
         }
+    }
+
+    private var captureDestinationBinding: Binding<CaptureDestination> {
+        // Written as a closure rather than a method reference: the reabstraction
+        // thunk the latter produces crashes IRGen in this toolchain.
+        Binding(
+            get: { model.captureDestination },
+            set: { model.setCaptureDestination($0) }
+        )
     }
 
     private var providerBinding: Binding<ProviderID> {

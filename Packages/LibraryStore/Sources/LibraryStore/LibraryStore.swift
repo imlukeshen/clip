@@ -72,8 +72,12 @@ public actor LibraryStore {
                 to: metadataURL(for: asset.id),
                 options: .atomic
             )
+            // Text assets are the one editable kind (invariant I5's documented
+            // exception, ADR-0009): the edited file on disk *is* the deliverable,
+            // so it stays user-writable. Every other kind is frozen read-only.
+            let permissions = asset.kind == .text ? Int16(0o644) : Int16(0o444)
             try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o444))],
+                [.posixPermissions: NSNumber(value: permissions)],
                 ofItemAtPath: mediaURL.path
             )
             try? await bookmarks.storeFileReference(mediaURL, key: bookmarkKey(for: asset.id))
@@ -251,6 +255,71 @@ public actor LibraryStore {
         }
         try await bookmarks.storeFileReference(url, key: bookmarkKey(for: assetID))
         try await setMissing(nil, for: record)
+    }
+
+    /// Overwrites the on-disk bytes of an editable text asset and re-indexes it.
+    ///
+    /// This is the **only** sanctioned write into `Media/`. It exists because
+    /// text assets are invariant I5's documented exception (ADR-0009): unlike
+    /// video, image, and PDF assets — which stay frozen while edits accumulate in
+    /// a `.reel/` overlay — an edited text file *is* the deliverable, so the file
+    /// on disk must reflect what the user typed for external tools and indexing.
+    ///
+    /// The caller supplies the freshly hashed content (using the same sampled
+    /// SHA-256 as ingest) so `LibraryStore` need not depend on the hasher; this
+    /// method owns the atomic file write and the metadata/index update together.
+    ///
+    /// - Parameters:
+    ///   - data: The new UTF-8 (or otherwise encoded) file bytes.
+    ///   - assetID: The text asset to overwrite.
+    ///   - contentHash: The sampled SHA-256 of `data`, precomputed by the caller.
+    /// - Returns: The updated asset record.
+    /// - Throws: ``LibraryError`` if the asset is missing, not text, or the write
+    ///   or index update fails.
+    @discardableResult
+    public func saveTextContents(
+        _ data: Data,
+        for assetID: AssetID,
+        contentHash: String
+    ) async throws -> AssetRecord {
+        guard var asset = try await asset(id: assetID) else {
+            throw LibraryError.assetNotFound(assetID)
+        }
+        guard asset.kind == .text else {
+            throw LibraryError.fileOperationFailed("save non-text asset in place")
+        }
+        let mediaURL = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
+        let byteSize = Int64(data.count)
+        asset.contentHash = contentHash
+        asset.byteSize = byteSize
+
+        do {
+            try data.write(to: mediaURL, options: .atomic)
+            // `.atomic` replaces the file via a rename, which can reset the mode
+            // to the process umask; restore the editable bit the exception grants.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o644))],
+                ofItemAtPath: mediaURL.path
+            )
+            try MetadataCodec.encode(asset).write(
+                to: metadataURL(for: asset.id),
+                options: .atomic
+            )
+        } catch {
+            throw LibraryError.fileOperationFailed("save text contents")
+        }
+        do {
+            try await database.write { db in
+                try db.execute(
+                    sql: "UPDATE asset SET content_hash = ?, byte_size = ? WHERE id = ?",
+                    arguments: [contentHash, byteSize, assetID.rawValue]
+                )
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("update text contents")
+        }
+        changeContinuation.yield(.assetUpdated(assetID))
+        return asset
     }
 
     /// Atomically stores an event sidecar and updates its indexed asset summary.
