@@ -19,6 +19,7 @@ public enum FFmpegRecipe: String, Sendable, Equatable, CaseIterable {
     case animatedGIF
     case matroska
     case flac
+    case webP
 }
 
 /// Formats exposed by the conversion queue.
@@ -36,6 +37,12 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
     case jpeg
     case heic
     case tiff
+    case webP
+    case pdf
+    case html
+    case markdown
+    case rtf
+    case plainText
 
     public var id: Self { self }
 
@@ -54,6 +61,12 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .jpeg: "JPEG"
         case .heic: "HEIC"
         case .tiff: "TIFF"
+        case .webP: "WebP"
+        case .pdf: "PDF"
+        case .html: "HTML"
+        case .markdown: "Markdown"
+        case .rtf: "Rich Text"
+        case .plainText: "Plain Text"
         }
     }
 
@@ -69,6 +82,12 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .jpeg: "jpg"
         case .heic: "heic"
         case .tiff: "tiff"
+        case .webP: "webp"
+        case .pdf: "pdf"
+        case .html: "html"
+        case .markdown: "md"
+        case .rtf: "rtf"
+        case .plainText: "txt"
         }
     }
 
@@ -87,6 +106,12 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .jpeg: ConversionFormats.jpeg
         case .heic: ConversionFormats.heic
         case .tiff: ConversionFormats.tiff
+        case .webP: ConversionFormats.webP
+        case .pdf: ConversionFormats.pdf
+        case .html: ConversionFormats.html
+        case .markdown: ConversionFormats.markdown
+        case .rtf: ConversionFormats.rtf
+        case .plainText: ConversionFormats.plainText
         }
     }
 }

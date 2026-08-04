@@ -67,6 +67,16 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 isLossless: true,
                 supportedOptions: [.audio, .trim, .stripMetadata]
             ),
+            ConversionEdge(
+                from: .oneOf([ConversionFormats.png, ConversionFormats.jpeg]),
+                to: ConversionFormats.webP,
+                backend: id,
+                implementation: .ffmpeg(.webP),
+                cost: .expensive,
+                isLossless: false,
+                warnings: ["This image format uses lossy compression."],
+                supportedOptions: [.quality, .resize, .stripMetadata]
+            ),
         ]
     }
 
@@ -148,6 +158,7 @@ extension FFmpegRecipe {
         case .animatedGIF: ReelFFmpegRecipeAnimatedGIF
         case .matroska: ReelFFmpegRecipeMatroska
         case .flac: ReelFFmpegRecipeFLAC
+        case .webP: ReelFFmpegRecipeWebP
         }
     }
 }

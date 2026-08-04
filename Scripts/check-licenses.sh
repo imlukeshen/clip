@@ -14,7 +14,7 @@ if [[ -n "$unexpected" ]]; then
     exit 1
 fi
 
-for heading in 'FFmpeg 7.1.2' 'libvpx 1.15.2' 'libaom 3.12.1' 'GRDB.swift 7.11.1' \
+for heading in 'FFmpeg 7.1.2' 'libvpx 1.15.2' 'libaom 3.12.1' 'libwebp 1.6.0' 'GRDB.swift 7.11.1' \
     'PDFium 152.0.7961.0'; do
     if ! grep -Fq "$heading" ACKNOWLEDGEMENTS.md; then
         echo "Acknowledgements are missing $heading" >&2

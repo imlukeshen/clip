@@ -7,6 +7,8 @@ readonly AOM_VERSION="3.12.1"
 readonly AOM_SHA256="9e9775180dec7dfd61a79e00bda3809d43891aee6b2e331ff7f26986207ea22e"
 readonly VPX_VERSION="1.15.2"
 readonly VPX_SHA256="26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa"
+readonly WEBP_VERSION="1.6.0"
+readonly WEBP_SHA256="e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564"
 readonly DEPLOYMENT_TARGET="14.0"
 
 readonly ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,8 +45,9 @@ fetch() {
     fi
 }
 
-mkdir -p "$WORK_DIR/sources/vpx" "$WORK_DIR/sources/aom" \
+mkdir -p "$WORK_DIR/sources/vpx" "$WORK_DIR/sources/aom" "$WORK_DIR/sources/webp" \
     "$WORK_DIR/sources/ffmpeg" "$WORK_DIR/build/vpx" "$WORK_DIR/build/aom" \
+    "$WORK_DIR/build/webp" \
     "$WORK_DIR/framework" "$CODEC_PREFIX"
 
 fetch \
@@ -59,9 +62,14 @@ fetch \
     "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
     "$FFMPEG_SHA256" \
     "$WORK_DIR/ffmpeg.tar.xz"
+fetch \
+    "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-$WEBP_VERSION.tar.gz" \
+    "$WEBP_SHA256" \
+    "$WORK_DIR/libwebp.tar.gz"
 
 tar -xf "$WORK_DIR/libvpx.tar.gz" -C "$WORK_DIR/sources/vpx" --strip-components=1
 tar -xf "$WORK_DIR/libaom.tar.gz" -C "$WORK_DIR/sources/aom" --strip-components=1
+tar -xf "$WORK_DIR/libwebp.tar.gz" -C "$WORK_DIR/sources/webp" --strip-components=1
 tar -xf "$WORK_DIR/ffmpeg.tar.xz" -C "$WORK_DIR/sources/ffmpeg" --strip-components=1
 
 (
@@ -102,6 +110,27 @@ cmake \
 cmake --build "$WORK_DIR/build/aom" --parallel "$(sysctl -n hw.ncpu)"
 cmake --install "$WORK_DIR/build/aom"
 
+cmake \
+    -S "$WORK_DIR/sources/webp" \
+    -B "$WORK_DIR/build/webp" \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$CODEC_PREFIX" \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+    -DBUILD_SHARED_LIBS=1 \
+    -DWEBP_BUILD_ANIM_UTILS=0 \
+    -DWEBP_BUILD_CWEBP=0 \
+    -DWEBP_BUILD_DWEBP=0 \
+    -DWEBP_BUILD_EXTRAS=0 \
+    -DWEBP_BUILD_GIF2WEBP=0 \
+    -DWEBP_BUILD_IMG2WEBP=0 \
+    -DWEBP_BUILD_VWEBP=0 \
+    -DWEBP_BUILD_WEBPINFO=0 \
+    -DWEBP_BUILD_WEBPMUX=0
+cmake --build "$WORK_DIR/build/webp" --parallel "$(sysctl -n hw.ncpu)"
+cmake --install "$WORK_DIR/build/webp"
+
 (
     cd "$WORK_DIR/sources/ffmpeg"
     export PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig"
@@ -129,6 +158,7 @@ cmake --install "$WORK_DIR/build/aom"
         --disable-iconv \
         --enable-libvpx \
         --enable-libaom \
+        --enable-libwebp \
         --enable-videotoolbox \
         --enable-audiotoolbox \
         --enable-bzlib \
@@ -179,10 +209,17 @@ copy_library "$FFMPEG_PREFIX/lib/libswscale.8.dylib" "libswscale.8.dylib"
 copy_library "$FFMPEG_PREFIX/lib/libavutil.59.dylib" "libavutil.59.dylib"
 copy_library "$CODEC_PREFIX/lib/libvpx.11.dylib" "libvpx.11.dylib"
 copy_library "$CODEC_PREFIX/lib/libaom.3.dylib" "libaom.3.dylib"
+copy_library "$CODEC_PREFIX/lib/libwebp.7.dylib" "libwebp.7.dylib"
+copy_library "$CODEC_PREFIX/lib/libsharpyuv.0.dylib" "libsharpyuv.0.dylib"
+copy_library "$CODEC_PREFIX/lib/libwebpmux.3.dylib" "libwebpmux.3.dylib"
 
 for library in "$VERSION_DIR/Frameworks"/libav*.dylib; do
     install_name_tool -change libvpx.11.dylib @rpath/libvpx.11.dylib "$library" 2>/dev/null || true
+    install_name_tool -change libwebp.7.dylib @rpath/libwebp.7.dylib "$library" 2>/dev/null || true
 done
+
+install_name_tool -change libsharpyuv.0.dylib @rpath/libsharpyuv.0.dylib \
+    "$VERSION_DIR/Frameworks/libwebp.7.dylib"
 
 ln -s A "$FRAMEWORK_DIR/Versions/Current"
 ln -s Versions/Current/ReelFFmpeg "$FRAMEWORK_DIR/ReelFFmpeg"

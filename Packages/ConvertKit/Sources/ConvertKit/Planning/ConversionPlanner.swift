@@ -101,45 +101,11 @@ public enum BuiltInConversionGraph {
         RemuxTranscoder().edges()
             + VideoToolboxTranscoder().edges()
             + ImageIOTranscoder().edges()
-            + documentEdges
+            + PDFKitBackend().edges()
+            + AttributedStringBackend().edges()
+            + WebKitBackend().edges()
+            + MarkdownBackend().edges()
             + FFmpegTranscoder().edges()
-    }
-
-    private static let documentEdges: [ConversionEdge] = [
-        edge(
-            .oneOf(ConversionFormats.richTextInputs), to: ConversionFormats.html,
-            backend: .attributedString, implementation: .attributedString, cost: .cheap,
-            isLossless: true),
-        edge(
-            .exact(ConversionFormats.markdown), to: ConversionFormats.html,
-            backend: .markdown, implementation: .markdown, cost: .cheap,
-            isLossless: true),
-        edge(
-            .exact(ConversionFormats.html), to: ConversionFormats.pdf,
-            backend: .webKit, implementation: .webKit, cost: .cheap,
-            isLossless: false, warnings: ["Document layout may change during PDF rendering."],
-            supportedOptions: [.stripMetadata]),
-        edge(
-            .exact(ConversionFormats.pdf), to: ConversionFormats.png,
-            backend: .pdfKit, implementation: .pdfKit, cost: .cheap,
-            isLossless: false, warnings: ["PDF pages will be rasterized."],
-            supportedOptions: [.pageRange, .rasterizationDPI, .stripMetadata]),
-    ]
-
-    private static func edge(
-        _ from: FormatMatcher,
-        to: FormatID,
-        backend: BackendID,
-        implementation: Backend,
-        cost: ConversionCost,
-        isLossless: Bool,
-        warnings: [String] = [],
-        supportedOptions: ConversionOptionSupport = []
-    ) -> ConversionEdge {
-        ConversionEdge(
-            from: from, to: to, backend: backend, implementation: implementation,
-            cost: cost, isLossless: isLossless, warnings: warnings,
-            supportedOptions: supportedOptions)
     }
 }
 

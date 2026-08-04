@@ -11,6 +11,12 @@ public struct FormatID: Hashable, Sendable {
         self.type = type
         self.codec = codec?.lowercased()
     }
+
+    /// A stable extension for intermediate files created by a multi-hop plan.
+    public var preferredFilenameExtension: String {
+        if let preferred = type.preferredFilenameExtension { return preferred }
+        return type.identifier.split(separator: ".").last.map(String.init) ?? "tmp"
+    }
 }
 
 public enum ConversionFormats {
@@ -37,6 +43,7 @@ public enum ConversionFormats {
     public static let rtf = FormatID(type: .rtf)
     public static let doc = FormatID(type: type("doc"))
     public static let docx = FormatID(type: type("docx"))
+    public static let svg = FormatID(type: .svg)
 
     public static let imageInputs: [FormatID] = [
         png, jpeg, heic, tiff, animatedGIF,

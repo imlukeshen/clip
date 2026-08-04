@@ -29,9 +29,27 @@ three-clause BSD license.
 - Source: <https://aomedia.googlesource.com/aom/+/refs/tags/v3.12.1>
 - License: [`Vendor/ffmpeg/LICENSE.libaom`](Vendor/ffmpeg/LICENSE.libaom)
 
+## libwebp 1.6.0
+
+Copyright © the WebP project authors. Licensed under the three-clause BSD
+license.
+
+- Source: <https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz>
+- License: [`Vendor/ffmpeg/LICENSE.libwebp`](Vendor/ffmpeg/LICENSE.libwebp)
+
 ## GRDB.swift 7.11.1
 
 Copyright © 2015–2025 Gwendal Roué. Licensed under the MIT License.
 
 - Source: <https://github.com/groue/GRDB.swift/releases/tag/v7.11.1>
 - License: [`Vendor/licenses/GRDB-LICENSE`](Vendor/licenses/GRDB-LICENSE)
+
+## PDFium 152.0.7961.0
+
+Copyright © the PDFium authors. Licensed under the three-clause BSD license;
+the pinned non-V8 binary also includes permissively licensed third-party
+components whose complete notices are shipped with Clip.
+
+- Source: <https://pdfium.googlesource.com/pdfium/>
+- Binary: <https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7961>
+- Licenses: [`Vendor/pdfium/licenses`](Vendor/pdfium/licenses)
