@@ -1,3 +1,4 @@
+import AppKit
 import DesignSystem
 import ReelAppCore
 import SwiftUI
@@ -101,7 +102,7 @@ struct Titlebar: View {
                     if model.isSearching {
                         model.clearSearch()
                     } else {
-                        isSearchFocused = false
+                        dismissSearchFocus()
                     }
                 }
             Group {
@@ -139,7 +140,7 @@ struct Titlebar: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
                     .fill(theme.palette.surfacePanel)
                 OutsideClickMonitor(isActive: isSearchFocused) {
-                    isSearchFocused = false
+                    dismissSearchFocus()
                 }
             }
         }
@@ -159,6 +160,17 @@ struct Titlebar: View {
         .animation(.easeOut(duration: 0.16), value: isSearchHovered)
         .animation(.easeOut(duration: 0.16), value: model.isSearching)
         .onHover { isSearchHovered = $0 }
+    }
+
+    private func dismissSearchFocus() {
+        isSearchFocused = false
+        // SwiftUI can immediately restore the field editor during the same
+        // mouse event. Resigning on the next main-loop turn makes an outside
+        // click reliably dismiss the caret as well as the focus styling.
+        Task { @MainActor in
+            await Task.yield()
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
     }
 
     private var breadcrumb: some View {

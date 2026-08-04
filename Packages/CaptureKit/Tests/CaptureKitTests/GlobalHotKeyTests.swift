@@ -73,7 +73,7 @@ struct GlobalHotKeyTests {
         )
         #expect(created == noErr)
         if let event {
-            #expect(SendEventToEventTarget(event, GetApplicationEventTarget()) == noErr)
+            #expect(SendEventToEventTarget(event, GetEventDispatcherTarget()) == noErr)
             ReleaseEvent(event)
         }
 

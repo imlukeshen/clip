@@ -17,13 +17,13 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotKey = GlobalHotKey()
     private var panel: ClipboardPanelController?
+    private var lastHotKeyToggleUptime: TimeInterval = 0
 
     /// Bridges the model created by `ClipApp` into AppKit before any window is
     /// restored. The global clipboard belongs to the running process, not a
     /// particular window, so it must not depend on `MainWindow.onAppear`.
     static func prepare(model: AppModel) {
         preparedModel = model
-        (NSApp.delegate as? ClipAppDelegate)?.install(model: model)
     }
 
     /// The process-shared model prepared by `ClipApp`. The delegate holds it
@@ -63,7 +63,16 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     /// open. If Carbon registration is unavailable, the menu command remains a
     /// local fallback and opens the same history in-window.
     func handleHotKey() {
+        // `NSApplication` and SwiftUI can finish their launch callbacks in
+        // either order. Resolve the prepared process model lazily as a final
+        // guard so the very first shortcut never depends on a window callback.
+        if model == nil, let preparedModel = Self.preparedModel {
+            model = preparedModel
+        }
         guard let model else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastHotKeyToggleUptime > 0.15 else { return }
+        lastHotKeyToggleUptime = now
         model.isCaptureHistoryPresented = false
         panel?.toggle()
     }

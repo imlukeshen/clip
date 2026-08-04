@@ -81,7 +81,7 @@ private final class HotKeyContext: @unchecked Sendable {
         )
         var handlerRef: EventHandlerRef?
         let installed = InstallEventHandler(
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             hotKeyEventHandler,
             1,
             &eventType,
@@ -99,7 +99,7 @@ private final class HotKeyContext: @unchecked Sendable {
             keyCode,
             modifiers,
             hotKeyID,
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             0,
             &hotKey
         )
