@@ -167,7 +167,14 @@ private struct ThemedMainWindow: View {
     }
 
     @ViewBuilder private var workspace: some View {
-        if (model.selectedWorkspace == .video && model.editor != nil)
+        if model.isSearching {
+            ScrollView {
+                SearchResultsView(model: model)
+                    .frame(maxWidth: 1_100, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .scrollIndicators(.visible)
+        } else if (model.selectedWorkspace == .video && model.editor != nil)
             || (model.selectedWorkspace == .photo && model.imageEditor != nil)
             || (model.selectedWorkspace == .pdf && model.pdfEditor != nil)
             || (model.selectedWorkspace == .text && model.textEditor != nil)

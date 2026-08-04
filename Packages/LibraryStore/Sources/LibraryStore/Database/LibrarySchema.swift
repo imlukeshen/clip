@@ -152,6 +152,76 @@ enum LibrarySchema {
                     """
             )
         }
+        migrator.registerMigration("v6-search-keywords") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE transcript_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      start_value INTEGER NOT NULL,
+                      start_scale INTEGER NOT NULL,
+                      end_value   INTEGER NOT NULL,
+                      end_scale   INTEGER NOT NULL,
+                      text        TEXT NOT NULL,
+                      script      TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_transcript_asset ON transcript_span(asset_id);
+
+                    CREATE VIRTUAL TABLE transcript_fts USING fts5(
+                      text,
+                      content='transcript_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE transcript_fts_cjk USING fts5(
+                      text,
+                      content='transcript_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+                    CREATE TRIGGER transcript_fts_insert AFTER INSERT ON transcript_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_delete AFTER DELETE ON transcript_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO transcript_fts(transcript_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_cjk_insert AFTER INSERT ON transcript_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO transcript_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_cjk_delete AFTER DELETE ON transcript_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO transcript_fts_cjk(transcript_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+
+                    CREATE VIRTUAL TABLE asset_fts USING fts5(
+                      asset_id UNINDEXED,
+                      display_name,
+                      relative_path,
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE TRIGGER asset_fts_insert AFTER INSERT ON asset BEGIN
+                      INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                      VALUES (new.id, new.display_name, new.relative_path);
+                    END;
+                    CREATE TRIGGER asset_fts_update AFTER UPDATE OF display_name, relative_path
+                    ON asset BEGIN
+                      DELETE FROM asset_fts WHERE asset_id = old.id;
+                      INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                      VALUES (new.id, new.display_name, new.relative_path);
+                    END;
+                    CREATE TRIGGER asset_fts_delete AFTER DELETE ON asset BEGIN
+                      DELETE FROM asset_fts WHERE asset_id = old.id;
+                    END;
+                    INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                    SELECT id, display_name, relative_path FROM asset;
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }

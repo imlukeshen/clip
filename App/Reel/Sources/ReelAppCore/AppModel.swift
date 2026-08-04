@@ -14,8 +14,16 @@ import TextEngine
 @Observable
 public final class AppModel {
     public private(set) var selectedWorkspace: Workspace = .inbox
-    public var searchQuery = ""
+    public var searchQuery = "" {
+        didSet {
+            guard searchQuery != oldValue else { return }
+            scheduleLibrarySearch()
+        }
+    }
     public private(set) var searchFocusRequest = 0
+    public private(set) var searchHits: [SearchHit] = []
+    public private(set) var isSearchLoading = false
+    public private(set) var isSearchComplete = true
     public private(set) var assets: [AssetRecord] = []
     public private(set) var folderTree: FolderNode?
     public private(set) var expandedFolders: Set<String>
@@ -68,6 +76,7 @@ public final class AppModel {
     private var libraryChangesTask: Task<Void, Never>?
     private var indexProgressTask: Task<Void, Never>?
     private var indexActivityTask: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
     private var folderForwardHistory: [String?] = []
@@ -129,6 +138,10 @@ public final class AppModel {
 
     public var visibleAssets: [AssetRecord] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty, !isSearchLoading || !searchHits.isEmpty {
+            let assetsByID = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+            return searchHits.compactMap { assetsByID[$0.assetID] }
+        }
         let scoped: [AssetRecord]
         if !query.isEmpty {
             scoped = assets
@@ -157,7 +170,7 @@ public final class AppModel {
     }
 
     public var searchResultDescription: String {
-        let mediaCount = visibleAssets.count
+        let mediaCount = isSearching ? searchHits.count : visibleAssets.count
         let folderCount = matchingFolders.count
         return
             "\(mediaCount) media item\(mediaCount == 1 ? "" : "s") and \(folderCount) folder\(folderCount == 1 ? "" : "s")"
@@ -200,6 +213,7 @@ public final class AppModel {
             )
             self.runtime = runtime
             beginIndexMonitoring(runtime)
+            scheduleLibrarySearch()
             let changes = await runtime.changes()
             libraryChangesTask = Task { [weak self] in
                 for await _ in changes {
@@ -247,6 +261,44 @@ public final class AppModel {
                     previous = reasons
                 }
                 try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
+    private func scheduleLibrarySearch() {
+        searchTask?.cancel()
+        let value = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            searchHits = []
+            isSearchLoading = false
+            isSearchComplete = true
+            return
+        }
+        guard let runtime else {
+            isSearchLoading = true
+            return
+        }
+        isSearchLoading = true
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(160))
+                let response = try await runtime.search(SearchQuery(text: value, limit: 100))
+                guard !Task.isCancelled,
+                    self?.searchQuery.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ) == value
+                else { return }
+                self?.searchHits = response.hits
+                self?.isSearchComplete = response.isComplete
+                self?.isSearchLoading = false
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.searchHits = []
+                self?.isSearchComplete = true
+                self?.isSearchLoading = false
+                self?.lastMessage = error.localizedDescription
             }
         }
     }
@@ -729,6 +781,22 @@ public final class AppModel {
         }
     }
 
+    public func activateSearchHit(_ hit: SearchHit, moment: SearchMoment? = nil) {
+        guard let asset = assets.first(where: { $0.id == hit.assetID }) else { return }
+        let destination = moment?.start ?? hit.moments.first?.start
+        clearSearch()
+        selection.selectOnly(asset.id)
+        guard !asset.isMissing else {
+            lastMessage = "Locate this missing file before opening it."
+            return
+        }
+        if asset.kind == .video {
+            openEditor(for: asset.id, initialTime: destination)
+        } else {
+            activateAsset(asset.id)
+        }
+    }
+
     public func clearSearch() {
         searchQuery = ""
     }
@@ -1000,7 +1068,7 @@ public final class AppModel {
         assistantMessages.append(AssistantMessage(role: .status, text: "Edit skipped."))
     }
 
-    public func openEditor(for assetID: AssetID) {
+    public func openEditor(for assetID: AssetID, initialTime: RationalTime? = nil) {
         guard editor == nil, imageEditor == nil, pdfEditor == nil, textEditor == nil,
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .video }),
             let duration = asset.duration,
@@ -1036,6 +1104,7 @@ public final class AppModel {
             )
             self.editor = editor
             selectedWorkspace = .video
+            if let initialTime { editor.seek(to: initialTime) }
             Task {
                 do {
                     try await runtime.saveProject(document)

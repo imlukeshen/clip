@@ -104,3 +104,63 @@ public struct OCRSpan: Codable, Sendable, Equatable, Identifiable {
         self.script = script
     }
 }
+
+/// One searchable phrase spoken during a media asset.
+public struct TranscriptSpan: Codable, Sendable, Equatable, Identifiable {
+    public var id: Int64?
+    public var assetID: AssetID
+    public var start: RationalTime
+    public var end: RationalTime
+    public var text: String
+    public var script: OCRScript
+
+    public init(
+        id: Int64? = nil,
+        assetID: AssetID,
+        start: RationalTime,
+        end: RationalTime,
+        text: String,
+        script: OCRScript
+    ) {
+        self.id = id
+        self.assetID = assetID
+        self.start = start
+        self.end = end
+        self.text = text
+        self.script = script
+    }
+}
+
+/// Exact-text source returned by the durable keyword index.
+public enum SearchHitSource: String, Codable, Sendable, Equatable, Hashable {
+    case ocr
+    case transcript
+    case summary
+    case filename
+}
+
+/// A raw BM25 match decoded by LibraryStore before asset-level fusion.
+public struct IndexedTextMatch: Sendable, Equatable {
+    public var assetID: AssetID
+    public var source: SearchHitSource
+    public var start: RationalTime?
+    public var end: RationalTime?
+    public var text: String
+    public var rank: Double
+
+    public init(
+        assetID: AssetID,
+        source: SearchHitSource,
+        start: RationalTime? = nil,
+        end: RationalTime? = nil,
+        text: String,
+        rank: Double
+    ) {
+        self.assetID = assetID
+        self.source = source
+        self.start = start
+        self.end = end
+        self.text = text
+        self.rank = rank
+    }
+}

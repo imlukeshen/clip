@@ -526,7 +526,7 @@ private struct AssetListRow: View {
     }
 }
 
-private struct AssetThumbnail: View {
+struct AssetThumbnail: View {
     @Environment(\.theme) private var theme
     let asset: AssetRecord
     let libraryRoot: URL

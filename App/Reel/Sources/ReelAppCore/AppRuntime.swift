@@ -27,6 +27,7 @@ public actor AppRuntime {
     private let folders: LibraryFolders
     private let pipeline: IngestPipeline
     private let indexPipeline: IndexPipeline
+    private let searchEngine: SearchEngine
     private let coordinator: IngestCoordinator
     private let converter = Converter()
     private let clickTracking: EventTrackAssociator
@@ -72,6 +73,7 @@ public actor AppRuntime {
             store: library,
             processor: LocalIndexStageProcessor(store: library)
         )
+        let searchEngine = SearchEngine(store: library)
         let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
         let captureInboxes =
             Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
@@ -96,6 +98,7 @@ public actor AppRuntime {
         self.folders = LibraryFolders(root: root, library: library)
         self.pipeline = pipeline
         self.indexPipeline = indexPipeline
+        self.searchEngine = searchEngine
         self.clickTracking = clickTracking
         self.captureDirectory = captureDirectory
         self.libraryWatcher = LibraryRootWatcher(url: LibraryLayout.media(in: root)) {
@@ -291,6 +294,18 @@ public actor AppRuntime {
 
     public func setIndexPauseReasons(_ reasons: Set<IndexPauseReason>) async {
         await indexPipeline.setPauseReasons(reasons)
+    }
+
+    public func search(_ query: SearchQuery) async throws -> SearchResponse {
+        try await searchEngine.search(query)
+    }
+
+    public func searchWithin(_ assetID: AssetID, text: String) async throws -> [SearchMoment] {
+        try await searchEngine.searchWithin(assetID, text: text)
+    }
+
+    public func indexedText(at time: RationalTime, in assetID: AssetID) async throws -> [OCRSpan] {
+        try await searchEngine.textAt(assetID, time: time)
     }
 
     public func assets() async throws -> [AssetRecord] {
