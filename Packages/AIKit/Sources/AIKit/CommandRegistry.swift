@@ -88,10 +88,10 @@ public enum CommandRegistry {
         command(
             "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
         command(
-            "capture.history", "Capture History", .app,
+            "capture.history", "Open Clip Clipboard", .app,
             shortcut: .init("c", modifiers: ["command", "shift"]), kind: .read, exposure: .never),
         command(
-            "capture.clearHistory", "Clear Capture History", .app, destructive: true,
+            "capture.clearHistory", "Clear Clip Clipboard", .app, destructive: true,
             kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),

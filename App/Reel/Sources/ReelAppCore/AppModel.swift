@@ -11,6 +11,32 @@ import PDFEngine
 import SearchEngine
 import TextEngine
 
+enum SystemCaptureRoute: Sendable, Equatable {
+    case timeline
+    case history
+    case ignore
+}
+
+enum SystemCaptureRouting {
+    static func route(
+        kind: CaptureHistoryItem.Kind,
+        destination: CaptureDestination,
+        hasTimelineEditor: Bool,
+        hasBlockingEditor: Bool
+    ) -> SystemCaptureRoute {
+        guard kind == .video else { return .history }
+        if hasTimelineEditor { return .timeline }
+        if hasBlockingEditor {
+            return destination == .file ? .ignore : .history
+        }
+        switch destination {
+        case .timeline: return .timeline
+        case .clipboard: return .history
+        case .file: return .ignore
+        }
+    }
+}
+
 @MainActor
 @Observable
 public final class AppModel {
@@ -274,6 +300,7 @@ public final class AppModel {
             embeddingModelNeedsReindex = await runtime.embeddingModelStatus().needsReindex
             await refreshAssets()
             await refreshScratchBuffers()
+            await refreshCaptureHistory()
         } catch AppRuntimeError.migrationRequired(let plan) {
             isWatching = false
             pendingMigrationPlan = plan
@@ -364,6 +391,32 @@ public final class AppModel {
         }
     }
 
+    /// Makes the palette's “Open Video Editor” command literal: it focuses an
+    /// existing timeline, opens the selected/first recording, or falls back to
+    /// the video library when there is nothing playable yet.
+    public func openVideoEditorFromCommandPalette() {
+        if editor != nil {
+            selectedWorkspace = .video
+            return
+        }
+        closeImageEditor()
+        closePDFEditor()
+        closeTextEditor()
+        guard imageEditor == nil, pdfEditor == nil, textEditor == nil else {
+            lastMessage = "Resolve the open document before switching to video editing."
+            return
+        }
+        let selectedVideo = selection.anchor.flatMap { selectedID in
+            assets.first { $0.id == selectedID && $0.kind == .video }
+        }
+        guard let video = selectedVideo ?? assets.first(where: { $0.kind == .video }) else {
+            selectedWorkspace = .video
+            lastMessage = "Add or record a video to start a timeline."
+            return
+        }
+        openEditor(for: video.id)
+    }
+
     /// Decides what happens to a file macOS just wrote for a screenshot or
     /// recording.
     ///
@@ -373,27 +426,39 @@ public final class AppModel {
     /// explicitly save one.
     private func handleSystemCapture(_ url: URL) async {
         guard let runtime else { return }
-        let isVideo = CaptureHistoryItem.kind(forPathExtension: url.pathExtension) == .video
-        if isVideo, editor != nil, imageEditor == nil, pdfEditor == nil, textEditor == nil {
+        guard let kind = CaptureHistoryItem.kind(forPathExtension: url.pathExtension) else {
+            return
+        }
+        let route = SystemCaptureRouting.route(
+            kind: kind,
+            destination: captureDestination,
+            hasTimelineEditor: editor != nil,
+            hasBlockingEditor: imageEditor != nil || pdfEditor != nil || textEditor != nil
+        )
+        switch route {
+        case .timeline:
             do {
                 let record = try await runtime.ingest(url, source: .inbox)
                 await refreshAssets()
                 await handleAutomaticIngest(record)
-                return
             } catch {
                 lastMessage = "That recording could not be opened in the timeline."
-                return
             }
-        }
-        guard !isVideo || captureDestination == .clipboard else { return }
-        do {
-            let item = try await runtime.stageCapture(url)
-            await runtime.writeToPasteboard(item)
-            await refreshCaptureHistory()
-            lastMessage = "Copied to the clipboard."
-        } catch {
-            // A format the history cannot hold is not worth interrupting for;
-            // the file is still exactly where the system put it.
+        case .history:
+            do {
+                let item = try await runtime.stageCapture(url)
+                await runtime.writeToPasteboard(item)
+                await refreshCaptureHistory()
+                lastMessage =
+                    kind == .video
+                    ? "Recording added to Clip Clipboard."
+                    : "Screenshot added to Clip Clipboard."
+            } catch {
+                // A format the history cannot hold is not worth interrupting for;
+                // the file is still exactly where the system put it.
+            }
+        case .ignore:
+            break
         }
     }
 

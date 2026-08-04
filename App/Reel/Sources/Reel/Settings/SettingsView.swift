@@ -56,9 +56,9 @@ private struct SettingsContent: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
                 Text(
-                    "Screenshots always go to the capture history. Nothing is added to "
-                        + "your library until you save it, and the file macOS wrote stays "
-                        + "where it is."
+                    "While Clip is open, screenshots enter Clip Clipboard. Recordings can "
+                        + "open in the video editor, enter the clipboard, or stay untouched. "
+                        + "Clip stops watching when you quit, and the original macOS file stays put."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)

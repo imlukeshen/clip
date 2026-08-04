@@ -1,3 +1,4 @@
+import AppKit
 import CoreModel
 import DesignSystem
 import LibraryStore
@@ -94,6 +95,19 @@ struct LibrarySidebar: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
             }
+            if !model.isCaptureDirectoryWatched {
+                captureAccessRow
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+            }
+            smartRow(
+                "Clipboard",
+                icon: "doc.on.clipboard",
+                count: model.captureHistory.count
+            ) {
+                AppCommandRouter.run("capture.history", in: model)
+            }
+            .padding(.horizontal, 12)
             smartRow(
                 "Convert",
                 icon: "arrow.left.arrow.right",
@@ -122,6 +136,49 @@ struct LibrarySidebar: View {
                 )
             }
             .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+
+    private var captureAccessRow: some View {
+        Button(action: chooseCaptureFolder) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(theme.palette.click)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Enable capture folder")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textSecondary)
+                    Text("Required for automatic screenshots and recordings")
+                        .font(theme.type.micro.font)
+                        .foregroundStyle(theme.palette.textTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 42)
+            .background(theme.palette.surfaceRaised)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ReelPlainButtonStyle())
+        .help("Choose the folder macOS uses for screenshots and screen recordings")
+        .accessibilityIdentifier("sidebar-capture-access")
+    }
+
+    private func chooseCaptureFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = model.captureDirectory
+        panel.message = "Choose the folder macOS uses for screenshots and screen recordings."
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            model.grantCaptureDirectoryAccess(url)
         }
     }
 

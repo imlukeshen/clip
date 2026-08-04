@@ -12,9 +12,9 @@ struct CaptureDestinationTests {
         return defaults
     }
 
-    @Test("A fresh install stages recordings in the history")
-    func defaultsToClipboard() throws {
-        #expect(CaptureDestination.restored(from: try makeDefaults()) == .clipboard)
+    @Test("A fresh install opens recordings in the video editor")
+    func defaultsToTimeline() throws {
+        #expect(CaptureDestination.restored(from: try makeDefaults()) == .timeline)
     }
 
     @Test("The choice survives a relaunch")
@@ -28,6 +28,6 @@ struct CaptureDestinationTests {
     func ignoresUnknownValues() throws {
         let defaults = try makeDefaults()
         defaults.set("airdrop", forKey: "reel.captureDestination")
-        #expect(CaptureDestination.restored(from: defaults) == .clipboard)
+        #expect(CaptureDestination.restored(from: defaults) == .timeline)
     }
 }

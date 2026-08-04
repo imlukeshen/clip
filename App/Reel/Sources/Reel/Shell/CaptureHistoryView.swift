@@ -32,7 +32,7 @@ struct CaptureHistoryView: View {
             header
             Divider().overlay(theme.palette.line)
             if model.captureHistory.isEmpty {
-                EmptyState(headline: "No recent captures")
+                EmptyState(headline: "Nothing copied while Clip is open")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
@@ -52,7 +52,7 @@ struct CaptureHistoryView: View {
 
     private var header: some View {
         HStack(spacing: theme.metrics.spacing.md) {
-            Text("Capture History")
+            Text("Clip Clipboard")
                 .font(theme.type.title.font)
             Spacer()
             if !model.captureHistory.isEmpty {

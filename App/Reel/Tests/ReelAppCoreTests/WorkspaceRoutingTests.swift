@@ -41,6 +41,9 @@ struct WorkspaceRoutingTests {
         AppCommandRouter.run("navigation.pdf", in: model)
         #expect(model.selectedWorkspace == .pdf)
 
+        AppCommandRouter.run("navigation.video", in: model)
+        #expect(model.selectedWorkspace == .video)
+
         AppCommandRouter.run("navigation.convert", in: model)
         #expect(model.selectedWorkspace == .convert)
         #expect(model.searchQuery.isEmpty)

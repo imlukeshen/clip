@@ -88,7 +88,7 @@ public enum AppCommandRouter {
             model.showWorkspace(.inbox)
             return .completed
         case "navigation.video":
-            model.showWorkspace(.video)
+            model.openVideoEditorFromCommandPalette()
             return .completed
         case "navigation.photo":
             model.showWorkspace(.photo)
