@@ -83,6 +83,13 @@ public final class EditorViewModel {
 
     public var duration: RationalTime { document.duration }
 
+    public var timelineMediaCount: Int {
+        document.timeline.videoTracks.reduce(0) { $0 + $1.items.count }
+            + document.timeline.audioTracks.reduce(0) { $0 + $1.items.count }
+    }
+
+    public var isTimelineEmpty: Bool { timelineMediaCount == 0 }
+
     public var selectedItem: TimelineItem? {
         for item in document.timeline.videoTracks.flatMap(\.items) where selection.contains(item.id)
         {

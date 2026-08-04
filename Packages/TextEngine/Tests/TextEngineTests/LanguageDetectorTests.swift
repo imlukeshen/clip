@@ -57,3 +57,27 @@ import Testing
     #expect(LanguageDetector.detect(path: "payload", contents: " {\"clip\": true} ") == .json)
     #expect(LanguageDetector.detect(path: "notes", contents: "[not valid json]") == .plainText)
 }
+
+@Test func typedContentDetectsCommonWritingAndProgrammingLanguages() {
+    #expect(
+        LanguageDetector.detect(path: "", contents: "# Launch notes\n\n- [ ] Ship Clip")
+            == .markdown
+    )
+    #expect(
+        LanguageDetector.detect(
+            path: "", contents: "import SwiftUI\n\n@main struct ClipApp: App {}")
+            == .swift
+    )
+    #expect(
+        LanguageDetector.detect(path: "", contents: "def render_clip():\n    return True")
+            == .python)
+    #expect(
+        LanguageDetector.detect(path: "", contents: "SELECT name FROM assets WHERE kind = 1")
+            == .sql
+    )
+    #expect(
+        LanguageDetector.detect(
+            path: "", contents: "interface Clip { name: string }\nconst x: string = 'a'")
+            == .typescript
+    )
+}

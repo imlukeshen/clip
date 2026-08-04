@@ -69,6 +69,7 @@ public final class TextEditorViewModel {
             dirtyFileIDs.insert(activeFileID)
             scheduleContentAutosave()
             scheduleTeXCompilation()
+            scheduleLanguageDetection()
         }
     }
     /// The file currently shown in the editor.
@@ -127,6 +128,7 @@ public final class TextEditorViewModel {
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
+    private var languageDetectionTask: Task<Void, Never>?
     private var externalReloadTask: Task<Void, Never>?
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
@@ -247,6 +249,7 @@ public final class TextEditorViewModel {
         structureTask?.cancel()
         contentTask?.cancel()
         cleanupTask?.cancel()
+        languageDetectionTask?.cancel()
         externalReloadTask?.cancel()
         texCompileTask?.cancel()
         fileMonitor?.cancel()
@@ -273,7 +276,10 @@ public final class TextEditorViewModel {
 
     /// Sets the active file's highlighting language as an explicit user choice.
     public func setLanguage(_ language: LanguageID) {
-        guard let activeFile, activeFile.language != language else { return }
+        guard let activeFile,
+            activeFile.language != language || !activeFile.languageIsExplicit
+        else { return }
+        languageDetectionTask?.cancel()
         undoManager.beginUndoGrouping()
         defer { undoManager.endUndoGrouping() }
         perform(
@@ -295,6 +301,15 @@ public final class TextEditorViewModel {
         } else {
             cancelTeXCompilation(resetState: true)
         }
+    }
+
+    /// Returns an explicitly selected language to automatic content detection.
+    public func enableAutomaticLanguageDetection() {
+        guard let activeFile else { return }
+        languageDetectionTask?.cancel()
+        let detected = detectedLanguage(for: text, file: activeFile)
+        applyDetectedLanguage(detected, forceMetadataUpdate: true)
+        notice = "Language detection is automatic."
     }
 
     /// Switches the visible buffer without discarding pending edits in the old file.
@@ -325,6 +340,7 @@ public final class TextEditorViewModel {
         if isDirty { scheduleContentAutosave() }
         undoManager.removeAllActions()
         startFileMonitor()
+        scheduleLanguageDetection()
     }
 
     public func selectFile(relativePath: String) {
@@ -582,11 +598,66 @@ public final class TextEditorViewModel {
         else { return }
         let detected = LanguageDetector.detect(path: "", contents: contents)
         guard detected != .plainText else { return }
+        applyDetectedLanguage(detected)
+        notice = "Detected \(detected.rawValue.capitalized)."
+    }
+
+    /// Debounces detection while the user types. Explicit choices always win;
+    /// default `.txt` scratch names intentionally do not, because they carry no
+    /// meaningful language signal.
+    private func scheduleLanguageDetection() {
+        languageDetectionTask?.cancel()
+        guard let activeFile, !activeFile.languageIsExplicit else { return }
+        let fileID = activeFile.id
+        let contents = text
+        languageDetectionTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(320))
+            } catch {
+                return
+            }
+            guard let self, activeFileID == fileID, text == contents,
+                let currentFile = self.activeFile, !currentFile.languageIsExplicit
+            else { return }
+            let detected = detectedLanguage(for: contents, file: currentFile)
+            // Keep a useful detected grammar while a statement is temporarily
+            // incomplete. Clearing the buffer still resets to plain text.
+            if detected == .plainText, language != .plainText,
+                !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return
+            }
+            applyDetectedLanguage(detected)
+        }
+    }
+
+    private func detectedLanguage(for contents: String, file: TextFile) -> LanguageID {
+        let pathExtension = (file.relativePath as NSString).pathExtension.lowercased()
+        let path =
+            Self.isDefaultScratchName(file.relativePath)
+                || pathExtension == "txt" || pathExtension == "text"
+            ? "" : file.relativePath
+        return LanguageDetector.detect(path: path, contents: contents)
+    }
+
+    private func applyDetectedLanguage(
+        _ detected: LanguageID,
+        forceMetadataUpdate: Bool = false
+    ) {
+        guard let activeFile,
+            forceMetadataUpdate || activeFile.language != detected
+                || activeFile.languageIsExplicit
+        else { return }
+        let previous = activeFile.language
         do {
             _ = try document.apply(.setLanguage(activeFile.id, detected, explicit: false))
             rebuildTeXProjectAnalysis()
             persistStructureNow()
-            notice = "Detected \(detected.rawValue.capitalized)."
+            if detected == .latex {
+                scheduleTeXCompilation()
+            } else if previous == .latex {
+                cancelTeXCompilation(resetState: true)
+            }
         } catch {
             notice = "Clip could not update the detected language."
         }

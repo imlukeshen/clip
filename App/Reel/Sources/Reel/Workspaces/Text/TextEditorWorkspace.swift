@@ -149,31 +149,45 @@ struct TextEditorWorkspace: View {
     }
 
     private var codeEditor: some View {
-        CodeEditor(
-            text: $editor.text,
-            language: editor.language,
-            settings: editor.settings,
-            fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
-            isReadOnly: editor.isReadOnly,
-            undoManager: editor.undoManager,
-            onSave: editor.saveNow,
-            onLongLineModeChange: editor.setSoftWrapSuppressed,
-            onLargePaste: editor.enterLargePasteReadOnlyMode,
-            onPasteRefused: editor.reportPasteRefused,
-            onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
-            onSnippetNotice: editor.reportNotice,
-            diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
-            scrollToLine: editor.language == .markdown && showsMarkdownPreview
-                ? synchronizedLine : nil,
-            navigation: sourceNavigation,
-            onVisibleLineChange: { line in
-                guard editor.language == .markdown, showsMarkdownPreview else { return }
-                synchronizedLine = line
-            },
-            onSelectionChange: { selectedRange = $0 }
-        ) { line, column in
-            cursorLine = line
-            cursorColumn = column
+        ZStack(alignment: .topLeading) {
+            CodeEditor(
+                text: $editor.text,
+                language: editor.language,
+                settings: editor.settings,
+                fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
+                isReadOnly: editor.isReadOnly,
+                undoManager: editor.undoManager,
+                onSave: editor.saveNow,
+                onLongLineModeChange: editor.setSoftWrapSuppressed,
+                onLargePaste: editor.enterLargePasteReadOnlyMode,
+                onPasteRefused: editor.reportPasteRefused,
+                onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
+                onSnippetNotice: editor.reportNotice,
+                diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
+                scrollToLine: editor.language == .markdown && showsMarkdownPreview
+                    ? synchronizedLine : nil,
+                navigation: sourceNavigation,
+                onVisibleLineChange: { line in
+                    guard editor.language == .markdown, showsMarkdownPreview else { return }
+                    synchronizedLine = line
+                },
+                onSelectionChange: { selectedRange = $0 }
+            ) { line, column in
+                cursorLine = line
+                cursorColumn = column
+            }
+            if editor.text.isEmpty {
+                Text("Start typing…")
+                    .font(theme.type.body.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .padding(
+                        .leading,
+                        editor.language == .plainText || editor.language == .markdown ? 28 : 72
+                    )
+                    .padding(.top, 20)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
     }
 
@@ -313,6 +327,16 @@ struct TextEditorWorkspace: View {
 
     private var languageMenu: some View {
         Menu {
+            Button {
+                editor.enableAutomaticLanguageDetection()
+            } label: {
+                if editor.activeFile?.languageIsExplicit == false {
+                    Label("Detect Automatically", systemImage: "checkmark")
+                } else {
+                    Text("Detect Automatically")
+                }
+            }
+            Divider()
             languageButton("Plain Text", language: .plainText)
             languageButton("Markdown", language: .markdown)
             languageButton("LaTeX", language: .latex)
@@ -328,7 +352,10 @@ struct TextEditorWorkspace: View {
             languageButton("Shell", language: .bash)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: editor.language == .latex ? "function" : "textformat")
+                Image(
+                    systemName: editor.activeFile?.languageIsExplicit == false
+                        ? "sparkles" : (editor.language == .latex ? "function" : "textformat")
+                )
                 Text(editor.language.editorDisplayName)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
@@ -344,7 +371,15 @@ struct TextEditorWorkspace: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Choose syntax and preview mode")
+        .help(
+            editor.activeFile?.languageIsExplicit == false
+                ? "Detected automatically from what you type" : "Choose syntax and preview mode"
+        )
+        .accessibilityLabel(
+            editor.activeFile?.languageIsExplicit == false
+                ? "Language: \(editor.language.editorDisplayName), detected automatically"
+                : "Language: \(editor.language.editorDisplayName)"
+        )
         .accessibilityIdentifier("text-language-menu")
     }
 

@@ -24,7 +24,8 @@ struct TextInspector: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(12)
+            .padding(.horizontal, 12)
+            .frame(height: 52)
             Divider().overlay(theme.palette.line)
 
             if panel == .inspector {
@@ -79,7 +80,7 @@ struct TextInspector: View {
                             }
                         }
                         ForEach(model.assistantMessages) { message in
-                            TextAssistantBubble(message: message)
+                            AssistantChatBubble(message: message)
                                 .id(message.id)
                         }
                         ForEach(model.pendingAssistantActions) { action in
@@ -102,7 +103,7 @@ struct TextInspector: View {
                         }
                         if model.isAssistantWorking { ProgressView().controlSize(.small) }
                     }
-                    .padding(12)
+                    .padding(14)
                 }
                 .onChange(of: model.assistantMessages.count) {
                     if let id = model.assistantMessages.last?.id {
@@ -110,24 +111,11 @@ struct TextInspector: View {
                     }
                 }
             }
-            Divider().overlay(theme.palette.line)
-            HStack(alignment: .bottom, spacing: 7) {
-                TextField("Ask Clip…", text: $model.assistantDraft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .onSubmit { model.sendAssistantMessage() }
-                Button(action: model.sendAssistantMessage) {
-                    Image(systemName: "arrow.up.circle.fill")
-                }
-                .buttonStyle(ReelPlainButtonStyle())
-                .foregroundStyle(theme.palette.accent)
-                .disabled(
-                    model.assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || model.isAssistantWorking
-                )
-            }
-            .padding(10)
-            .background(theme.palette.surfaceRaised)
+            AssistantChatComposer(
+                draft: $model.assistantDraft,
+                isWorking: model.isAssistantWorking,
+                send: model.sendAssistantMessage
+            )
         }
     }
 
@@ -264,12 +252,25 @@ struct TextInspector: View {
     private var languageMenu: some View {
         HStack(spacing: theme.metrics.spacing.md) {
             settingIcon("curlybraces")
-            Text("Language")
-                .font(theme.type.label.font)
-                .foregroundStyle(theme.palette.textSecondary)
-                .lineLimit(1)
+            Text(
+                editor.activeFile?.languageIsExplicit == false
+                    ? "Language · Auto" : "Language"
+            )
+            .font(theme.type.label.font)
+            .foregroundStyle(theme.palette.textSecondary)
+            .lineLimit(1)
             Spacer(minLength: theme.metrics.spacing.sm)
             Menu {
+                Button {
+                    editor.enableAutomaticLanguageDetection()
+                } label: {
+                    if editor.activeFile?.languageIsExplicit == false {
+                        Label("Detect Automatically", systemImage: "checkmark")
+                    } else {
+                        Text("Detect Automatically")
+                    }
+                }
+                Divider()
                 ForEach(languageChoices, id: \.rawValue) { language in
                     Button {
                         editor.setLanguage(language)
@@ -504,32 +505,6 @@ struct TextInspector: View {
 
     private var languageChoices: [LanguageID] {
         [.plainText] + LanguageID.treeSitterGrammars
-    }
-}
-
-private struct TextAssistantBubble: View {
-    @Environment(\.theme) private var theme
-    let message: AssistantMessage
-
-    var body: some View {
-        Text(message.text)
-            .font(theme.type.caption.font)
-            .foregroundStyle(theme.palette.textPrimary)
-            .textSelection(.enabled)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(background)
-            .clipShape(
-                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-            )
-    }
-
-    private var background: Color {
-        switch message.role {
-        case .user: theme.palette.accentDim
-        case .assistant: theme.palette.surfaceRaised
-        case .status: theme.palette.surfaceRaised.opacity(0.6)
-        }
     }
 }
 

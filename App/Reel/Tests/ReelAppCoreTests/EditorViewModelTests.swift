@@ -264,6 +264,32 @@ struct EditorViewModelTests {
         #expect(Set(editor.document.timeline.video.map(\.id)) == Set(ids))
     }
 
+    @Test("Overlay-only projects are not presented as empty")
+    func overlayOnlyProjectIsNotEmpty() throws {
+        let overlay = TimelineItem(
+            id: ItemID(rawValue: "overlay-item"),
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: TimeRange(
+                start: .zero,
+                duration: RationalTime(seconds: 3)
+            )
+        )
+        let project = try ProjectDocument(
+            id: ProjectID(rawValue: "overlay-project"),
+            name: "Overlay",
+            timeline: Timeline(videoTracks: [
+                Track(id: TrackID(rawValue: "v1"), name: "V1"),
+                Track(id: TrackID(rawValue: "v2"), name: "V2", items: [overlay]),
+            ]),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let editor = makeEditor(document: project)
+
+        #expect(editor.timelineMediaCount == 1)
+        #expect(!editor.isTimelineEmpty)
+    }
+
     private func makeEditor(
         document: ProjectDocument,
         eventTracks: [AssetID: EventTrack] = [:],

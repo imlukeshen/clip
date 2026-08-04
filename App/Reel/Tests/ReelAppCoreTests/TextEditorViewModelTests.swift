@@ -54,6 +54,33 @@ struct TextEditorViewModelTests {
         #expect(editor.activeFile?.languageIsExplicit == false)
     }
 
+    @Test("Typing auto-detects language without a manual selection")
+    func typingDetectsLanguage() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Untitled.txt")
+        let editor = try makeEditor(file: file, text: "")
+
+        editor.text = "import SwiftUI\n\n@main struct ClipApp: App {}"
+        for _ in 0..<30 where editor.language != .swift {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(editor.language == .swift)
+        #expect(editor.activeFile?.languageIsExplicit == false)
+    }
+
+    @Test("An explicit language choice is not replaced while typing")
+    func explicitLanguageWinsOverDetection() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Untitled.txt")
+        let editor = try makeEditor(file: file, text: "")
+        editor.setLanguage(.markdown)
+
+        editor.text = "import SwiftUI\n\n@main struct ClipApp: App {}"
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(editor.language == .markdown)
+        #expect(editor.activeFile?.languageIsExplicit == true)
+    }
+
     @Test("Mixed line ending normalization is one undoable edit")
     func normalizesMixedLineEndings() throws {
         let file = TextFile(

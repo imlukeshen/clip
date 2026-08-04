@@ -99,17 +99,88 @@ public enum LanguageDetector {
     private static func detectByContent(_ contents: String) -> LanguageID? {
         let prefix = String(contents.prefix(64 * 1024))
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
         if trimmed.hasPrefix("\\documentclass") || trimmed.contains("\\documentclass{") {
             return .latex
         }
         if trimmed.hasPrefix("<?xml") {
             return .xml
         }
-        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
-        // Parsing is bounded so language detection cannot stall a large buffer.
-        guard contents.utf8.count <= 1024 * 1024, let data = contents.data(using: .utf8),
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("["),
+            contents.utf8.count <= 1024 * 1024,
+            let data = contents.data(using: .utf8),
             (try? JSONSerialization.jsonObject(with: data)) != nil
-        else { return nil }
-        return .json
+        {
+            return .json
+        }
+
+        let lowercased = trimmed.lowercased()
+        let lines = trimmed.split(whereSeparator: \.isNewline).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        if lowercased.hasPrefix("<!doctype html")
+            || lowercased.hasPrefix("<html")
+            || lowercased.contains("<body")
+            || lowercased.contains("<div")
+        {
+            return .html
+        }
+        if lines.contains(where: { line in
+            line.hasPrefix("# ") || line.hasPrefix("## ") || line.hasPrefix("```")
+                || line.hasPrefix("- [") || line.hasPrefix("> ")
+        }) {
+            return .markdown
+        }
+        if trimmed.contains("import SwiftUI") || trimmed.contains("import Foundation")
+            || trimmed.contains("@main") || trimmed.contains("func main(")
+        {
+            return .swift
+        }
+        if lines.contains(where: { $0.hasPrefix("interface ") })
+            || (trimmed.contains(": string") && trimmed.contains("=>"))
+            || (trimmed.contains(": number") && trimmed.contains("=>"))
+        {
+            return .typescript
+        }
+        if lines.contains(where: { line in
+            (line.hasPrefix("def ") || line.hasPrefix("class ")) && line.hasSuffix(":")
+        }) || trimmed.contains("from typing import ") {
+            return .python
+        }
+        if lines.contains(where: { $0.hasPrefix("function ") })
+            || trimmed.contains("console.log(") || trimmed.contains(" => ")
+        {
+            return .javascript
+        }
+        if lowercased.hasPrefix("select ") && lowercased.contains(" from ")
+            || lowercased.hasPrefix("insert into ")
+            || lowercased.hasPrefix("create table ")
+        {
+            return .sql
+        }
+        if lines.contains(where: { line in
+            line.hasPrefix(":root") || line.hasPrefix("@media ")
+                || ((line.hasPrefix(".") || line.hasPrefix("#")) && line.hasSuffix("{"))
+        }) && trimmed.contains(":") {
+            return .css
+        }
+        if trimmed.contains("#include <") || trimmed.contains("std::") {
+            return trimmed.contains("std::") ? .cpp : .c
+        }
+        if lowercased.hasPrefix("package main") && trimmed.contains("func ") {
+            return .go
+        }
+        if trimmed.contains("fn main()") || trimmed.contains("use std::") {
+            return .rust
+        }
+        if lowercased.contains("public class ") || lowercased.contains("static void main(") {
+            return .java
+        }
+        if lines.contains(where: { line in
+            line.hasPrefix("set -e") || line.hasPrefix("echo $") || line == "fi"
+        }) || trimmed.contains("${") {
+            return .bash
+        }
+        return nil
     }
 }

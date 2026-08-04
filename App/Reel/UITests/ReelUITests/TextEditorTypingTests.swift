@@ -6,6 +6,49 @@ import XCTest
 
 final class TextEditorTypingTests: XCTestCase {
     @MainActor
+    func testClipboardRowPastesIntoTheActiveTextEditor() throws {
+        let app = XCUIApplication()
+        let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-clipboard-paste-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try seedTextHistory("one-click paste", in: libraryRoot)
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
+        app.launchEnvironment["CLIP_UI_TESTING"] = "1"
+        app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-clip.globalClipboardShortcutEnabled", "YES",
+        ]
+        app.launch()
+
+        let textRoute = app.buttons["sidebar-route-text"]
+        XCTAssertTrue(textRoute.waitForExistence(timeout: 10))
+        textRoute.click()
+        let newScratch = app.buttons["text-new-scratch"]
+        XCTAssertTrue(newScratch.waitForExistence(timeout: 5))
+        newScratch.click()
+        let editor = app.textViews["text-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.click()
+
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        let pasteRow = app.buttons["Paste one-click paste"]
+        XCTAssertTrue(pasteRow.waitForExistence(timeout: 5))
+        pasteRow.click()
+
+        let deadline = Date().addingTimeInterval(5)
+        while (editor.value as? String) != "one-click paste", Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(editor.value as? String, "one-click paste")
+        XCTAssertTrue(app.staticTexts["Clip Clipboard"].waitForNonExistence(timeout: 2))
+    }
+
+    @MainActor
     func testClipboardShortcutOpensAndEscapeClosesTheGlobalPanel() throws {
         let app = XCUIApplication()
         let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -100,10 +143,23 @@ final class TextEditorTypingTests: XCTestCase {
         app.typeKey("z", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, "")
 
+        editor.typeText("import SwiftUI\n\n@main struct ClipApp: App {}")
+        let languageMenu = app.descendants(matching: .any)["text-language-menu"]
+        XCTAssertTrue(languageMenu.waitForExistence(timeout: 5))
+        let detectionDeadline = Date().addingTimeInterval(5)
+        while !languageMenu.label.contains("Swift"), Date() < detectionDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(languageMenu.label.contains("Swift"))
+
+        editor.click()
+        editor.typeKey("a", modifierFlags: .command)
+        editor.typeKey(.delete, modifierFlags: [])
+
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("Clip paste works", forType: .string)
         app.activate()
-        app.typeKey("v", modifierFlags: .command)
+        editor.typeKey("v", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, "Clip paste works")
     }
 
@@ -359,6 +415,33 @@ final class TextEditorTypingTests: XCTestCase {
         )
     }
 
+    private func seedTextHistory(_ text: String, in libraryRoot: URL) throws {
+        let directory = libraryRoot.appendingPathComponent(".reel/history", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let id = UUID()
+        let fileName = "\(id.uuidString).txt"
+        try Data(text.utf8).write(
+            to: directory.appendingPathComponent(fileName),
+            options: .atomic
+        )
+        let item = SeedCaptureHistoryItem(
+            id: id,
+            fileName: fileName,
+            displayName: text,
+            kind: "text",
+            capturedAt: Date(),
+            byteSize: Int64(text.utf8.count),
+            preview: text,
+            contentHash: nil
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode([item]).write(
+            to: directory.appendingPathComponent("index.json"),
+            options: .atomic
+        )
+    }
+
     private func makeTestRecording(at url: URL) throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(
@@ -410,4 +493,15 @@ final class TextEditorTypingTests: XCTestCase {
             throw writer.error ?? NSError(domain: "ClipUITests", code: 5)
         }
     }
+}
+
+private struct SeedCaptureHistoryItem: Codable {
+    let id: UUID
+    let fileName: String
+    let displayName: String
+    let kind: String
+    let capturedAt: Date
+    let byteSize: Int64
+    let preview: String?
+    let contentHash: String?
 }

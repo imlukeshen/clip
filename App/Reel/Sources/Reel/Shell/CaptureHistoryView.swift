@@ -14,9 +14,11 @@ struct CaptureHistoryView: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
 
-    /// How to close the surface after a copy. The sheet leans on the SwiftUI
-    /// `dismiss` action; the floating panel passes its own dismissal so a pick
-    /// closes the panel and hands focus back to the app the user was in.
+    /// The floating panel supplies a one-click paste action. The in-window sheet
+    /// leaves this `nil` and keeps the ordinary copy-and-dismiss behavior.
+    var onPaste: ((CaptureHistoryItem) -> Void)?
+
+    /// How to close the surface after an in-window copy.
     var onClose: (() -> Void)?
 
     private func close() {
@@ -38,7 +40,7 @@ struct CaptureHistoryView: View {
                 list
             }
         }
-        .frame(width: 480, height: 460)
+        .frame(width: 520, height: 500)
         .background {
             ZStack {
                 theme.palette.surfaceBase
@@ -52,8 +54,13 @@ struct CaptureHistoryView: View {
 
     private var header: some View {
         HStack(spacing: theme.metrics.spacing.md) {
-            Text("Clip Clipboard")
-                .font(theme.type.title.font)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Clip Clipboard")
+                    .font(theme.type.title.font)
+                Text(onPaste == nil ? "Choose an item to copy" : "Choose an item to paste")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
             Spacer()
             if !model.captureHistory.isEmpty {
                 Button("Clear", role: .destructive) { model.clearCaptureHistory() }
@@ -67,7 +74,8 @@ struct CaptureHistoryView: View {
             .font(theme.type.numeric.font)
             .foregroundStyle(theme.palette.textTertiary)
         }
-        .padding(theme.metrics.spacing.lg)
+        .padding(.horizontal, theme.metrics.spacing.xl)
+        .frame(height: 66)
     }
 
     private var list: some View {
@@ -77,34 +85,41 @@ struct CaptureHistoryView: View {
                     CaptureHistoryRow(
                         item: item,
                         url: model.captureHistoryURL(for: item),
-                        copy: {
-                            model.copyCaptureToPasteboard(item)
-                            close()
+                        primaryActionLabel: onPaste == nil ? "Copy" : "Paste",
+                        primaryAction: {
+                            if let onPaste {
+                                onPaste(item)
+                            } else {
+                                model.copyCaptureToPasteboard(item)
+                                close()
+                            }
                         },
                         save: { model.saveCaptureToLibrary(item) },
                         delete: { model.removeCapture(item) }
                     )
                 }
             }
-            .padding(theme.metrics.spacing.sm)
+            .padding(.horizontal, theme.metrics.spacing.sm)
+            .padding(.vertical, theme.metrics.spacing.xs)
         }
     }
 }
 
-/// One capture. The row itself copies, because that is what you came for; the
-/// rarer actions wait until you hover.
+/// One capture. The complete row performs the primary copy or paste action; the
+/// rarer save and delete actions wait until hover.
 private struct CaptureHistoryRow: View {
     @Environment(\.theme) private var theme
     @State private var isHovering = false
 
     let item: CaptureHistoryItem
     let url: URL?
-    let copy: () -> Void
+    let primaryActionLabel: String
+    let primaryAction: () -> Void
     let save: () -> Void
     let delete: () -> Void
 
     var body: some View {
-        Button(action: copy) {
+        Button(action: primaryAction) {
             HStack(spacing: theme.metrics.spacing.md) {
                 CaptureThumbnail(url: url, kind: item.kind)
                 VStack(alignment: .leading, spacing: 2) {
@@ -122,12 +137,17 @@ private struct CaptureHistoryRow: View {
                 }
             }
             .padding(.horizontal, theme.metrics.spacing.md)
-            .frame(height: 52)
+            .frame(height: 60)
             .contentShape(Rectangle())
+            .background(isHovering ? theme.palette.surfaceRaised : Color.clear)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+            )
         }
         .buttonStyle(ReelPlainButtonStyle())
         .onHover { isHovering = $0 }
-        .help("Copy \(item.displayName)")
+        .help("\(primaryActionLabel) \(item.displayName)")
+        .accessibilityLabel("\(primaryActionLabel) \(item.displayName)")
     }
 
     private var actions: some View {
@@ -198,7 +218,7 @@ private struct CaptureThumbnail: View {
                     .foregroundStyle(theme.palette.textTertiary)
             }
         }
-        .frame(width: 52, height: 36)
+        .frame(width: 58, height: 40)
         .background(theme.palette.surfaceRaised)
         .clipShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)

@@ -1,6 +1,7 @@
 import AppKit
 import CaptureKit
 @preconcurrency import Carbon.HIToolbox
+import CoreGraphics
 import DesignSystem
 import ReelAppCore
 import SwiftUI
@@ -8,11 +9,9 @@ import SwiftUI
 /// Shows the capture history in a floating panel that appears over whatever app
 /// is frontmost.
 ///
-/// The panel is **nonactivating**: it never steals focus, so after the user
-/// picks an entry it lands on the pasteboard and their next paste still targets
-/// the app they were in. That is the whole point of reaching it through a global
-/// shortcut rather than the in-window sheet, which can only appear when Clip is
-/// already frontmost.
+/// The panel is **nonactivating**: it never steals focus. It remembers the app
+/// that was active when it opened, then sends Paste back there after the chosen
+/// entry has been restored to the system pasteboard.
 @MainActor
 final class ClipboardPanelController {
     private let model: AppModel
@@ -22,6 +21,7 @@ final class ClipboardPanelController {
     )
     private var panel: NSPanel?
     private var clickMonitor: Any?
+    private var pasteTarget: NSRunningApplication?
 
     init(model: AppModel) {
         self.model = model
@@ -46,6 +46,11 @@ final class ClipboardPanelController {
 
     private func show() {
         Task { await model.refreshCaptureHistory() }
+        pasteTarget =
+            NSApp.isActive
+            ? NSRunningApplication(
+                processIdentifier: ProcessInfo.processInfo.processIdentifier
+            ) : NSWorkspace.shared.frontmostApplication
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
@@ -70,14 +75,70 @@ final class ClipboardPanelController {
 
     private var content: some View {
         let theme = model.appearance.theme(matching: resolvedColorScheme)
-        return CaptureHistoryView(model: model, onClose: { [weak self] in self?.hide() })
-            .environment(\.theme, theme)
-            .tint(theme.palette.accent)
+        return CaptureHistoryView(
+            model: model,
+            onPaste: { [weak self] item in self?.paste(item) },
+            onClose: { [weak self] in self?.hide() }
+        )
+        .environment(\.theme, theme)
+        .tint(theme.palette.accent)
+    }
+
+    private func paste(_ item: CaptureHistoryItem) {
+        let target = pasteTarget
+        model.copyCaptureToPasteboard(item) { [weak self] in
+            guard let self else { return }
+            hide()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(70))
+                pasteIntoTarget(target)
+            }
+        }
+    }
+
+    private func pasteIntoTarget(_ target: NSRunningApplication?) {
+        guard let target, !target.isTerminated else { return }
+        if target.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            performClipPasteCommand()
+            return
+        }
+        guard EventTapRecorder.isAuthorized() else {
+            EventTapRecorder.requestAuthorization()
+            model.reportAutomaticPasteUnavailable()
+            return
+        }
+        guard
+            let source = CGEventSource(stateID: .combinedSessionState),
+            let keyDown = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: CGKeyCode(kVK_ANSI_V),
+                keyDown: true
+            ),
+            let keyUp = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: CGKeyCode(kVK_ANSI_V),
+                keyDown: false
+            )
+        else { return }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.postToPid(target.processIdentifier)
+        keyUp.postToPid(target.processIdentifier)
+    }
+
+    /// Preserves Clip's paste context: text goes through the active responder,
+    /// while media goes through the open timeline's normal import path.
+    private func performClipPasteCommand() {
+        if model.editor != nil {
+            model.pasteMediaIntoTimeline()
+        } else {
+            NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+        }
     }
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 500),
             styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
             backing: .buffered,
             defer: true

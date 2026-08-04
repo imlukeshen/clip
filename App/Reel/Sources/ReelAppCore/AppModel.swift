@@ -605,10 +605,28 @@ public final class AppModel {
             || ["wav", "aif", "aiff", "m4a", "mp3", "aac", "flac"].contains(pathExtension)
     }
 
-    /// Puts an entry on the system pasteboard so it can be pasted in any app.
-    public func copyCaptureToPasteboard(_ item: CaptureHistoryItem) {
-        Task { await runtime?.writeToPasteboard(item) }
-        lastMessage = "Copied \(item.displayName)."
+    /// Restores an entry to the system pasteboard, then runs `completion` only
+    /// after the pasteboard write and watcher bookkeeping have both finished.
+    /// The floating clipboard uses that ordering to send Paste without racing
+    /// the asynchronous history store.
+    public func copyCaptureToPasteboard(
+        _ item: CaptureHistoryItem,
+        completion: @escaping @MainActor () -> Void = {}
+    ) {
+        guard let runtime else {
+            lastMessage = "The clipboard is still opening. Try again in a moment."
+            return
+        }
+        Task {
+            await runtime.writeToPasteboard(item)
+            lastMessage = "Restored \(item.displayName) to the clipboard."
+            completion()
+        }
+    }
+
+    public func reportAutomaticPasteUnavailable() {
+        lastMessage =
+            "Copied the item. Enable Accessibility access for one-click paste into other apps."
     }
 
     public func saveCaptureToLibrary(_ item: CaptureHistoryItem) {

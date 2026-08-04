@@ -167,6 +167,7 @@ struct CodeEditor: NSViewRepresentable {
         private var syntaxBaseFont: NSFont?
         private var syntaxEmphasisFont: NSFont?
         private var syntaxBaseColor: NSColor?
+        private var syntaxParagraphStyle: NSParagraphStyle?
         private var syntaxColors: [SyntaxTokenKind: NSColor] = [:]
         private var lastRequestedScrollLine: Int?
         private var lastNavigationID: UUID?
@@ -183,6 +184,7 @@ struct CodeEditor: NSViewRepresentable {
             rebuildLineIndex(for: value)
             let edit = pendingSyntaxEdit
             pendingSyntaxEdit = nil
+            applyVisibleBaseStyle(in: edit?.currentRange, to: textView)
             scheduleHighlight(for: value, edit: edit)
             ruler?.needsDisplay = true
             reportSelection(textView.selectedRange())
@@ -246,16 +248,19 @@ struct CodeEditor: NSViewRepresentable {
             language: LanguageID,
             settings: EditorSettings
         ) {
-            let font = NSFont.monospacedSystemFont(
-                ofSize: settings.fontSize,
-                weight: .regular
-            )
+            let usesProseLayout = language == .plainText || language == .markdown
+            let font =
+                usesProseLayout
+                ? NSFont.systemFont(ofSize: settings.fontSize, weight: .regular)
+                : NSFont.monospacedSystemFont(ofSize: settings.fontSize, weight: .regular)
             let foreground = NSColor(theme.palette.textPrimary)
             let background = NSColor(theme.palette.surfaceBase)
-            let emphasisFont = NSFont.monospacedSystemFont(
-                ofSize: settings.fontSize,
-                weight: .medium
-            )
+            let emphasisFont =
+                usesProseLayout
+                ? NSFont.systemFont(ofSize: settings.fontSize, weight: .semibold)
+                : NSFont.monospacedSystemFont(ofSize: settings.fontSize, weight: .medium)
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineSpacing = usesProseLayout ? 3 : 1
             let colors: [SyntaxTokenKind: NSColor] = [
                 .keyword: NSColor(theme.palette.accent),
                 .string: NSColor(theme.palette.success),
@@ -280,12 +285,18 @@ struct CodeEditor: NSViewRepresentable {
             syntaxBaseFont = font
             syntaxEmphasisFont = emphasisFont
             syntaxBaseColor = foreground
+            syntaxParagraphStyle = paragraphStyle
             syntaxColors = colors
             textView.font = font
             textView.textColor = foreground
             textView.insertionPointColor = foreground
             textView.backgroundColor = background
-            textView.currentLineColor = NSColor(theme.palette.accentDim)
+            textView.currentLineColor =
+                usesProseLayout ? background : NSColor(theme.palette.accentDim)
+            textView.textContainerInset = NSSize(
+                width: usesProseLayout ? theme.metrics.spacing.xxl : theme.metrics.spacing.lg,
+                height: usesProseLayout ? theme.metrics.spacing.xl : theme.metrics.spacing.md
+            )
             let commentDelimiters = commentDelimiters(for: language)
             textView.commentPrefix = commentDelimiters.prefix
             textView.commentSuffix = commentDelimiters.suffix
@@ -295,6 +306,7 @@ struct CodeEditor: NSViewRepresentable {
             textView.typingAttributes = [
                 .font: font,
                 .foregroundColor: foreground,
+                .paragraphStyle: paragraphStyle,
             ]
             let softWrap = settings.softWrap && !suppressesSoftWrap
             textView.isHorizontallyResizable = !softWrap
@@ -306,6 +318,7 @@ struct CodeEditor: NSViewRepresentable {
             )
             scrollView.hasHorizontalScroller = !softWrap
             scrollView.backgroundColor = background
+            scrollView.rulersVisible = !usesProseLayout
             ruler?.update(
                 background: NSColor(theme.palette.surfacePanel),
                 foreground: NSColor(theme.palette.textTertiary),
@@ -313,6 +326,7 @@ struct CodeEditor: NSViewRepresentable {
                 fontSize: theme.type.numeric.size
             )
             if syntaxAppearanceChanged {
+                applyVisibleBaseStyle(in: nil, to: textView)
                 scheduleHighlight(for: textView.string)
             }
         }
@@ -494,10 +508,14 @@ struct CodeEditor: NSViewRepresentable {
             guard styledRange.length > 0 else { return }
             isApplyingSyntax = true
             storage.beginEditing()
-            storage.addAttributes(
-                [.font: syntaxBaseFont, .foregroundColor: syntaxBaseColor],
-                range: styledRange
-            )
+            var baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: syntaxBaseFont,
+                .foregroundColor: syntaxBaseColor,
+            ]
+            if let syntaxParagraphStyle {
+                baseAttributes[.paragraphStyle] = syntaxParagraphStyle
+            }
+            storage.addAttributes(baseAttributes, range: styledRange)
             for token in result.tokens {
                 let range = NSIntersectionRange(token.range, styledRange)
                 guard range.length > 0, let color = syntaxColors[token.kind] else { continue }
@@ -509,6 +527,39 @@ struct CodeEditor: NSViewRepresentable {
             }
             storage.endEditing()
             isApplyingSyntax = false
+            if let textContainer = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: textContainer)
+            }
+            textView.needsDisplay = true
+        }
+
+        /// NSTextView may reset typing attributes while SwiftUI reparents the
+        /// split view. Paint inserted characters with Clip's explicit base
+        /// style synchronously; syntax colors can then layer on asynchronously.
+        private func applyVisibleBaseStyle(
+            in requestedRange: NSRange?,
+            to textView: NSTextView
+        ) {
+            guard let storage = textView.textStorage, let syntaxBaseFont,
+                let syntaxBaseColor, storage.length > 0
+            else { return }
+            let fullRange = NSRange(location: 0, length: storage.length)
+            let range = requestedRange.map { NSIntersectionRange($0, fullRange) } ?? fullRange
+            guard range.length > 0 else { return }
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: syntaxBaseFont,
+                .foregroundColor: syntaxBaseColor,
+            ]
+            if let syntaxParagraphStyle {
+                attributes[.paragraphStyle] = syntaxParagraphStyle
+            }
+            isApplyingSyntax = true
+            storage.addAttributes(attributes, range: range)
+            isApplyingSyntax = false
+            if let textContainer = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: textContainer)
+            }
+            textView.needsDisplay = true
         }
 
         private func tokenUsesEmphasisFont(_ kind: SyntaxTokenKind) -> Bool {

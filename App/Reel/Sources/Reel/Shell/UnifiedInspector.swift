@@ -32,6 +32,94 @@ struct UnifiedInspector: View {
     }
 }
 
+/// Shared inspector chat input, shaped like a compact standalone composer
+/// instead of a full-width toolbar. Keeping this in one component prevents the
+/// text and video inspectors from drifting by a pixel or a corner radius.
+struct AssistantChatComposer: View {
+    @Environment(\.theme) private var theme
+    @Binding var draft: String
+    let isWorking: Bool
+    let send: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+            TextField("Ask Clip anything…", text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(theme.type.body.font)
+                .lineLimit(1...5)
+                .onSubmit(send)
+
+            HStack(spacing: theme.metrics.spacing.sm) {
+                Text("Return to send")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                Spacer()
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.palette.accentOn)
+                        .frame(width: 28, height: 28)
+                        .background(theme.palette.accent)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDisabled)
+                .opacity(isDisabled ? 0.4 : 1)
+                .accessibilityIdentifier("assistant-chat-send")
+            }
+        }
+        .padding(theme.metrics.spacing.md)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .padding(theme.metrics.spacing.md)
+        .accessibilityIdentifier("assistant-chat-composer")
+    }
+
+    private var isDisabled: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking
+    }
+}
+
+struct AssistantChatBubble: View {
+    @Environment(\.theme) private var theme
+    let message: AssistantMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            if message.role == .user { Spacer(minLength: 28) }
+            Text(message.text)
+                .font(theme.type.caption.font)
+                .foregroundStyle(
+                    message.role == .status ? theme.palette.textTertiary : theme.palette.textPrimary
+                )
+                .textSelection(.enabled)
+                .padding(.horizontal, theme.metrics.spacing.md)
+                .padding(.vertical, 9)
+                .background(background)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                )
+            if message.role != .user { Spacer(minLength: 28) }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var background: Color {
+        switch message.role {
+        case .user: theme.palette.accentDim
+        case .assistant: theme.palette.surfaceRaised
+        case .status: theme.palette.surfaceRaised.opacity(0.55)
+        }
+    }
+}
+
 private struct PDFLayerInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var editor: PDFEditorViewModel

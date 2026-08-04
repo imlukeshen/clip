@@ -201,7 +201,7 @@ struct EditorView: View {
             .accessibilityIdentifier("video-redo-button")
         }
         .padding(.horizontal, 14)
-        .frame(height: 44)
+        .frame(height: 52)
         .background(theme.palette.surfacePanel)
     }
 
@@ -355,7 +355,7 @@ struct EditorView: View {
                             .controlSize(.small)
                     }
 
-                    if editor.document.timeline.video.isEmpty {
+                    if editor.isTimelineEmpty {
                         VStack(spacing: theme.metrics.spacing.md) {
                             if model.isAddingTimelineMedia {
                                 ProgressView().controlSize(.small)
@@ -990,7 +990,8 @@ struct EditorInspector: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(12)
+            .padding(.horizontal, 12)
+            .frame(height: 52)
 
             Divider().overlay(theme.palette.line)
 
@@ -1006,7 +1007,6 @@ struct EditorInspector: View {
     private var chat: some View {
         VStack(spacing: 0) {
             chatTranscript
-            Divider().overlay(theme.palette.line)
             chatComposer
         }
     }
@@ -1017,14 +1017,14 @@ struct EditorInspector: View {
                 LazyVStack(alignment: .leading, spacing: 9) {
                     if model.assistantMessages.isEmpty { chatEmptyState }
                     ForEach(model.assistantMessages) { message in
-                        AssistantBubble(message: message).id(message.id)
+                        AssistantChatBubble(message: message).id(message.id)
                     }
                     ForEach(model.pendingAssistantActions) { action in
                         PendingActionCard(model: model, action: action)
                     }
                     if model.isAssistantWorking { ProgressView().controlSize(.small) }
                 }
-                .padding(12)
+                .padding(14)
             }
             .onChange(of: model.assistantMessages.count) {
                 if let id = model.assistantMessages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
@@ -1035,7 +1035,7 @@ struct EditorInspector: View {
     private var chatEmptyState: some View {
         VStack(alignment: .leading, spacing: 7) {
             SectionLabel("Project context")
-            Text("\(editor.document.timeline.video.count) clips · \(durationText)")
+            Text("\(editor.timelineMediaCount) items · \(durationText)")
                 .foregroundStyle(theme.palette.textSecondary)
             Text("Ask Clip to trim, split, zoom, restyle, or caption this edit.")
                 .foregroundStyle(theme.palette.textTertiary)
@@ -1044,27 +1044,11 @@ struct EditorInspector: View {
     }
 
     private var chatComposer: some View {
-        HStack(alignment: .bottom, spacing: 7) {
-            TextField("Ask Clip…", text: $model.assistantDraft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .onSubmit { model.sendAssistantMessage() }
-            Button {
-                model.sendAssistantMessage()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-            }
-            .buttonStyle(ReelPlainButtonStyle())
-            .foregroundStyle(theme.palette.accent)
-            .disabled(isSendDisabled)
-        }
-        .padding(10)
-        .background(theme.palette.surfaceRaised)
-    }
-
-    private var isSendDisabled: Bool {
-        model.assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || model.isAssistantWorking
+        AssistantChatComposer(
+            draft: $model.assistantDraft,
+            isWorking: model.isAssistantWorking,
+            send: model.sendAssistantMessage
+        )
     }
 
     @ViewBuilder private var inspector: some View {
@@ -1299,28 +1283,6 @@ struct EditorInspector: View {
         case .text: "Text"
         case .unknown(let name): name
         }
-    }
-}
-
-private struct AssistantBubble: View {
-    @Environment(\.theme) private var theme
-    let message: AssistantMessage
-
-    var body: some View {
-        Text(message.text)
-            .font(theme.type.caption.font)
-            .foregroundStyle(
-                message.role == .status ? theme.palette.textTertiary : theme.palette.textPrimary
-            )
-            .padding(9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                message.role == .user ? theme.palette.accentDim : theme.palette.surfaceRaised
-            )
-            .clipShape(
-                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-            )
-            .textSelection(.enabled)
     }
 }
 

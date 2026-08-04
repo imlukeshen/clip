@@ -1,6 +1,7 @@
 import AppKit
 import CaptureKit
 import ReelAppCore
+import SwiftUI
 import os
 
 /// Owns the process-wide clipboard affordances that outlive any one window: the
@@ -18,6 +19,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotKey = GlobalHotKey()
     private var panel: ClipboardPanelController?
+    private var mainWindowController: NSWindowController?
     private var lastHotKeyToggleUptime: TimeInterval = 0
 
     override init() {
@@ -44,6 +46,12 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     /// combination back to Maccy or any other clipboard manager.
     static func refreshClipboardShortcutRegistration() {
         activeDelegate?.syncHotKeyRegistration()
+    }
+
+    /// Ensures a foreground library window exists even when macOS restores an
+    /// empty SwiftUI scene session.
+    static func ensureMainWindow() {
+        activeDelegate?.showOrCreateMainWindow(in: NSApp)
     }
 
     /// The process-shared model prepared by `ClipApp`. The delegate holds it
@@ -139,26 +147,46 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOrCreateMainWindow(in application: NSApplication) {
+        if let window = mainWindowController?.window {
+            window.makeKeyAndOrderFront(nil)
+            application.activate(ignoringOtherApps: true)
+            return
+        }
+
         if let window = application.windows.first(where: { window in
-            !(window is NSPanel) && window.canBecomeMain
+            !(window is NSPanel) && window.canBecomeMain && window.isVisible
         }) {
             window.makeKeyAndOrderFront(nil)
             application.activate(ignoringOtherApps: true)
             return
         }
 
-        guard let mainMenu = application.mainMenu else { return }
-        for menu in mainMenu.items.compactMap(\.submenu) {
-            guard
-                let index = menu.items.firstIndex(
-                    where: { item in
-                        item.keyEquivalent.lowercased() == "n"
-                            && item.keyEquivalentModifierMask.contains(.command)
-                    })
-            else { continue }
-            menu.performActionForItem(at: index)
-            application.activate(ignoringOtherApps: true)
-            return
-        }
+        guard let model else { return }
+
+        // SwiftUI can restore a scene session with no windows, and its New
+        // Window menu action is not available until a scene is already active.
+        // Keep a native host as the reliable launch/reopen path so Clip never
+        // becomes an invisible background process.
+        let rootView = MainWindow(model: model)
+            .frame(minWidth: 1024, minHeight: 680)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Clip"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.minSize = NSSize(width: 1024, height: 680)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: rootView)
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        mainWindowController = controller
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        application.activate(ignoringOtherApps: true)
     }
 }

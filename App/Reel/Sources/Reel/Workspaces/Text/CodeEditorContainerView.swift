@@ -42,6 +42,20 @@ final class CodeEditorContainerView: NSView {
         if textView.frame.size != documentSize {
             textView.setFrameSize(documentSize)
         }
+        if let textContainer = textView.textContainer {
+            let width =
+                textView.isHorizontallyResizable
+                ? CGFloat.greatestFiniteMagnitude
+                : max(documentSize.width - textView.textContainerInset.width * 2, 1)
+            if textContainer.containerSize.width != width {
+                textContainer.containerSize = NSSize(
+                    width: width,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            }
+            textView.layoutManager?.ensureLayout(for: textContainer)
+            textView.needsDisplay = true
+        }
     }
 
     override func viewDidMoveToWindow() {

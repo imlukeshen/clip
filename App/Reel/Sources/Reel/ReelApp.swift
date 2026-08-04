@@ -36,10 +36,14 @@ struct ClipApp: App {
         )
         _model = State(initialValue: model)
         ClipAppDelegate.prepare(model: model)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            ClipAppDelegate.ensureMainWindow()
+        }
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("Clip", id: "main") {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
                 .onAppear { appDelegate.install(model: model) }
@@ -122,7 +126,11 @@ struct ClipApp: App {
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {
-                    AppCommandRouter.run("asset.selectAll", in: model)
+                    if model.textEditor != nil {
+                        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                    } else {
+                        AppCommandRouter.run("asset.selectAll", in: model)
+                    }
                 }
                 .keyboardShortcut("a", modifiers: .command)
                 Button(commandTitle("asset.deselectAll")) {
