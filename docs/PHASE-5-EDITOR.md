@@ -364,7 +364,7 @@ editor-specific agent plumbing.
 *Accept:* open a 5 MB file, edit, undo 50 steps, save; no main-thread stall over
 50 ms measured in Instruments.
 
-**T1 — Highlighting.** Tree-sitter with 18 grammars, regex fallback, detection,
+**T1 — Highlighting.** Tree-sitter with 19 grammars, regex fallback, detection,
 language dropdown, visible-range styling.
 *Accept:* paste 2 MB of TypeScript — highlighting appears within 200 ms and
 scrolling stays at 60 fps.
@@ -410,5 +410,5 @@ errors" completes as compile → diagnostics → edits.
    Block is better and materially harder.
 3. **Should scratch buffers appear in search by default?** They're often
    half-formed thoughts; indexing them may add noise.
-4. **Grammar set.** Eighteen is a guess. Worth revisiting after real use — SQL and
+4. **Grammar set.** Nineteen is a guess. Worth revisiting after real use — SQL and
    Java may not earn their place, while Dockerfile and Makefile might.

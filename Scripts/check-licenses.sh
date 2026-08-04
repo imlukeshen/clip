@@ -6,16 +6,23 @@ cd "$ROOT_DIR"
 
 Scripts/check-ffmpeg-license.sh
 
-unexpected="$(rg -o --no-filename 'https://[^\"]+' --glob Package.swift Packages App Vendor \
-    | sort -u | grep -v '^https://github.com/groue/GRDB.swift.git$' || true)"
+declared="$(rg -o --no-filename 'https://[^\"]+' --glob Package.swift Packages App Vendor | sort -u)"
+unexpected="$(comm -23 <(printf '%s\n' "$declared") <(sort Scripts/allowed-package-urls.txt) || true)"
 if [[ -n "$unexpected" ]]; then
     echo "Unreviewed remote Swift package dependencies:" >&2
     echo "$unexpected" >&2
     exit 1
 fi
 
+missing="$(comm -13 <(printf '%s\n' "$declared") <(sort Scripts/allowed-package-urls.txt) || true)"
+if [[ -n "$missing" ]]; then
+    echo "Approved Swift package dependencies no longer declared:" >&2
+    echo "$missing" >&2
+    exit 1
+fi
+
 for heading in 'FFmpeg 7.1.2' 'libvpx 1.15.2' 'libaom 3.12.1' 'libwebp 1.6.0' 'GRDB.swift 7.11.1' \
-    'PDFium 152.0.7961.0'; do
+    'PDFium 152.0.7961.0' 'Tree-sitter syntax engine'; do
     if ! grep -Fq "$heading" ACKNOWLEDGEMENTS.md; then
         echo "Acknowledgements are missing $heading" >&2
         exit 1

@@ -151,10 +151,15 @@ struct TextInspector: View {
                     Button {
                         editor.setLanguage(language)
                     } label: {
-                        if editor.language == language {
-                            Label(language.editorDisplayName, systemImage: "checkmark")
-                        } else {
+                        HStack {
+                            if editor.language == language {
+                                Image(systemName: "checkmark")
+                            }
                             Text(language.editorDisplayName)
+                            if language.hasTreeSitterGrammar {
+                                Image(systemName: "circle.fill")
+                                    .accessibilityLabel("Bundled syntax grammar")
+                            }
                         }
                     }
                 }

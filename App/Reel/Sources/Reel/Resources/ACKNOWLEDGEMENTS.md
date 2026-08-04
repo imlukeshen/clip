@@ -53,3 +53,18 @@ components whose complete notices are shipped with Clip.
 - Source: <https://pdfium.googlesource.com/pdfium/>
 - Binary: <https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7961>
 - Licenses: [`Vendor/pdfium/licenses`](Vendor/pdfium/licenses)
+
+## Tree-sitter syntax engine
+
+Clip bundles SwiftTreeSitter 0.25.0, the Tree-sitter 0.25.10 runtime, and pinned
+grammars for Bash, C, C++, CSS, Go, HTML, Java, JavaScript, JSON, LaTeX,
+Markdown, Python, Rust, SQL, Swift, TOML, TypeScript, XML, and YAML. They run
+entirely on-device and do not download grammars or source text.
+
+SwiftTreeSitter is licensed under the three-clause BSD license. The runtime and
+grammars are licensed under the MIT license.
+
+- Runtime API: <https://github.com/tree-sitter/swift-tree-sitter>
+- Runtime: <https://github.com/tree-sitter/tree-sitter>
+- Grammar sources: <https://github.com/tree-sitter/tree-sitter/wiki/List-of-parsers>
+- Licenses and copyright notices: [`Vendor/licenses/TREE-SITTER-NOTICES`](Vendor/licenses/TREE-SITTER-NOTICES)

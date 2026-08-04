@@ -72,7 +72,7 @@ public enum TextByteOrderMark: String, Codable, Sendable, Equatable {
 /// Names the highlighting grammar and dropdown entry for a file's language.
 ///
 /// A stable lowercase identifier such as `swift` or `typescript`, not a UUID.
-/// The 18 values with a real Tree-sitter grammar are exposed as static members;
+/// The 19 values with a real Tree-sitter grammar are exposed as static members;
 /// anything else falls back to the regex highlighter.
 public struct LanguageID: RawRepresentable, Codable, Sendable, Hashable {
     /// The lowercase language identifier.

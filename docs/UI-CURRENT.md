@@ -68,7 +68,9 @@ persistent browsing inspector.
   edit inspector.
 - Text: library includes imported text assets and restorable scratch buffers.
   The full-bleed editor uses TextKit 2, a 48-point line-number gutter, document
-  header, 26-point status bar, and text settings inspector.
+  header, 26-point status bar, and text settings inspector. Nineteen bundled
+  Tree-sitter grammars highlight the visible region plus a 200-line margin;
+  unsupported languages use bounded fallback styling and plain text stays plain.
 - Convert: queue rows expose source, target, selected backend, progress, and
   completion state.
 

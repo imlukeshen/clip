@@ -3,6 +3,7 @@ import CoreModel
 import DesignSystem
 import ReelAppCore
 import SwiftUI
+import TextEngine
 
 /// TextKit 2 editor surface with native undo, find/replace, and a line-number ruler.
 struct CodeEditor: NSViewRepresentable {
@@ -70,6 +71,7 @@ struct CodeEditor: NSViewRepresentable {
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
         context.coordinator.textView = textView
+        textView.textStorage?.delegate = context.coordinator
         context.coordinator.ruler = ruler
         context.coordinator.observeScrolling(in: scrollView)
         context.coordinator.apply(text, to: textView)
@@ -108,7 +110,7 @@ struct CodeEditor: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, @MainActor NSTextStorageDelegate {
         var parent: CodeEditor
         fileprivate weak var textView: CodeTextView?
         fileprivate weak var ruler: LineNumberRulerView?
@@ -118,6 +120,16 @@ struct CodeEditor: NSViewRepresentable {
         private var lineIndexRevision = 0
         private var lineIndexTask: Task<Void, Never>?
         private var suppressesSoftWrap = false
+        private let syntaxHighlighter = SyntaxHighlighter()
+        private var syntaxTask: Task<Void, Never>?
+        private var syntaxRevision = 0
+        private var pendingSyntaxEdit: SyntaxEdit?
+        private var isApplyingSyntax = false
+        private var syntaxLanguage: LanguageID?
+        private var syntaxBaseFont: NSFont?
+        private var syntaxEmphasisFont: NSFont?
+        private var syntaxBaseColor: NSColor?
+        private var syntaxColors: [SyntaxTokenKind: NSColor] = [:]
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -128,6 +140,9 @@ struct CodeEditor: NSViewRepresentable {
             let value = textView.string
             parent.text = value
             rebuildLineIndex(for: value)
+            let edit = pendingSyntaxEdit
+            pendingSyntaxEdit = nil
+            scheduleHighlight(for: value, edit: edit)
             ruler?.needsDisplay = true
             reportSelection(textView.selectedRange())
         }
@@ -153,7 +168,27 @@ struct CodeEditor: NSViewRepresentable {
             )
             isApplyingText = false
             rebuildLineIndex(for: value)
+            pendingSyntaxEdit = nil
+            scheduleHighlight(for: value)
             ruler?.needsDisplay = true
+        }
+
+        func textStorage(
+            _ textStorage: NSTextStorage,
+            didProcessEditing editedMask: NSTextStorageEditActions,
+            range editedRange: NSRange,
+            changeInLength delta: Int
+        ) {
+            guard editedMask.contains(.editedCharacters), !isApplyingText, !isApplyingSyntax else {
+                return
+            }
+            pendingSyntaxEdit = SyntaxEdit(
+                previousRange: NSRange(
+                    location: editedRange.location,
+                    length: max(editedRange.length - delta, 0)
+                ),
+                currentRange: editedRange
+            )
         }
 
         fileprivate func updateAppearance(
@@ -169,6 +204,35 @@ struct CodeEditor: NSViewRepresentable {
             )
             let foreground = NSColor(theme.palette.textPrimary)
             let background = NSColor(theme.palette.surfaceBase)
+            let emphasisFont = NSFont.monospacedSystemFont(
+                ofSize: settings.fontSize,
+                weight: .medium
+            )
+            let colors: [SyntaxTokenKind: NSColor] = [
+                .keyword: NSColor(theme.palette.accent),
+                .string: NSColor(theme.palette.success),
+                .comment: NSColor(theme.palette.textTertiary),
+                .number: NSColor(theme.palette.click),
+                .type: NSColor(theme.palette.textPrimary),
+                .function: NSColor(theme.palette.textPrimary),
+                .property: NSColor(theme.palette.textSecondary),
+                .tag: NSColor(theme.palette.textPrimary),
+                .heading: NSColor(theme.palette.textPrimary),
+                .emphasis: NSColor(theme.palette.textSecondary),
+                .link: NSColor(theme.palette.textSecondary),
+                .escape: NSColor(theme.palette.click),
+                .operator: NSColor(theme.palette.textTertiary),
+            ]
+            let syntaxAppearanceChanged =
+                syntaxLanguage != language
+                || syntaxBaseFont != font
+                || syntaxBaseColor != foreground
+                || syntaxColors != colors
+            syntaxLanguage = language
+            syntaxBaseFont = font
+            syntaxEmphasisFont = emphasisFont
+            syntaxBaseColor = foreground
+            syntaxColors = colors
             textView.font = font
             textView.textColor = foreground
             textView.insertionPointColor = foreground
@@ -200,6 +264,9 @@ struct CodeEditor: NSViewRepresentable {
                 separator: NSColor(theme.palette.line),
                 fontSize: theme.type.numeric.size
             )
+            if syntaxAppearanceChanged {
+                scheduleHighlight(for: textView.string)
+            }
         }
 
         func observeScrolling(in scrollView: NSScrollView) {
@@ -208,13 +275,21 @@ struct CodeEditor: NSViewRepresentable {
                 object: scrollView.contentView,
                 queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.ruler?.needsDisplay = true }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.ruler?.needsDisplay = true
+                    if let textView = self.textView {
+                        self.scheduleHighlight(for: textView.string, debounce: true)
+                    }
+                }
             }
         }
 
         func stopObserving() {
             lineIndexTask?.cancel()
             lineIndexTask = nil
+            syntaxTask?.cancel()
+            syntaxTask = nil
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
             }
@@ -268,6 +343,94 @@ struct CodeEditor: NSViewRepresentable {
         private func reportSelection(_ selection: NSRange) {
             let position = lineIndex.position(at: selection.location)
             parent.onCursorChange(position.line, position.column)
+        }
+
+        private func scheduleHighlight(
+            for source: String,
+            edit: SyntaxEdit? = nil,
+            debounce: Bool = false
+        ) {
+            guard let textView else { return }
+            syntaxRevision += 1
+            let revision = syntaxRevision
+            let language = parent.language
+            let visibleRange = visibleCharacterRange(in: textView)
+            syntaxTask?.cancel()
+            syntaxTask = Task { [weak self] in
+                if debounce {
+                    do {
+                        try await Task.sleep(for: .milliseconds(40))
+                    } catch {
+                        return
+                    }
+                }
+                guard let self, !Task.isCancelled else { return }
+                let result = await syntaxHighlighter.highlights(
+                    in: source,
+                    language: language,
+                    visibleRange: visibleRange,
+                    edit: edit
+                )
+                guard !Task.isCancelled, revision == syntaxRevision,
+                    textView.string == source
+                else { return }
+                applySyntax(result, to: textView)
+            }
+        }
+
+        private func visibleCharacterRange(in textView: NSTextView) -> NSRange {
+            let sourceLength = (textView.string as NSString).length
+            guard sourceLength > 0 else { return NSRange(location: 0, length: 0) }
+            let visible = textView.visibleRect
+            let start = min(
+                textView.characterIndexForInsertion(at: visible.origin),
+                sourceLength
+            )
+            let endPoint = NSPoint(x: visible.maxX, y: visible.maxY)
+            let end = min(
+                max(textView.characterIndexForInsertion(at: endPoint) + 1, start),
+                sourceLength
+            )
+            return NSRange(location: start, length: end - start)
+        }
+
+        private func applySyntax(
+            _ result: SyntaxHighlightResult,
+            to textView: NSTextView
+        ) {
+            guard let storage = textView.textStorage, let syntaxBaseFont,
+                let syntaxBaseColor
+            else { return }
+            let fullLength = storage.length
+            let styledRange = NSIntersectionRange(
+                result.styledRange,
+                NSRange(location: 0, length: fullLength)
+            )
+            guard styledRange.length > 0 else { return }
+            isApplyingSyntax = true
+            storage.beginEditing()
+            storage.addAttributes(
+                [.font: syntaxBaseFont, .foregroundColor: syntaxBaseColor],
+                range: styledRange
+            )
+            for token in result.tokens {
+                let range = NSIntersectionRange(token.range, styledRange)
+                guard range.length > 0, let color = syntaxColors[token.kind] else { continue }
+                var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
+                if tokenUsesEmphasisFont(token.kind), let syntaxEmphasisFont {
+                    attributes[.font] = syntaxEmphasisFont
+                }
+                storage.addAttributes(attributes, range: range)
+            }
+            storage.endEditing()
+            isApplyingSyntax = false
+        }
+
+        private func tokenUsesEmphasisFont(_ kind: SyntaxTokenKind) -> Bool {
+            switch kind {
+            case .keyword, .type, .function, .tag, .heading: true
+            default: false
+            }
         }
 
         private func commentDelimiters(for language: LanguageID) -> (prefix: String, suffix: String)

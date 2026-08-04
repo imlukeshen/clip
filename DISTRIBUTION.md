@@ -16,6 +16,10 @@ conversion routes, even when LibreOffice is installed on the Mac. App Store
 listing copy must state that Office files can be read, while Office-format output
 is available only in the direct build with LibreOffice installed.
 
+Both channels bundle the same pinned Tree-sitter runtime and 19 syntax grammars.
+The acknowledgements resource contains their permissive-license notices, and
+the release checks reject any Swift package URL outside the reviewed allowlist.
+
 Run `make distribution-check` without credentials to validate both configurations
 and their export plists. `make release` performs the real release and requires:
 
