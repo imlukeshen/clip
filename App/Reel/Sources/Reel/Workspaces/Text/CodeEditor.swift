@@ -17,6 +17,8 @@ struct CodeEditor: NSViewRepresentable {
     let onLongLineModeChange: (Bool) -> Void
     let onLargePaste: () -> Void
     let onPasteRefused: () -> Void
+    let scrollToLine: Int?
+    let onVisibleLineChange: (Int) -> Void
     let onCursorChange: (Int, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -82,6 +84,7 @@ struct CodeEditor: NSViewRepresentable {
             language: language,
             settings: settings
         )
+        context.coordinator.scrollToRequestedLine()
         return CodeEditorContainerView(scrollView: scrollView)
     }
 
@@ -100,6 +103,7 @@ struct CodeEditor: NSViewRepresentable {
             language: language,
             settings: settings
         )
+        context.coordinator.scrollToRequestedLine()
     }
 
     static func dismantleNSView(
@@ -130,6 +134,8 @@ struct CodeEditor: NSViewRepresentable {
         private var syntaxEmphasisFont: NSFont?
         private var syntaxBaseColor: NSColor?
         private var syntaxColors: [SyntaxTokenKind: NSColor] = [:]
+        private var lastRequestedScrollLine: Int?
+        private var lastReportedVisibleLine: Int?
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -280,6 +286,7 @@ struct CodeEditor: NSViewRepresentable {
                     self.ruler?.needsDisplay = true
                     if let textView = self.textView {
                         self.scheduleHighlight(for: textView.string, debounce: true)
+                        self.reportVisibleLine(in: textView)
                     }
                 }
             }
@@ -304,6 +311,16 @@ struct CodeEditor: NSViewRepresentable {
         func largePaste() { parent.onLargePaste() }
 
         func refusePaste() { parent.onPasteRefused() }
+
+        func scrollToRequestedLine() {
+            guard let requested = parent.scrollToLine, requested > 0,
+                requested != lastRequestedScrollLine,
+                let textView
+            else { return }
+            lastRequestedScrollLine = requested
+            let range = lineIndex.range(ofLine: requested)
+            textView.scrollRangeToVisible(NSRange(location: range.location, length: 0))
+        }
 
         private func rebuildLineIndex(for value: String) {
             lineIndexRevision += 1
@@ -336,6 +353,7 @@ struct CodeEditor: NSViewRepresentable {
                 ruler?.needsDisplay = true
                 if let textView {
                     reportSelection(textView.selectedRange())
+                    reportVisibleLine(in: textView)
                 }
             }
         }
@@ -343,6 +361,14 @@ struct CodeEditor: NSViewRepresentable {
         private func reportSelection(_ selection: NSRange) {
             let position = lineIndex.position(at: selection.location)
             parent.onCursorChange(position.line, position.column)
+        }
+
+        private func reportVisibleLine(in textView: NSTextView) {
+            let visible = visibleCharacterRange(in: textView)
+            let line = lineIndex.lineNumber(at: visible.location)
+            guard line != lastReportedVisibleLine else { return }
+            lastReportedVisibleLine = line
+            parent.onVisibleLineChange(line)
         }
 
         private func scheduleHighlight(

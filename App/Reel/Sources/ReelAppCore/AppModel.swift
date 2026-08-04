@@ -964,6 +964,43 @@ public final class AppModel {
         }
     }
 
+    /// Phase-V targets the open Markdown editor can reach in this build channel.
+    public var textEditorExportTargets: [TargetFormat] {
+        guard textEditor?.language == .markdown, textEditor?.sourceURL != nil else { return [] }
+        let candidates: [TargetFormat] = [.html, .pdf, .docx]
+        let planner = ConversionPlanner(capabilities: conversionCapabilities)
+        return candidates.filter { target in
+            planner.plan(from: ConversionFormats.markdown, to: target.formatID) != nil
+        }
+    }
+
+    /// Saves the open Markdown file and hands it to the shared conversion queue.
+    public func enqueueTextEditorExport(as target: TargetFormat) {
+        guard textEditorExportTargets.contains(target),
+            let editor = textEditor,
+            let assetID = editor.activeFile?.assetID,
+            let asset = assets.first(where: { $0.id == assetID }),
+            let inputURL = editor.sourceURL
+        else {
+            lastMessage = "Save this Markdown file to the library before exporting it."
+            return
+        }
+        editor.saveNow()
+        if let index = conversionQueue.firstIndex(where: { $0.asset.id == assetID }) {
+            conversionQueue[index].selectTarget(target)
+        } else {
+            var item = ConversionQueueItem(
+                asset: asset,
+                inputURL: inputURL,
+                target: target,
+                capabilities: conversionCapabilities
+            )
+            item.setConflictPolicy(conversionConflictPolicy)
+            conversionQueue.append(item)
+        }
+        showWorkspace(.convert)
+    }
+
     public func enqueueForConversion(_ urls: [URL], source: IngestSource) {
         guard !urls.isEmpty else { return }
         showWorkspace(.convert)

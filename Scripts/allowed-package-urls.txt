@@ -2,6 +2,7 @@ https://github.com/DerekStride/tree-sitter-sql
 https://github.com/MDeiml/tree-sitter-markdown
 https://github.com/alex-pinkus/tree-sitter-swift
 https://github.com/groue/GRDB.swift.git
+https://github.com/swiftlang/swift-markdown
 https://github.com/latex-lsp/tree-sitter-latex
 https://github.com/tree-sitter-grammars/tree-sitter-toml
 https://github.com/tree-sitter-grammars/tree-sitter-xml

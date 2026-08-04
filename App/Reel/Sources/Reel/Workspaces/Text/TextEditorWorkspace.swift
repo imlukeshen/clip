@@ -1,4 +1,5 @@
 import AppKit
+import ConvertKit
 import CoreModel
 import DesignSystem
 import ReelAppCore
@@ -12,6 +13,8 @@ struct TextEditorWorkspace: View {
     @State private var cursorColumn = 1
     @State private var showsExternalConflictAlert = false
     @State private var showsExternalDiff = false
+    @State private var showsMarkdownPreview = true
+    @State private var synchronizedLine = 1
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -28,20 +31,7 @@ struct TextEditorWorkspace: View {
                     readOnlyBanner
                     Divider().overlay(theme.palette.line)
                 }
-                CodeEditor(
-                    text: $editor.text,
-                    language: editor.language,
-                    settings: editor.settings,
-                    isReadOnly: editor.isReadOnly,
-                    undoManager: editor.undoManager,
-                    onSave: editor.saveNow,
-                    onLongLineModeChange: editor.setSoftWrapSuppressed,
-                    onLargePaste: editor.enterLargePasteReadOnlyMode,
-                    onPasteRefused: editor.reportPasteRefused
-                ) { line, column in
-                    cursorLine = line
-                    cursorColumn = column
-                }
+                editorSurface
                 Divider().overlay(theme.palette.line)
                 statusBar
             }
@@ -78,6 +68,49 @@ struct TextEditorWorkspace: View {
         }
     }
 
+    @ViewBuilder private var editorSurface: some View {
+        if editor.language == .markdown, showsMarkdownPreview {
+            HSplitView {
+                codeEditor
+                    .frame(minWidth: 340)
+                MarkdownPreview(
+                    markdown: editor.text,
+                    baseDirectory: editor.sourceURL?.deletingLastPathComponent(),
+                    sourceLine: synchronizedLine
+                ) { line in
+                    synchronizedLine = line
+                }
+                .frame(minWidth: 340)
+            }
+            .accessibilityIdentifier("markdown-split-editor")
+        } else {
+            codeEditor
+        }
+    }
+
+    private var codeEditor: some View {
+        CodeEditor(
+            text: $editor.text,
+            language: editor.language,
+            settings: editor.settings,
+            isReadOnly: editor.isReadOnly,
+            undoManager: editor.undoManager,
+            onSave: editor.saveNow,
+            onLongLineModeChange: editor.setSoftWrapSuppressed,
+            onLargePaste: editor.enterLargePasteReadOnlyMode,
+            onPasteRefused: editor.reportPasteRefused,
+            scrollToLine: editor.language == .markdown && showsMarkdownPreview
+                ? synchronizedLine : nil,
+            onVisibleLineChange: { line in
+                guard editor.language == .markdown, showsMarkdownPreview else { return }
+                synchronizedLine = line
+            }
+        ) { line, column in
+            cursorLine = line
+            cursorColumn = column
+        }
+    }
+
     private var header: some View {
         HStack(spacing: theme.metrics.spacing.sm) {
             Button(action: model.closeTextEditor) {
@@ -104,6 +137,37 @@ struct TextEditorWorkspace: View {
                 .clipShape(Capsule())
 
             Spacer()
+
+            if editor.language == .markdown {
+                Button {
+                    showsMarkdownPreview.toggle()
+                } label: {
+                    Image(
+                        systemName: showsMarkdownPreview
+                            ? "rectangle.split.2x1.fill" : "rectangle.split.2x1"
+                    )
+                    .frame(width: 28, height: 28)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .help(showsMarkdownPreview ? "Hide Markdown preview" : "Show Markdown preview")
+                .accessibilityLabel(showsMarkdownPreview ? "Hide preview" : "Show preview")
+                .accessibilityIdentifier("markdown-preview-toggle")
+
+                Menu {
+                    ForEach(model.textEditorExportTargets) { target in
+                        Button(target.displayName) {
+                            model.enqueueTextEditorExport(as: target)
+                        }
+                    }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(model.textEditorExportTargets.isEmpty)
+                .help("Export through Clip's conversion queue")
+                .accessibilityIdentifier("markdown-export")
+            }
 
             saveControl
 
@@ -219,6 +283,10 @@ struct TextEditorWorkspace: View {
             statusItem(editor.activeFile?.lineEnding.editorDisplayName ?? "LF")
             statusDivider
             statusItem(editor.settings.softWrap ? "Wrap" : "No wrap")
+            if editor.language == .markdown, showsMarkdownPreview {
+                statusDivider
+                statusItem("Preview")
+            }
         }
         .font(theme.type.numeric.font)
         .foregroundStyle(theme.palette.textTertiary)

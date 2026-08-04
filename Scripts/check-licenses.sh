@@ -22,7 +22,7 @@ if [[ -n "$missing" ]]; then
 fi
 
 for heading in 'FFmpeg 7.1.2' 'libvpx 1.15.2' 'libaom 3.12.1' 'libwebp 1.6.0' 'GRDB.swift 7.11.1' \
-    'PDFium 152.0.7961.0' 'Tree-sitter syntax engine'; do
+    'PDFium 152.0.7961.0' 'Tree-sitter syntax engine' 'Swift Markdown 0.8.0' 'KaTeX 0.17.0'; do
     if ! grep -Fq "$heading" ACKNOWLEDGEMENTS.md; then
         echo "Acknowledgements are missing $heading" >&2
         exit 1

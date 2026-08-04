@@ -11,6 +11,10 @@ let package = Package(
     dependencies: [
         .package(path: "../CoreModel"),
         .package(
+            url: "https://github.com/swiftlang/swift-markdown",
+            exact: "0.8.0"
+        ),
+        .package(
             url: "https://github.com/tree-sitter/swift-tree-sitter",
             exact: "0.25.0"
         ),
@@ -96,6 +100,7 @@ let package = Package(
             name: "TextEngine",
             dependencies: [
                 "CoreModel",
+                .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
                 .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
                 .product(name: "TreeSitterC", package: "tree-sitter-c"),
@@ -116,7 +121,8 @@ let package = Package(
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
                 .product(name: "TreeSitterXML", package: "tree-sitter-xml"),
                 .product(name: "TreeSitterYAML", package: "tree-sitter-yaml"),
-            ]
+            ],
+            resources: [.copy("Resources")]
         ),
         .testTarget(name: "TextEngineTests", dependencies: ["TextEngine", "CoreModel"]),
     ],

@@ -28,6 +28,43 @@ struct V1BackendAcceptanceTests {
         #expect(pdf.string?.contains("Release notes") == true)
     }
 
+    @Test("GFM Markdown with fenced code and math exports through the shared PDF graph")
+    @MainActor
+    func richMarkdownToPDF() async throws {
+        let folder = try fixtureFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let input = folder.appendingPathComponent("README.md")
+        let output = folder.appendingPathComponent("README.pdf")
+        let markdown = """
+            # Clip README
+
+            | Feature | State |
+            | --- | --- |
+            | Preview | Ready |
+
+            ```swift
+            let answer = 42
+            ```
+
+            $$E = mc^2$$
+
+            ![Blocked](https://tracking.example/pixel.png)
+            """
+        try Data(markdown.utf8).write(to: input)
+
+        let plan = try #require(
+            ConversionPlanner().plan(from: ConversionFormats.markdown, to: ConversionFormats.pdf)
+        )
+        try await run(plan, input: input, output: output)
+
+        let pdf = try #require(PDFDocument(url: output))
+        let text = pdf.string ?? ""
+        #expect(text.contains("Clip README"))
+        #expect(text.contains("Preview"))
+        #expect(text.contains("answer"))
+        #expect(!text.contains("tracking.example"))
+    }
+
     @Test("DOCX converts to a searchable PDF through native rich text and HTML")
     @MainActor
     func docxToPDF() async throws {

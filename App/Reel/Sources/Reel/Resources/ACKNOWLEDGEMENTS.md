@@ -68,3 +68,22 @@ grammars are licensed under the MIT license.
 - Runtime: <https://github.com/tree-sitter/tree-sitter>
 - Grammar sources: <https://github.com/tree-sitter/tree-sitter/wiki/List-of-parsers>
 - Licenses and copyright notices: [`Vendor/licenses/TREE-SITTER-NOTICES`](Vendor/licenses/TREE-SITTER-NOTICES)
+
+## Swift Markdown 0.8.0
+
+Copyright © 2021–2026 Apple Inc. and the Swift project authors. Swift Markdown
+and its Swift cmark dependency are licensed under the Apache License 2.0 with
+the Swift Runtime Library Exception. Clip uses the parser entirely on-device.
+
+- Source: <https://github.com/swiftlang/swift-markdown/releases/tag/0.8.0>
+- License: [`Vendor/licenses/SWIFT-MARKDOWN-LICENSE`](Vendor/licenses/SWIFT-MARKDOWN-LICENSE)
+
+## KaTeX 0.17.0
+
+Copyright © 2013–2020 Khan Academy and other contributors. Licensed under the
+MIT License. Clip bundles the minified renderer and WOFF2 fonts for offline math
+preview; no CDN or runtime download is used.
+
+- Source: <https://github.com/KaTeX/KaTeX/releases/tag/v0.17.0>
+- Package checksum (SHA-256): `252efd48f892d178136fe3ba3530d3718b2b087ea81c3a40a877227bc61d5256`
+- License: [`Vendor/licenses/KATEX-LICENSE`](Vendor/licenses/KATEX-LICENSE)
