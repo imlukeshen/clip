@@ -40,6 +40,8 @@ public final class AppModel {
     public private(set) var imageEditor: ImageEditorViewModel?
     public private(set) var pdfEditor: PDFEditorViewModel?
     public private(set) var textEditor: TextEditorViewModel?
+    /// Scratch buffers available for restoration in the text workspace.
+    public private(set) var scratchBuffers: [ScratchTextRecord] = []
     public private(set) var lastMessage: String?
     public private(set) var clickTrackingState: ClickTrackingState = .checking
     public private(set) var captureDirectory = SystemCaptureDestination.current()
@@ -207,6 +209,7 @@ public final class AppModel {
             canRevertMigration = LibraryMigration.canRevert(at: libraryRoot)
             clickTrackingState = await runtime.clickTrackingState()
             await refreshAssets()
+            await refreshScratchBuffers()
         } catch AppRuntimeError.migrationRequired(let plan) {
             isWatching = false
             pendingMigrationPlan = plan
@@ -1152,9 +1155,46 @@ public final class AppModel {
         }
     }
 
+    /// Closes the current text editor and refreshes the scratch list.
     public func closeTextEditor() {
         textEditor?.stop()
         textEditor = nil
+        Task { await refreshScratchBuffers() }
+    }
+
+    /// Creates, persists, and opens a new unnamed text buffer.
+    public func createScratchTextEditor() {
+        guard textEditor == nil, editor == nil, imageEditor == nil, pdfEditor == nil,
+            let runtime
+        else { return }
+        Task {
+            do {
+                let buffer = try await runtime.createScratchTextBuffer()
+                openScratchTextEditor(buffer, runtime: runtime)
+                await refreshScratchBuffers()
+            } catch {
+                lastMessage = "A new scratch buffer could not be created."
+            }
+        }
+    }
+
+    /// Restores and opens a previously persisted scratch buffer.
+    public func openScratchTextEditor(_ id: DocumentID) {
+        guard textEditor == nil, editor == nil, imageEditor == nil, pdfEditor == nil,
+            let runtime
+        else { return }
+        Task {
+            do {
+                guard let buffer = try await runtime.scratchTextBuffer(id) else {
+                    await refreshScratchBuffers()
+                    lastMessage = "That scratch buffer is no longer available."
+                    return
+                }
+                openScratchTextEditor(buffer, runtime: runtime)
+            } catch {
+                lastMessage = "That scratch buffer could not be opened."
+            }
+        }
     }
 
     private func closeOpenEditors() {
@@ -1172,6 +1212,38 @@ public final class AppModel {
         } catch {
             lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
         }
+    }
+
+    private func refreshScratchBuffers() async {
+        guard let runtime else { return }
+        do {
+            scratchBuffers = try await runtime.scratchTextRecords()
+        } catch {
+            scratchBuffers = []
+            lastMessage = "Scratch buffers could not be restored."
+        }
+    }
+
+    private func openScratchTextEditor(
+        _ buffer: ScratchTextBuffer,
+        runtime: AppRuntime
+    ) {
+        let documentID = buffer.document.id
+        let textEditor = TextEditorViewModel(
+            document: buffer.document,
+            text: buffer.contents.text,
+            sourceURL: nil,
+            hashingWith: { SampledFileHasher.hash($0) },
+            persistingStructure: { document in
+                try await runtime.saveScratchTextDocument(document)
+            },
+            persistingContents: { data, _ in
+                try await runtime.saveScratchTextContents(data, for: documentID)
+            }
+        )
+        self.textEditor = textEditor
+        selectedWorkspace = .text
+        textEditor.start()
     }
 
     private func refreshFolderTree() async {

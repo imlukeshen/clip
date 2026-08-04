@@ -1,5 +1,11 @@
 # Handoff — Phase T (Text Editor) T0 + two UI fixes
 
+> **Completion update (2026-08-03):** The Xcode continuation is complete. The
+> missing TextKit 2 workspace, line-number gutter, inspector, navigation and
+> undo routing, editing commands, scratch-buffer create/restore flow, ADRs, and
+> automated regressions described below are now implemented on this branch.
+> This document remains as the checkpoint history that defined the pickup work.
+
 **Branch:** `feat/text-editor-t0`
 **Written:** 2026-08-03
 **Machine constraint that produced this handoff:** this Mac has **CommandLineTools only, no

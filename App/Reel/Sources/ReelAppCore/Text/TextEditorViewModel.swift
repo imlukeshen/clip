@@ -56,6 +56,7 @@ public final class TextEditorViewModel {
 
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
+    private var cleanupTask: Task<Void, Never>?
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
     private let autosaveInterval: Duration = .seconds(2)
@@ -104,11 +105,14 @@ public final class TextEditorViewModel {
         document.settings
     }
 
+    /// Starts editor-owned background work.
     public func start() {}
 
+    /// Stops background work and flushes any dirty content before closing.
     public func stop() {
         structureTask?.cancel()
         contentTask?.cancel()
+        cleanupTask?.cancel()
         // A pending edit must not be lost when the editor closes.
         flushContentAutosave()
     }
@@ -142,9 +146,12 @@ public final class TextEditorViewModel {
         perform(.setSettings(settings), actionName: "Editor Settings")
     }
 
+    /// Undoes the latest content or document-setting edit.
     public func undo() { undoManager.undo() }
+    /// Redoes the latest undone content or document-setting edit.
     public func redo() { undoManager.redo() }
 
+    /// Clears the transient editor notice.
     public func clearNotice() { notice = nil }
 
     // MARK: - Content persistence
@@ -152,14 +159,30 @@ public final class TextEditorViewModel {
     /// Immediately writes the buffer to disk, cancelling any pending autosave.
     public func saveNow() {
         contentTask?.cancel()
-        writeContents()
+        cleanupTask?.cancel()
+        let original = text
+        cleanupTask = Task { [weak self] in
+            let cleaned = await Task.detached(priority: .userInitiated) {
+                TextEditingOperations.trimmingTrailingWhitespace(in: original)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            if text == original, cleaned != original {
+                text = cleaned
+                contentTask?.cancel()
+            }
+            writeContents()
+        }
     }
 
     private func scheduleContentAutosave() {
         contentTask?.cancel()
         let interval = autosaveInterval
         contentTask = Task { [weak self] in
-            try? await Task.sleep(for: interval)
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
             guard !Task.isCancelled else { return }
             self?.writeContents()
         }
@@ -173,14 +196,22 @@ public final class TextEditorViewModel {
     private func writeContents() {
         guard isDirty else { return }
         let encoding = activeFile?.encoding.stringEncoding ?? .utf8
-        guard let data = text.data(using: encoding) ?? text.data(using: .utf8) else {
-            notice = "This text could not be encoded for saving."
-            return
-        }
+        let value = text
         isDirty = false
-        let hash = hashData(data)
+        let hashData = hashData
         let persistContents = persistContents
         Task { [weak self] in
+            let payload = await Task.detached(priority: .utility) {
+                guard let data = value.data(using: encoding) ?? value.data(using: .utf8) else {
+                    return Optional<(Data, String)>.none
+                }
+                return (data, hashData(data))
+            }.value
+            guard let (data, hash) = payload else {
+                self?.isDirty = true
+                self?.notice = "This text could not be encoded for saving."
+                return
+            }
             do {
                 try await persistContents(data, hash)
             } catch {

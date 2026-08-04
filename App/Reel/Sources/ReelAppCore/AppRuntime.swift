@@ -30,6 +30,7 @@ public actor AppRuntime {
     private let clickTracking: EventTrackAssociator
     private let libraryWatcher: LibraryRootWatcher
     private let history: CaptureHistory
+    private let scratchTextStore: ScratchTextStore
     private let clipboardWatcher = ClipboardWatcher()
     private var clipboardTask: Task<Void, Never>?
     private var captureDirectory: URL
@@ -94,6 +95,7 @@ public actor AppRuntime {
             Task { await library.refreshLocations() }
         }
         self.history = history
+        self.scratchTextStore = ScratchTextStore(directory: LibraryLayout.scratch(in: root))
         self.coordinator = IngestCoordinator(
             pipeline: pipeline,
             libraryInboxes: libraryInboxes,
@@ -428,6 +430,31 @@ public actor AppRuntime {
         contentHash: String
     ) async throws {
         _ = try await library.saveTextContents(data, for: assetID, contentHash: contentHash)
+    }
+
+    /// Lists persisted scratch buffers without loading their full contents.
+    public func scratchTextRecords() async throws -> [ScratchTextRecord] {
+        try await scratchTextStore.records()
+    }
+
+    /// Creates and immediately persists a new empty scratch buffer.
+    public func createScratchTextBuffer() async throws -> ScratchTextBuffer {
+        try await scratchTextStore.create()
+    }
+
+    /// Restores a scratch buffer when both its structure and contents still exist.
+    public func scratchTextBuffer(_ id: DocumentID) async throws -> ScratchTextBuffer? {
+        try await scratchTextStore.load(id)
+    }
+
+    /// Persists the structural half of a scratch buffer.
+    public func saveScratchTextDocument(_ document: TextDocument) async throws {
+        try await scratchTextStore.save(document: document)
+    }
+
+    /// Persists the editable content half of a scratch buffer.
+    public func saveScratchTextContents(_ data: Data, for id: DocumentID) async throws {
+        try await scratchTextStore.save(contents: data, for: id)
     }
 
     public func changes() -> AsyncStream<LibraryChange> {

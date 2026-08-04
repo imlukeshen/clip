@@ -17,6 +17,8 @@ struct UnifiedInspector: View {
                 ImageLayerInspector(editor: editor)
             } else if model.selectedWorkspace == .video, let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
+            } else if model.selectedWorkspace == .text, let editor = model.textEditor {
+                TextInspector(editor: editor)
             } else {
                 // The library no longer has a persistent inspector — "Get Info"
                 // on an item replaces it — and `MainWindow` only mounts this rail

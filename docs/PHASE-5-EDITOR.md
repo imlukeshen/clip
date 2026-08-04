@@ -41,7 +41,7 @@ produces enormous histories and terrible undo granularity.
 Both register with the **same** `UndoManager` instance for that editor, so they
 interleave correctly in one undo stack. This is the only place the patch model is
 deliberately not the sole mutation path, and the reason is recorded in
-`docs/adr/0007-text-editing-uses-native-undo.md`.
+`docs/adr/0008-text-editing-uses-native-undo.md`.
 
 ```swift
 public struct TextDocument: EditableDocument {

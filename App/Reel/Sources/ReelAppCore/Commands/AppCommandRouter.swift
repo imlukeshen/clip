@@ -36,11 +36,13 @@ public enum AppCommandRouter {
                 ? .unavailable(reason: "The capture history is already empty.")
                 : .available
         case "edit.undo":
-            return model.imageEditor?.undoManager.canUndo == true
+            return model.textEditor?.undoManager.canUndo == true
+                || model.imageEditor?.undoManager.canUndo == true
                 || model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
                 ? .available : .unavailable(reason: "There is nothing to undo.")
         case "edit.redo":
-            return model.imageEditor?.undoManager.canRedo == true
+            return model.textEditor?.undoManager.canRedo == true
+                || model.imageEditor?.undoManager.canRedo == true
                 || model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
                 ? .available : .unavailable(reason: "There is nothing to redo.")
         case "asset.selectAll":
@@ -108,7 +110,9 @@ public enum AppCommandRouter {
             model.clearCaptureHistory()
             return .completed
         case "edit.undo":
-            if let editor = model.imageEditor {
+            if let editor = model.textEditor {
+                editor.undo()
+            } else if let editor = model.imageEditor {
                 editor.undo()
             } else if let editor = model.editor {
                 editor.undo()
@@ -117,7 +121,9 @@ public enum AppCommandRouter {
             }
             return .completed
         case "edit.redo":
-            if let editor = model.imageEditor {
+            if let editor = model.textEditor {
+                editor.redo()
+            } else if let editor = model.imageEditor {
                 editor.redo()
             } else if let editor = model.editor {
                 editor.redo()

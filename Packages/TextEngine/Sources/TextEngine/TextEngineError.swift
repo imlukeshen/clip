@@ -15,4 +15,6 @@ public enum TextEngineError: Error, Sendable, Equatable {
     case unencodable(TextEncoding)
     /// The file exceeds the largest size the editor will open in one buffer.
     case tooLarge(URL, byteSize: Int64, limit: Int64)
+    /// A persisted scratch-buffer record is incomplete or malformed.
+    case invalidScratchBuffer(URL)
 }

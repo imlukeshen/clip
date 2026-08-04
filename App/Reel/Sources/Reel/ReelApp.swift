@@ -57,6 +57,9 @@ struct ClipApp: App {
                 Button(commandTitle("navigation.pdf")) {
                     AppCommandRouter.run("navigation.pdf", in: model)
                 }
+                Button(commandTitle("navigation.text")) {
+                    AppCommandRouter.run("navigation.text", in: model)
+                }
                 Button(commandTitle("navigation.convert")) {
                     AppCommandRouter.run("navigation.convert", in: model)
                 }
@@ -68,7 +71,7 @@ struct ClipApp: App {
                 }
                 .keyboardShortcut("z", modifiers: .command)
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil
+                    model.editor == nil && model.imageEditor == nil && model.textEditor == nil
                         && !model.undoManager.canUndo
                 )
                 Button(commandTitle("edit.redo")) {
@@ -76,7 +79,7 @@ struct ClipApp: App {
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil
+                    model.editor == nil && model.imageEditor == nil && model.textEditor == nil
                         && !model.undoManager.canRedo
                 )
             }
@@ -87,6 +90,7 @@ struct ClipApp: App {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(
                     model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
+                        || model.textEditor != nil
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {
