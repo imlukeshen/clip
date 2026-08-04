@@ -72,6 +72,13 @@ private final class HotKeyContext: @unchecked Sendable {
         self.modifiers = modifiers
     }
 
+    private var hotKeyID: EventHotKeyID {
+        EventHotKeyID(
+            signature: Self.signature,
+            id: keyCode | modifiers
+        )
+    }
+
     func register(handler: @escaping @Sendable () -> Void) throws {
         self.handler.withLock { $0 = handler }
 
@@ -93,7 +100,7 @@ private final class HotKeyContext: @unchecked Sendable {
             throw CaptureError.hotKeyUnavailable
         }
 
-        let hotKeyID = EventHotKeyID(signature: Self.signature, id: 1)
+        let hotKeyID = hotKeyID
         var hotKey: EventHotKeyRef?
         let registered = RegisterEventHotKey(
             keyCode,
@@ -128,13 +135,31 @@ private final class HotKeyContext: @unchecked Sendable {
         handler?()
     }
 
+    fileprivate func handles(_ hotKeyID: EventHotKeyID) -> Bool {
+        hotKeyID.signature == self.hotKeyID.signature
+            && hotKeyID.id == self.hotKeyID.id
+    }
+
     /// A four-char signature identifying Clip's hotkey registration.
     private static let signature = "clip".utf8.reduce(OSType(0)) { ($0 << 8) + OSType($1) }
 }
 
-private let hotKeyEventHandler: EventHandlerUPP = { _, _, userData in
-    guard let userData else { return OSStatus(eventNotHandledErr) }
+private let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
     let context = Unmanaged<HotKeyContext>.fromOpaque(userData).takeUnretainedValue()
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &hotKeyID
+    )
+    guard status == noErr, context.handles(hotKeyID) else {
+        return OSStatus(eventNotHandledErr)
+    }
     context.fire()
     return noErr
 }

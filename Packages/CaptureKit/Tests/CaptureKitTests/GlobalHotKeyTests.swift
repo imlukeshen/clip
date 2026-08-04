@@ -10,6 +10,8 @@ import Testing
 @Suite("Global hot key", .serialized)
 @MainActor
 struct GlobalHotKeyTests {
+    private let testModifiers = UInt32(cmdKey | shiftKey | controlKey | optionKey)
+
     private actor DeliveryProbe {
         private(set) var wasDelivered = false
 
@@ -24,8 +26,39 @@ struct GlobalHotKeyTests {
     private func makeHotKey(keyCode: Int) -> GlobalHotKey {
         GlobalHotKey(
             keyCode: UInt32(keyCode),
-            modifiers: UInt32(cmdKey | shiftKey | controlKey | optionKey)
+            modifiers: testModifiers
         )
+    }
+
+    private func sendHotKeyEvent(keyCode: Int) {
+        var event: EventRef?
+        let created = CreateEvent(
+            nil,
+            OSType(kEventClassKeyboard),
+            UInt32(kEventHotKeyPressed),
+            GetCurrentEventTime(),
+            0,
+            &event
+        )
+        #expect(created == noErr)
+        guard let event else { return }
+        defer { ReleaseEvent(event) }
+
+        let signature = "clip".utf8.reduce(OSType(0)) { ($0 << 8) + OSType($1) }
+        var hotKeyID = EventHotKeyID(
+            signature: signature,
+            id: UInt32(keyCode) | testModifiers
+        )
+        #expect(
+            SetEventParameter(
+                event,
+                EventParamName(kEventParamDirectObject),
+                EventParamType(typeEventHotKeyID),
+                MemoryLayout<EventHotKeyID>.size,
+                &hotKeyID
+            ) == noErr
+        )
+        #expect(SendEventToEventTarget(event, GetEventDispatcherTarget()) == noErr)
     }
 
     @Test("Registering then unregistering leaves no handler installed")
@@ -56,31 +89,43 @@ struct GlobalHotKeyTests {
 
     @Test("Hot-key events reach the registered application handler")
     func deliversApplicationEvent() async throws {
-        let hotKey = makeHotKey(keyCode: kVK_F17)
+        let keyCode = kVK_F17
+        let hotKey = makeHotKey(keyCode: keyCode)
         let probe = DeliveryProbe()
         try hotKey.register {
             Task { await probe.record() }
         }
 
-        var event: EventRef?
-        let created = CreateEvent(
-            nil,
-            OSType(kEventClassKeyboard),
-            UInt32(kEventHotKeyPressed),
-            GetCurrentEventTime(),
-            0,
-            &event
-        )
-        #expect(created == noErr)
-        if let event {
-            #expect(SendEventToEventTarget(event, GetEventDispatcherTarget()) == noErr)
-            ReleaseEvent(event)
-        }
+        sendHotKeyEvent(keyCode: keyCode)
 
         for _ in 0..<20 where !(await probe.wasDelivered) {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(await probe.wasDelivered)
         hotKey.unregister()
+    }
+
+    @Test("Distinct hot keys deliver only to their matching handler")
+    func disambiguatesRegisteredHotKeys() async throws {
+        let firstKeyCode = kVK_F16
+        let secondKeyCode = kVK_F15
+        let first = makeHotKey(keyCode: firstKeyCode)
+        let second = makeHotKey(keyCode: secondKeyCode)
+        let firstProbe = DeliveryProbe()
+        let secondProbe = DeliveryProbe()
+        try first.register { Task { await firstProbe.record() } }
+        try second.register { Task { await secondProbe.record() } }
+        defer {
+            first.unregister()
+            second.unregister()
+        }
+
+        sendHotKeyEvent(keyCode: secondKeyCode)
+        for _ in 0..<20 where !(await secondProbe.wasDelivered) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(!(await firstProbe.wasDelivered))
+        #expect(await secondProbe.wasDelivered)
     }
 }

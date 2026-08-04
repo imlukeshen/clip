@@ -1,4 +1,6 @@
 import AppKit
+import CaptureKit
+@preconcurrency import Carbon.HIToolbox
 import DesignSystem
 import ReelAppCore
 import SwiftUI
@@ -14,6 +16,10 @@ import SwiftUI
 @MainActor
 final class ClipboardPanelController {
     private let model: AppModel
+    private let escapeHotKey = GlobalHotKey(
+        keyCode: UInt32(kVK_Escape),
+        modifiers: 0
+    )
     private var panel: NSPanel?
     private var clickMonitor: Any?
 
@@ -34,6 +40,7 @@ final class ClipboardPanelController {
     /// Orders the panel out and stops watching for the click that dismisses it.
     func hide() {
         panel?.orderOut(nil)
+        escapeHotKey.unregister()
         stopMonitoringOutsideClicks()
     }
 
@@ -47,7 +54,18 @@ final class ClipboardPanelController {
         // Order front without activating Clip, so the app the user copied from
         // keeps focus and their paste goes there.
         panel.orderFrontRegardless()
+        registerEscapeShortcut()
         startMonitoringOutsideClicks()
+    }
+
+    /// A nonactivating panel intentionally leaves keyboard focus in the app the
+    /// user was already using. Register Escape only for the panel's visible
+    /// lifetime so it can still dismiss without stealing focus or requiring
+    /// Accessibility permission.
+    private func registerEscapeShortcut() {
+        try? escapeHotKey.register { [weak self] in
+            Task { @MainActor in self?.hide() }
+        }
     }
 
     private var content: some View {

@@ -6,7 +6,7 @@ import XCTest
 
 final class TextEditorTypingTests: XCTestCase {
     @MainActor
-    func testClipboardShortcutOpensAndClosesTheGlobalPanel() throws {
+    func testClipboardShortcutOpensAndEscapeClosesTheGlobalPanel() throws {
         let app = XCUIApplication()
         let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
             "clip-clipboard-shortcut-\(UUID().uuidString)",
@@ -30,6 +30,12 @@ final class TextEditorTypingTests: XCTestCase {
         let clipboardTitle = app.staticTexts["Clip Clipboard"]
         XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
 
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(clipboardTitle.waitForNonExistence(timeout: 5))
+
+        // Command-Shift-C remains a toggle when the user invokes it again.
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(clipboardTitle.waitForNonExistence(timeout: 5))
     }
