@@ -159,6 +159,7 @@ struct CodeEditor: NSViewRepresentable {
         private var lineIndexTask: Task<Void, Never>?
         private var suppressesSoftWrap = false
         private let syntaxHighlighter = SyntaxHighlighter()
+        private let markdownFencedCodeHighlighter = MarkdownFencedCodeHighlighter()
         private var syntaxTask: Task<Void, Never>?
         private var syntaxRevision = 0
         private var pendingSyntaxEdit: SyntaxEdit?
@@ -166,6 +167,7 @@ struct CodeEditor: NSViewRepresentable {
         private var syntaxLanguage: LanguageID?
         private var syntaxBaseFont: NSFont?
         private var syntaxEmphasisFont: NSFont?
+        private var markdownCodeEmphasisFont: NSFont?
         private var syntaxBaseColor: NSColor?
         private var syntaxParagraphStyle: NSParagraphStyle?
         private var syntaxColors: [SyntaxTokenKind: NSColor] = [:]
@@ -274,6 +276,10 @@ struct CodeEditor: NSViewRepresentable {
                 usesProseLayout
                 ? NSFont.systemFont(ofSize: settings.fontSize, weight: .semibold)
                 : NSFont.monospacedSystemFont(ofSize: settings.fontSize, weight: .medium)
+            let codeEmphasisFont = NSFont.monospacedSystemFont(
+                ofSize: max(settings.fontSize - 1, 10),
+                weight: .medium
+            )
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.lineSpacing = usesProseLayout ? 3 : 1
             let colors: [SyntaxTokenKind: NSColor] = [
@@ -294,6 +300,7 @@ struct CodeEditor: NSViewRepresentable {
             let syntaxAppearanceChanged =
                 syntaxLanguage != language
                 || syntaxBaseFont != font
+                || markdownCodeEmphasisFont != codeEmphasisFont
                 || syntaxBaseColor != foreground
                 || syntaxColors != colors
                 || markdownMarkerColor != markerColor
@@ -302,6 +309,7 @@ struct CodeEditor: NSViewRepresentable {
             syntaxLanguage = language
             syntaxBaseFont = font
             syntaxEmphasisFont = emphasisFont
+            markdownCodeEmphasisFont = codeEmphasisFont
             syntaxBaseColor = foreground
             syntaxParagraphStyle = paragraphStyle
             syntaxColors = colors
@@ -491,10 +499,16 @@ struct CodeEditor: NSViewRepresentable {
                     visibleRange: visibleRange,
                     edit: edit
                 )
+                let fencedCodeTokens =
+                    language == .markdown
+                    ? await markdownFencedCodeHighlighter.highlights(
+                        in: source,
+                        visibleRange: visibleRange
+                    ) : []
                 guard !Task.isCancelled, revision == syntaxRevision,
                     textView.string == source
                 else { return }
-                applySyntax(result, to: textView)
+                applySyntax(result, fencedCodeTokens: fencedCodeTokens, to: textView)
             }
         }
 
@@ -516,6 +530,7 @@ struct CodeEditor: NSViewRepresentable {
 
         private func applySyntax(
             _ result: SyntaxHighlightResult,
+            fencedCodeTokens: [SyntaxToken],
             to textView: NSTextView
         ) {
             guard let storage = textView.textStorage, let syntaxBaseFont,
@@ -563,6 +578,7 @@ struct CodeEditor: NSViewRepresentable {
                     selectedRange: textView.selectedRange(),
                     storage: storage
                 )
+                applyTokens(fencedCodeTokens, intersecting: styledRange, to: storage)
             }
             storage.endEditing()
             isApplyingSyntax = false
@@ -570,6 +586,22 @@ struct CodeEditor: NSViewRepresentable {
                 textView.layoutManager?.ensureLayout(for: textContainer)
             }
             textView.needsDisplay = true
+        }
+
+        private func applyTokens(
+            _ tokens: [SyntaxToken],
+            intersecting styledRange: NSRange,
+            to storage: NSTextStorage
+        ) {
+            for token in tokens {
+                let range = NSIntersectionRange(token.range, styledRange)
+                guard range.length > 0, let color = syntaxColors[token.kind] else { continue }
+                var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
+                if tokenUsesEmphasisFont(token.kind), let markdownCodeEmphasisFont {
+                    attributes[.font] = markdownCodeEmphasisFont
+                }
+                storage.addAttributes(attributes, range: range)
+            }
         }
 
         /// NSTextView may reset typing attributes while SwiftUI reparents the
@@ -797,6 +829,122 @@ struct CodeEditor: NSViewRepresentable {
                         range: marker
                     )
                 }
+            }
+
+            applyMarkdownMatches(
+                pattern: "!\\[([^\\]\\n]*)\\]\\(([^)\\n]+)\\)",
+                source: source,
+                range: safeRange
+            ) { match in
+                let label = match.range(at: 1)
+                guard label.location != NSNotFound else { return }
+                storage.addAttributes(
+                    [
+                        .foregroundColor: markdownQuoteColor,
+                        .font: NSFont.systemFont(
+                            ofSize: syntaxBaseFont.pointSize, weight: .semibold),
+                    ],
+                    range: label
+                )
+                let markerColor = syntaxColor(match.range)
+                self.dimDelimiters(
+                    in: match.range,
+                    around: label,
+                    color: markerColor,
+                    storage: storage
+                )
+            }
+
+            applyMarkdownMatches(
+                pattern: "(?m)^([ \\t]*\\|.*\\|[ \\t]*)$",
+                source: source,
+                range: safeRange
+            ) { match in
+                let paragraph =
+                    (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
+                    ?? NSMutableParagraphStyle()
+                paragraph.paragraphSpacing = 2
+                storage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(
+                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
+                        .backgroundColor: markdownCodeBackground.withAlphaComponent(0.55),
+                        .paragraphStyle: paragraph,
+                    ],
+                    range: match.range
+                )
+            }
+
+            applyMarkdownMatches(
+                pattern:
+                    "(?m)^[ \\t]*\\|?[ \\t]*:?-{3,}:?[ \\t]*(?:\\|[ \\t]*:?-{3,}:?[ \\t]*)+\\|?[ \\t]*$",
+                source: source,
+                range: safeRange
+            ) { match in
+                storage.addAttribute(
+                    .foregroundColor, value: markdownMarkerColor, range: match.range)
+            }
+
+            applyMarkdownMatches(
+                pattern: "\\[\\^([^\\]\\n]+)\\](?::)?",
+                source: source,
+                range: safeRange
+            ) { match in
+                storage.addAttributes(
+                    [
+                        .foregroundColor: markdownQuoteColor,
+                        .font: NSFont.systemFont(
+                            ofSize: max(syntaxBaseFont.pointSize - 2, 9), weight: .semibold),
+                    ],
+                    range: match.range
+                )
+            }
+
+            applyMarkdownMatches(
+                pattern: "(?<!\\$)\\$([^\\n$]+)\\$(?!\\$)",
+                source: source,
+                range: safeRange
+            ) { match in
+                let content = match.range(at: 1)
+                guard content.location != NSNotFound else { return }
+                storage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(
+                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
+                        .foregroundColor: markdownQuoteColor,
+                    ],
+                    range: content
+                )
+                self.dimDelimiters(
+                    in: match.range,
+                    around: content,
+                    color: syntaxColor(match.range),
+                    storage: storage
+                )
+            }
+
+            applyMarkdownMatches(
+                pattern: "(?ms)^\\$\\$[ \\t]*\\n(.*?)^\\$\\$[ \\t]*$",
+                source: source,
+                range: safeRange
+            ) { match in
+                storage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(
+                            ofSize: syntaxBaseFont.pointSize, weight: .regular),
+                        .foregroundColor: markdownQuoteColor,
+                        .backgroundColor: markdownCodeBackground,
+                    ],
+                    range: match.range
+                )
+                let content = match.range(at: 1)
+                guard content.location != NSNotFound else { return }
+                self.dimDelimiters(
+                    in: match.range,
+                    around: content,
+                    color: syntaxColor(match.range),
+                    storage: storage
+                )
             }
 
             applyMarkdownMatches(

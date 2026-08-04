@@ -252,5 +252,49 @@ struct TextEditingOperationsTests {
         )
         #expect(block.text == "```\nsample\n```")
         #expect((block.text as NSString).substring(with: block.selectedRange) == "sample")
+
+        let detectedBlock = MarkdownFormattingOperations.insertingCodeBlock(
+            contents: "def render():\n    return True",
+            language: .python,
+            into: "Before\n",
+            selectedRange: NSRange(location: 7, length: 0)
+        )
+        #expect(detectedBlock.text == "Before\n```python\ndef render():\n    return True\n```")
+    }
+
+    @Test("Markdown rich block insertions keep their next field editable")
+    func markdownRichBlockInsertions() {
+        let image = MarkdownFormattingOperations.apply(
+            .image,
+            to: "",
+            selectedRange: NSRange(location: 0, length: 0)
+        )
+        #expect(image.text == "![Image description](image.png)")
+        #expect((image.text as NSString).substring(with: image.selectedRange) == "image.png")
+
+        let table = MarkdownFormattingOperations.apply(
+            .table,
+            to: "",
+            selectedRange: NSRange(location: 0, length: 0)
+        )
+        #expect(table.text.contains("| --- | --- |"))
+        #expect((table.text as NSString).substring(with: table.selectedRange) == "Column 1")
+
+        let footnote = MarkdownFormattingOperations.apply(
+            .footnote,
+            to: "Existing[^1]\n\n[^1]: First",
+            selectedRange: NSRange(location: 8, length: 0)
+        )
+        #expect(footnote.text.contains("[^2]: Footnote text"))
+        #expect(
+            (footnote.text as NSString).substring(with: footnote.selectedRange) == "Footnote text")
+
+        let math = MarkdownFormattingOperations.apply(
+            .mathBlock,
+            to: "",
+            selectedRange: NSRange(location: 0, length: 0)
+        )
+        #expect(math.text == "$$\nE = mc^2\n$$")
+        #expect((math.text as NSString).substring(with: math.selectedRange) == "E = mc^2")
     }
 }

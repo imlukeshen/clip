@@ -375,6 +375,30 @@ struct TextEditorWorkspace: View {
     }
 
     private var markdownFormattingBar: some View {
+        HStack(spacing: theme.metrics.spacing.sm) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                markdownFormattingControls
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityLabel("Markdown formatting")
+
+            ViewThatFits(in: .horizontal) {
+                Label("Live formatting", systemImage: "sparkles")
+                Image(systemName: "sparkles")
+                    .accessibilityLabel("Markdown formats live as you type")
+            }
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textTertiary)
+            .fixedSize()
+        }
+        .padding(.horizontal, theme.metrics.spacing.lg)
+        .frame(height: 44)
+        .background(theme.palette.surfacePanel)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("markdown-formatting-toolbar")
+    }
+
+    private var markdownFormattingControls: some View {
         HStack(spacing: 4) {
             Menu {
                 Button("Body") { sendMarkdownAction(#selector(CodeTextView.markdownBody(_:))) }
@@ -386,6 +410,16 @@ struct TextEditorWorkspace: View {
                 }
                 Button("Heading 3") {
                     sendMarkdownAction(#selector(CodeTextView.markdownHeading3(_:)))
+                }
+                Divider()
+                Button("Heading 4") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading4(_:)))
+                }
+                Button("Heading 5") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading5(_:)))
+                }
+                Button("Heading 6") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownHeading6(_:)))
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -443,6 +477,12 @@ struct TextEditorWorkspace: View {
                 action: #selector(CodeTextView.markdownLink(_:)),
                 identifier: "markdown-link"
             )
+            markdownFormatButton(
+                "Inline math",
+                systemImage: "function",
+                action: #selector(CodeTextView.markdownInlineMath(_:)),
+                identifier: "markdown-inline-math"
+            )
 
             formattingDivider
 
@@ -475,6 +515,19 @@ struct TextEditorWorkspace: View {
                 Button("Code block") {
                     sendMarkdownAction(#selector(CodeTextView.markdownCodeBlock(_:)))
                 }
+                Button("Table") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownTable(_:)))
+                }
+                Button("Image") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownImage(_:)))
+                }
+                Button("Footnote") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownFootnote(_:)))
+                }
+                Button("Math block") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownMathBlock(_:)))
+                }
+                Divider()
                 Button("Divider") {
                     sendMarkdownAction(#selector(CodeTextView.markdownDivider(_:)))
                 }
@@ -484,23 +537,10 @@ struct TextEditorWorkspace: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .help("Insert a code block or divider")
+            .help("Insert code, a table, image, footnote, math, or divider")
             .accessibilityLabel("Insert Markdown block")
             .accessibilityIdentifier("markdown-insert-block")
-
-            Spacer(minLength: theme.metrics.spacing.md)
-
-            Label("Formats as you type", systemImage: "sparkles")
-                .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.textTertiary)
-                .lineLimit(1)
-                .accessibilityLabel("Markdown formats inline as you type")
         }
-        .padding(.horizontal, theme.metrics.spacing.lg)
-        .frame(height: 42)
-        .background(theme.palette.surfacePanel)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("markdown-formatting-toolbar")
     }
 
     private var formattingDivider: some View {

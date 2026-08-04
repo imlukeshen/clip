@@ -1,4 +1,6 @@
+import CoreModel
 import Foundation
+import TextEngine
 
 /// Selection-aware Markdown commands used by Clip's inline writing canvas.
 public enum MarkdownFormattingAction: Sendable, Equatable {
@@ -6,6 +8,9 @@ public enum MarkdownFormattingAction: Sendable, Equatable {
     case heading1
     case heading2
     case heading3
+    case heading4
+    case heading5
+    case heading6
     case bold
     case italic
     case strikethrough
@@ -16,6 +21,11 @@ public enum MarkdownFormattingAction: Sendable, Equatable {
     case checklist
     case quote
     case codeBlock
+    case image
+    case table
+    case footnote
+    case inlineMath
+    case mathBlock
     case divider
 }
 
@@ -37,6 +47,12 @@ public enum MarkdownFormattingOperations {
             return changeHeading(in: source, selectedRange: range, level: 2)
         case .heading3:
             return changeHeading(in: source, selectedRange: range, level: 3)
+        case .heading4:
+            return changeHeading(in: source, selectedRange: range, level: 4)
+        case .heading5:
+            return changeHeading(in: source, selectedRange: range, level: 5)
+        case .heading6:
+            return changeHeading(in: source, selectedRange: range, level: 6)
         case .bold:
             return wrap(
                 in: source, selectedRange: range, opening: "**", closing: "**",
@@ -64,9 +80,38 @@ public enum MarkdownFormattingOperations {
             return toggleLinePrefix(in: source, selectedRange: range, prefix: "> ")
         case .codeBlock:
             return insertCodeBlock(in: source, selectedRange: range)
+        case .image:
+            return insertImage(in: source, selectedRange: range)
+        case .table:
+            return insertTable(in: source, selectedRange: range)
+        case .footnote:
+            return insertFootnote(in: source, selectedRange: range)
+        case .inlineMath:
+            return wrap(
+                in: source, selectedRange: range, opening: "$", closing: "$",
+                placeholder: "x^2")
+        case .mathBlock:
+            return insertMathBlock(in: source, selectedRange: range)
         case .divider:
             return insertDivider(in: source, selectedRange: range)
         }
+    }
+
+    /// Inserts pasted code as a language-labelled Markdown fence.
+    public static func insertingCodeBlock(
+        contents: String,
+        language: LanguageID,
+        into text: String,
+        selectedRange requestedRange: NSRange
+    ) -> TextEditResult {
+        let source = text as NSString
+        let range = clamped(requestedRange, in: source)
+        return insertCodeBlock(
+            in: source,
+            selectedRange: range,
+            contents: contents,
+            languageLabel: MarkdownEditingIntelligence.fenceLabel(for: language)
+        )
     }
 
     private enum ListStyle {
@@ -233,7 +278,21 @@ public enum MarkdownFormattingOperations {
         in source: NSString,
         selectedRange: NSRange
     ) -> TextEditResult {
-        let selected = selectedRange.length == 0 ? "code" : source.substring(with: selectedRange)
+        insertCodeBlock(
+            in: source,
+            selectedRange: selectedRange,
+            contents: selectedRange.length == 0 ? "code" : source.substring(with: selectedRange),
+            languageLabel: ""
+        )
+    }
+
+    private static func insertCodeBlock(
+        in source: NSString,
+        selectedRange: NSRange,
+        contents: String,
+        languageLabel: String
+    ) -> TextEditResult {
+        let selected = contents.trimmingCharacters(in: .newlines)
         if selected.hasPrefix("```\n"), selected.hasSuffix("\n```") {
             let inner = String(selected.dropFirst(4).dropLast(4))
             return replacing(
@@ -250,7 +309,7 @@ public enum MarkdownFormattingOperations {
         let trailingBreak =
             NSMaxRange(selectedRange) < source.length
                 && source.character(at: NSMaxRange(selectedRange)) != 0x0A ? "\n" : ""
-        let opening = leadingBreak + "```\n"
+        let opening = leadingBreak + "```" + languageLabel + "\n"
         let replacement = opening + selected + "\n```" + trailingBreak
         return replacing(
             selectedRange,
@@ -263,14 +322,86 @@ public enum MarkdownFormattingOperations {
         )
     }
 
+    private static func insertImage(in source: NSString, selectedRange: NSRange) -> TextEditResult {
+        let label =
+            selectedRange.length == 0 ? "Image description" : source.substring(with: selectedRange)
+        let destination = "image.png"
+        let replacement = "![\(label)](\(destination))"
+        let destinationOffset = ("![\(label)](" as NSString).length
+        return replacing(
+            selectedRange,
+            in: source,
+            with: replacement,
+            selection: NSRange(
+                location: selectedRange.location + destinationOffset,
+                length: (destination as NSString).length
+            )
+        )
+    }
+
+    private static func insertTable(in source: NSString, selectedRange: NSRange) -> TextEditResult {
+        let leadingBreak = lineBreakBeforeInsertion(in: source, selectedRange: selectedRange)
+        let trailingBreak = lineBreakAfterInsertion(in: source, selectedRange: selectedRange)
+        let table = "| Column 1 | Column 2 |\n| --- | --- |\n| Value | Value |"
+        let replacement = leadingBreak + table + trailingBreak
+        let editable = "Column 1"
+        return replacing(
+            selectedRange,
+            in: source,
+            with: replacement,
+            selection: NSRange(
+                location: selectedRange.location + (leadingBreak + "| " as NSString).length,
+                length: (editable as NSString).length
+            )
+        )
+    }
+
+    private static func insertFootnote(
+        in source: NSString,
+        selectedRange: NSRange
+    ) -> TextEditResult {
+        let index = nextFootnoteIndex(in: source as String)
+        let label = selectedRange.length == 0 ? "Reference" : source.substring(with: selectedRange)
+        let definition = "Footnote text"
+        let marker = "[^\(index)]"
+        let reference = "\(label)\(marker)"
+        let withReference = source.replacingCharacters(in: selectedRange, with: reference)
+        let needsBreak = withReference.hasSuffix("\n") ? "\n" : "\n\n"
+        let definitionPrefix = needsBreak + "\(marker): "
+        let updated = withReference + definitionPrefix + definition
+        return TextEditResult(
+            text: updated,
+            selectedRange: NSRange(
+                location: ((withReference + definitionPrefix) as NSString).length,
+                length: (definition as NSString).length
+            )
+        )
+    }
+
+    private static func insertMathBlock(
+        in source: NSString,
+        selectedRange: NSRange
+    ) -> TextEditResult {
+        let content = selectedRange.length == 0 ? "E = mc^2" : source.substring(with: selectedRange)
+        let leadingBreak = lineBreakBeforeInsertion(in: source, selectedRange: selectedRange)
+        let trailingBreak = lineBreakAfterInsertion(in: source, selectedRange: selectedRange)
+        let opening = leadingBreak + "$$\n"
+        let replacement = opening + content + "\n$$" + trailingBreak
+        return replacing(
+            selectedRange,
+            in: source,
+            with: replacement,
+            selection: NSRange(
+                location: selectedRange.location + (opening as NSString).length,
+                length: (content as NSString).length
+            )
+        )
+    }
+
     private static func insertDivider(in source: NSString, selectedRange: NSRange) -> TextEditResult
     {
-        let leadingBreak =
-            selectedRange.location > 0 && source.character(at: selectedRange.location - 1) != 0x0A
-            ? "\n" : ""
-        let trailingBreak =
-            NSMaxRange(selectedRange) < source.length
-                && source.character(at: NSMaxRange(selectedRange)) != 0x0A ? "\n" : ""
+        let leadingBreak = lineBreakBeforeInsertion(in: source, selectedRange: selectedRange)
+        let trailingBreak = lineBreakAfterInsertion(in: source, selectedRange: selectedRange)
         let replacement = leadingBreak + "---\n" + trailingBreak
         return replacing(
             selectedRange,
@@ -279,6 +410,38 @@ public enum MarkdownFormattingOperations {
             selection: NSRange(
                 location: selectedRange.location + (replacement as NSString).length, length: 0)
         )
+    }
+
+    private static func lineBreakBeforeInsertion(
+        in source: NSString,
+        selectedRange: NSRange
+    ) -> String {
+        selectedRange.location > 0 && source.character(at: selectedRange.location - 1) != 0x0A
+            ? "\n" : ""
+    }
+
+    private static func lineBreakAfterInsertion(
+        in source: NSString,
+        selectedRange: NSRange
+    ) -> String {
+        NSMaxRange(selectedRange) < source.length
+            && source.character(at: NSMaxRange(selectedRange)) != 0x0A ? "\n" : ""
+    }
+
+    private static func nextFootnoteIndex(in source: String) -> Int {
+        guard let expression = try? NSRegularExpression(pattern: "\\[\\^([0-9]+)\\]") else {
+            return 1
+        }
+        let text = source as NSString
+        let indexes = expression.matches(
+            in: source,
+            range: NSRange(location: 0, length: text.length)
+        ).compactMap { match -> Int? in
+            let range = match.range(at: 1)
+            guard range.location != NSNotFound else { return nil }
+            return Int(text.substring(with: range))
+        }
+        return (indexes.max() ?? 0) + 1
     }
 
     private static func transformSelectedLines(

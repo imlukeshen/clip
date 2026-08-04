@@ -125,12 +125,6 @@ public enum LanguageDetector {
         {
             return .html
         }
-        if lines.contains(where: { line in
-            line.hasPrefix("# ") || line.hasPrefix("## ") || line.hasPrefix("```")
-                || line.hasPrefix("- [") || line.hasPrefix("> ")
-        }) {
-            return .markdown
-        }
         if trimmed.contains("import SwiftUI") || trimmed.contains("import Foundation")
             || trimmed.contains("@main") || trimmed.contains("func main(")
         {
@@ -180,6 +174,27 @@ public enum LanguageDetector {
             line.hasPrefix("set -e") || line.hasPrefix("echo $") || line == "fi"
         }) || trimmed.contains("${") {
             return .bash
+        }
+        let yamlAssignments = lines.filter { line in
+            guard let colon = line.firstIndex(of: ":"), colon != line.startIndex else {
+                return false
+            }
+            let key = line[..<colon]
+            return key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+        }
+        if lines.count >= 2, yamlAssignments.count >= 2 {
+            return .yaml
+        }
+        if lines.contains(where: { $0.hasPrefix("[") && $0.hasSuffix("]") }),
+            lines.contains(where: { $0.contains(" = ") })
+        {
+            return .toml
+        }
+        if lines.contains(where: { line in
+            line.hasPrefix("# ") || line.hasPrefix("## ") || line.hasPrefix("```")
+                || line.hasPrefix("~~~") || line.hasPrefix("- [") || line.hasPrefix("> ")
+        }) {
+            return .markdown
         }
         return nil
     }

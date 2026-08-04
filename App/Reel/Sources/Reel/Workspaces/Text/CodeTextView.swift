@@ -1,6 +1,7 @@
 import AppKit
 import CoreModel
 import ReelAppCore
+import TextEngine
 
 @MainActor
 final class CodeTextView: NSTextView {
@@ -35,7 +36,29 @@ final class CodeTextView: NSTextView {
             return
         }
         let wasEmpty = string.isEmpty
-        super.paste(sender)
+        let selection = selectedRange()
+        if byteCount <= 2 * 1024 * 1024,
+            snippetLanguage == .markdown,
+            !MarkdownEditingIntelligence.isInsideFencedCode(
+                location: selection.location,
+                in: string
+            ),
+            let detection = MarkdownEditingIntelligence.detectCodePaste(in: value)
+        {
+            apply(
+                MarkdownFormattingOperations.insertingCodeBlock(
+                    contents: value,
+                    language: detection.language,
+                    into: string,
+                    selectedRange: selection
+                )
+            )
+            onSnippetNotice(
+                "Detected \(detection.language.rawValue.capitalized) and inserted a code block."
+            )
+        } else {
+            super.paste(sender)
+        }
         if wasEmpty { onPasteIntoEmptyBuffer(value) }
         if byteCount > 2 * 1024 * 1024 {
             isEditable = false
@@ -236,6 +259,9 @@ final class CodeTextView: NSTextView {
             #selector(markdownHeading1(_:)),
             #selector(markdownHeading2(_:)),
             #selector(markdownHeading3(_:)),
+            #selector(markdownHeading4(_:)),
+            #selector(markdownHeading5(_:)),
+            #selector(markdownHeading6(_:)),
             #selector(markdownBold(_:)),
             #selector(markdownItalic(_:)),
             #selector(markdownStrikethrough(_:)),
@@ -246,6 +272,11 @@ final class CodeTextView: NSTextView {
             #selector(markdownChecklist(_:)),
             #selector(markdownQuote(_:)),
             #selector(markdownCodeBlock(_:)),
+            #selector(markdownImage(_:)),
+            #selector(markdownTable(_:)),
+            #selector(markdownFootnote(_:)),
+            #selector(markdownInlineMath(_:)),
+            #selector(markdownMathBlock(_:)),
             #selector(markdownDivider(_:)):
             return isEditable && snippetLanguage == .markdown
         default:
@@ -267,6 +298,18 @@ final class CodeTextView: NSTextView {
 
     @objc func markdownHeading3(_ sender: Any?) {
         performMarkdown(.heading3, notice: "Changed to heading 3.")
+    }
+
+    @objc func markdownHeading4(_ sender: Any?) {
+        performMarkdown(.heading4, notice: "Changed to heading 4.")
+    }
+
+    @objc func markdownHeading5(_ sender: Any?) {
+        performMarkdown(.heading5, notice: "Changed to heading 5.")
+    }
+
+    @objc func markdownHeading6(_ sender: Any?) {
+        performMarkdown(.heading6, notice: "Changed to heading 6.")
     }
 
     @objc func markdownBold(_ sender: Any?) {
@@ -306,7 +349,46 @@ final class CodeTextView: NSTextView {
     }
 
     @objc func markdownCodeBlock(_ sender: Any?) {
+        let selection = selectedRange()
+        if selection.length > 0 {
+            let contents = (string as NSString).substring(with: selection)
+            if let detection = MarkdownEditingIntelligence.detectCodePaste(in: contents) {
+                apply(
+                    MarkdownFormattingOperations.insertingCodeBlock(
+                        contents: contents,
+                        language: detection.language,
+                        into: string,
+                        selectedRange: selection
+                    )
+                )
+                onSnippetNotice(
+                    "Inserted a \(detection.language.rawValue.capitalized) code block."
+                )
+                window?.makeFirstResponder(self)
+                return
+            }
+        }
         performMarkdown(.codeBlock, notice: "Code block inserted.")
+    }
+
+    @objc func markdownImage(_ sender: Any?) {
+        performMarkdown(.image, notice: "Image reference inserted.")
+    }
+
+    @objc func markdownTable(_ sender: Any?) {
+        performMarkdown(.table, notice: "Table inserted.")
+    }
+
+    @objc func markdownFootnote(_ sender: Any?) {
+        performMarkdown(.footnote, notice: "Footnote inserted.")
+    }
+
+    @objc func markdownInlineMath(_ sender: Any?) {
+        performMarkdown(.inlineMath, notice: "Inline math formatting applied.")
+    }
+
+    @objc func markdownMathBlock(_ sender: Any?) {
+        performMarkdown(.mathBlock, notice: "Math block inserted.")
     }
 
     @objc func markdownDivider(_ sender: Any?) {

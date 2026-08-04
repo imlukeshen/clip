@@ -273,9 +273,12 @@ final class TextEditorTypingTests: XCTestCase {
     }
 
     @MainActor
-    func testMarkdownAndLaTeXPreviewsAreReachableFromScratchEditor() throws {
+    func testMarkdownWritingSurfaceAndLaTeXPreviewAreReachableFromScratchEditor() throws {
         let (app, libraryRoot) = launchClip(named: "text-previews")
-        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
 
         XCTAssertTrue(app.buttons["sidebar-route-text"].waitForExistence(timeout: 10))
         app.buttons["sidebar-route-text"].click()
@@ -293,13 +296,34 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(app.menuItems["Markdown"].waitForExistence(timeout: 5))
         app.menuItems["Markdown"].click()
         XCTAssertTrue(
-            app.descendants(matching: .any)["markdown-split-editor"]
+            app.descendants(matching: .any)["markdown-inline-editor"]
                 .waitForExistence(timeout: 5)
         )
         XCTAssertTrue(
-            app.descendants(matching: .any)["markdown-preview"].waitForExistence(timeout: 5)
+            app.descendants(matching: .any)["markdown-formatting-toolbar"]
+                .waitForExistence(timeout: 5)
         )
-        XCTAssertTrue(app.staticTexts["Clip preview"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["markdown-bold"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["markdown-bulleted-list"].exists)
+
+        editor.click()
+        editor.typeKey(.end, modifierFlags: .command)
+        editor.typeText("\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            "import SwiftUI\n\nstruct ClipCard: View {\n    var body: some View { Text(\"Clip\") }\n}",
+            forType: .string
+        )
+        app.activate()
+        editor.typeKey("v", modifierFlags: .command)
+        let pasteDeadline = Date().addingTimeInterval(5)
+        while !(editor.value as? String ?? "").contains("```swift"), Date() < pasteDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        let markdown = editor.value as? String ?? ""
+        XCTAssertTrue(markdown.contains("```swift"))
+        XCTAssertTrue(markdown.contains("struct ClipCard: View"))
+        XCTAssertTrue(markdown.contains("\n```"))
 
         languageMenu.click()
         XCTAssertTrue(app.menuItems["LaTeX"].waitForExistence(timeout: 5))

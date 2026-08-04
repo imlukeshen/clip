@@ -72,6 +72,12 @@ import Testing
         LanguageDetector.detect(path: "", contents: "def render_clip():\n    return True")
             == .python)
     #expect(
+        LanguageDetector.detect(
+            path: "",
+            contents: "# Build the card\ndef render_clip():\n    return True"
+        ) == .python
+    )
+    #expect(
         LanguageDetector.detect(path: "", contents: "SELECT name FROM assets WHERE kind = 1")
             == .sql
     )
@@ -79,5 +85,11 @@ import Testing
         LanguageDetector.detect(
             path: "", contents: "interface Clip { name: string }\nconst x: string = 'a'")
             == .typescript
+    )
+    #expect(
+        LanguageDetector.detect(path: "", contents: "title: Clip\nready: true") == .yaml
+    )
+    #expect(
+        LanguageDetector.detect(path: "", contents: "[package]\nname = \"clip\"") == .toml
     )
 }
