@@ -69,6 +69,22 @@ struct ConversionQueueItemTests {
         #expect(document.plan.backend == .pdfKit)
     }
 
+    @Test("Multi-step plans stay visible and failed rows are retryable")
+    func visiblePlanAndRetry() {
+        var item = ConversionQueueItem(
+            asset: record(kind: .document, container: "docx", codec: nil),
+            inputURL: URL(fileURLWithPath: "/tmp/Proposal.docx"),
+            target: .pdf,
+            status: .failed("The document is password protected.")
+        )
+
+        #expect(item.planDescription.contains("DOCX → HTML → PDF"))
+        #expect(item.planDescription.contains("2 steps"))
+        #expect(item.planDescription.contains("Rich Text + WebKit"))
+        item.retry()
+        #expect(item.status == .waiting)
+    }
+
     private func record(
         kind: AssetKind,
         container: String,

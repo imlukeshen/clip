@@ -423,10 +423,18 @@ public actor AppRuntime {
     }
 
     public func convert(
-        _ jobs: [(ConversionPlan, URL, URL)],
-        concurrency: Int = 2
+        _ jobs: [BatchConversionJob],
+        concurrency: Int = Converter.defaultConcurrency
     ) async -> AsyncThrowingStream<BatchProgress, Error> {
         await converter.convert(jobs, concurrency: concurrency)
+    }
+
+    public func cancelConversion(_ id: UUID) async {
+        await converter.cancel(jobID: id)
+    }
+
+    public func cancelAllConversions() async {
+        await converter.cancelAll()
     }
 
     public func saveProject(_ document: ProjectDocument) async throws {

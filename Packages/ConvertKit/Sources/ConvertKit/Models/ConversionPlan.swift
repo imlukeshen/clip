@@ -60,17 +60,3 @@ public struct ConversionPlan: Sendable, Equatable {
         return .proportional(max(weight, 1))
     }
 }
-
-public struct BatchProgress: Sendable, Equatable {
-    public var completed: Int
-    public var total: Int
-    public var itemIndex: Int
-    public var itemProgress: Double
-
-    public init(completed: Int, total: Int, itemIndex: Int, itemProgress: Double) {
-        self.completed = completed
-        self.total = total
-        self.itemIndex = itemIndex
-        self.itemProgress = itemProgress
-    }
-}

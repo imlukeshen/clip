@@ -1,4 +1,5 @@
 import AIKit
+import AppKit
 import CaptureKit
 import ConvertKit
 import CoreModel
@@ -47,6 +48,13 @@ public final class AppModel {
     public private(set) var ingestCount = 0
     public private(set) var indexProgress = IndexProgress()
     public private(set) var conversionQueue: [ConversionQueueItem] = []
+    public private(set) var conversionConcurrency: Int
+    public private(set) var conversionDestinationFolder: URL
+    public private(set) var conversionDestination: ExportDestination
+    public private(set) var conversionConflictPolicy: ConversionConflictPolicy
+    public private(set) var conversionAggregateProgress = 0.0
+    public private(set) var conversionCompletedCount = 0
+    public private(set) var conversionBatchTotal = 0
     public private(set) var editor: EditorViewModel?
     public private(set) var imageEditor: ImageEditorViewModel?
     public private(set) var pdfEditor: PDFEditorViewModel?
@@ -78,6 +86,7 @@ public final class AppModel {
     private var indexProgressTask: Task<Void, Never>?
     private var indexActivityTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var conversionTask: Task<Void, Never>?
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
     private var folderForwardHistory: [String?] = []
@@ -86,10 +95,35 @@ public final class AppModel {
         libraryRoot: URL = AppModel.defaultLibraryRoot,
         shortcutReader: ShortcutReader = ShortcutReader()
     ) {
-        self.libraryRoot = libraryRoot.standardizedFileURL
+        let normalizedLibraryRoot = libraryRoot.standardizedFileURL
+        self.libraryRoot = normalizedLibraryRoot
         self.shortcutReader = shortcutReader
         self.shortcutRow = ShortcutRowModel(result: shortcutReader.read())
-        self.aiSettings = AISettingsModel(libraryRoot: libraryRoot.standardizedFileURL)
+        self.aiSettings = AISettingsModel(libraryRoot: normalizedLibraryRoot)
+        self.conversionConcurrency = min(
+            8,
+            max(
+                1,
+                UserDefaults.standard.object(forKey: "clip.convert.concurrency") as? Int
+                    ?? Converter.defaultConcurrency
+            )
+        )
+        self.conversionDestinationFolder =
+            UserDefaults.standard.string(
+                forKey: "clip.convert.destinationFolder"
+            ).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? normalizedLibraryRoot
+        self.conversionDestination =
+            UserDefaults.standard.data(forKey: "clip.convert.destination")
+            .flatMap { try? JSONDecoder().decode(ExportDestination.self, from: $0) }
+            ?? ExportDestination(
+                bookmarkKey: "conversion",
+                subpathTemplate: "Exports/{date}",
+                filenameTemplate: "{project}-{preset}-{index}",
+                onCompletion: .reveal
+            )
+        self.conversionConflictPolicy =
+            UserDefaults.standard.string(forKey: "clip.convert.conflictPolicy")
+            .flatMap(ConversionConflictPolicy.init(rawValue:)) ?? .rename
         self.expandedFolders = Set(
             UserDefaults.standard.stringArray(forKey: "reel.expandedFolders") ?? [""]
         )
@@ -889,7 +923,7 @@ public final class AppModel {
     public var hasConvertibleItems: Bool {
         conversionQueue.contains { item in
             switch item.status {
-            case .waiting, .failed:
+            case .waiting, .failed, .cancelled, .skipped:
                 break
             case .converting, .completed:
                 return false
@@ -921,9 +955,9 @@ public final class AppModel {
                     let asset = try await runtime.ingest(url, source: source)
                     let inputURL = try await runtime.url(for: asset.id)
                     if !conversionQueue.contains(where: { $0.asset.id == asset.id }) {
-                        conversionQueue.append(
-                            ConversionQueueItem(asset: asset, inputURL: inputURL)
-                        )
+                        var item = ConversionQueueItem(asset: asset, inputURL: inputURL)
+                        item.setConflictPolicy(conversionConflictPolicy)
+                        conversionQueue.append(item)
                     }
                 } catch {
                     lastMessage = "Couldn't add \(url.lastPathComponent) to the conversion queue."
@@ -939,6 +973,21 @@ public final class AppModel {
         conversionQueue[index].selectTarget(target)
     }
 
+    public func availableConversionTargets(for kind: AssetKind) -> [TargetFormat] {
+        let items = conversionQueue.filter { $0.asset.kind == kind }
+        guard let first = items.first else { return [] }
+        let common = items.dropFirst().reduce(Set(first.availableTargets)) { targets, item in
+            targets.intersection(item.availableTargets)
+        }
+        return TargetFormat.allCases.filter { common.contains($0) }
+    }
+
+    public func selectConversionTarget(_ target: TargetFormat, forGroup kind: AssetKind) {
+        for index in conversionQueue.indices where conversionQueue[index].asset.kind == kind {
+            conversionQueue[index].selectTarget(target)
+        }
+    }
+
     public func applyConversionPreset(_ preset: ConversionPreset, for id: UUID) {
         guard let index = conversionQueue.firstIndex(where: { $0.id == id }) else { return }
         conversionQueue[index].applyPreset(preset)
@@ -949,23 +998,70 @@ public final class AppModel {
         conversionQueue[index].setStripMetadata(enabled)
     }
 
+    public func retryConversion(_ id: UUID) {
+        guard let index = conversionQueue.firstIndex(where: { $0.id == id }) else { return }
+        conversionQueue[index].retry()
+    }
+
+    public func setConversionConcurrency(_ value: Int) {
+        guard !isConverting else { return }
+        conversionConcurrency = min(8, max(1, value))
+        UserDefaults.standard.set(conversionConcurrency, forKey: "clip.convert.concurrency")
+    }
+
+    public func setConversionDestination(folder: URL, destination: ExportDestination) {
+        guard !isConverting else { return }
+        conversionDestinationFolder = folder.standardizedFileURL
+        conversionDestination = destination
+        UserDefaults.standard.set(
+            conversionDestinationFolder.path,
+            forKey: "clip.convert.destinationFolder"
+        )
+        UserDefaults.standard.set(
+            try? JSONEncoder().encode(destination),
+            forKey: "clip.convert.destination"
+        )
+    }
+
+    public func setConversionConflictPolicy(_ policy: ConversionConflictPolicy) {
+        guard !isConverting else { return }
+        conversionConflictPolicy = policy
+        UserDefaults.standard.set(policy.rawValue, forKey: "clip.convert.conflictPolicy")
+        for index in conversionQueue.indices {
+            conversionQueue[index].setConflictPolicy(policy)
+        }
+    }
+
     public func removeConversion(_ id: UUID) {
         guard let item = conversionQueue.first(where: { $0.id == id }) else { return }
         if case .converting = item.status { return }
         conversionQueue.removeAll { $0.id == id }
     }
 
-    public func convertQueuedItems() {
-        guard !isConverting, let runtime else { return }
+    public func cancelConversion(_ id: UUID) {
+        guard
+            conversionQueue.contains(where: { item in
+                item.id == id && item.status == .converting
+            }), let runtime
+        else { return }
+        Task { await runtime.cancelConversion(id) }
+    }
 
-        var jobs: [(ConversionPlan, URL, URL)] = []
-        var jobItems: [(id: UUID, output: URL)] = []
+    public func cancelAllConversions() {
+        guard isConverting, let runtime else { return }
+        Task { await runtime.cancelAllConversions() }
+    }
+
+    public func convertQueuedItems() {
+        guard !isConverting, conversionTask == nil, let runtime else { return }
+
+        var jobs: [BatchConversionJob] = []
         var reservedOutputs: Set<URL> = []
-        let exportFolder = libraryRoot.appendingPathComponent("Exports", isDirectory: true)
+        var preflightFailures = 0
 
         for index in conversionQueue.indices {
             switch conversionQueue[index].status {
-            case .waiting, .failed:
+            case .waiting, .failed, .cancelled, .skipped:
                 break
             case .converting, .completed:
                 continue
@@ -975,48 +1071,90 @@ public final class AppModel {
                 continue
             }
             let item = conversionQueue[index]
-            let output = uniqueOutputURL(
-                folder: exportFolder,
-                filename: item.outputFilename,
-                reserved: &reservedOutputs
-            )
+            let output: URL
+            do {
+                guard
+                    let resolved = try resolvedConversionOutput(
+                        for: item,
+                        index: jobs.count + 1,
+                        reserved: &reservedOutputs
+                    )
+                else {
+                    conversionQueue[index].status = .skipped(
+                        "An output already exists. Change the conflict policy to convert it."
+                    )
+                    continue
+                }
+                output = resolved
+            } catch {
+                conversionQueue[index].status = .failed(error.localizedDescription)
+                preflightFailures += 1
+                continue
+            }
             conversionQueue[index].progress = 0
             conversionQueue[index].status = .converting
-            jobs.append((item.plan, item.inputURL, output))
-            jobItems.append((item.id, output))
+            jobs.append(
+                BatchConversionJob(
+                    id: item.id,
+                    plan: item.plan,
+                    input: item.inputURL,
+                    output: output
+                )
+            )
         }
         guard !jobs.isEmpty else { return }
 
-        Task {
+        conversionAggregateProgress = 0
+        conversionCompletedCount = 0
+        conversionBatchTotal = jobs.count
+        conversionTask = Task {
+            var successURLs: [URL] = []
+            var failedCount = preflightFailures
+            defer { conversionTask = nil }
             do {
-                let stream = await runtime.convert(jobs, concurrency: 2)
-                var completedCount = 0
+                let stream = await runtime.convert(jobs, concurrency: conversionConcurrency)
                 for try await update in stream {
-                    guard jobItems.indices.contains(update.itemIndex),
-                        let queueIndex = conversionQueue.firstIndex(
-                            where: { $0.id == jobItems[update.itemIndex].id }
-                        )
+                    guard let itemID = update.itemID,
+                        let queueIndex = conversionQueue.firstIndex(where: { $0.id == itemID })
                     else { continue }
-                    conversionQueue[queueIndex].progress = update.itemProgress
-                    if update.completed > completedCount {
-                        completedCount = update.completed
-                        conversionQueue[queueIndex].status = .completed(
-                            jobItems[update.itemIndex].output
-                        )
+                    conversionQueue[queueIndex].progress = min(update.itemProgress, 1)
+                    conversionAggregateProgress = update.aggregateProgress
+                    conversionCompletedCount = update.completed
+                    switch update.outcome {
+                    case .succeeded(let output):
+                        conversionQueue[queueIndex].status = .completed(output)
+                        successURLs.append(output)
+                    case .failed(let reason):
+                        conversionQueue[queueIndex].status = .failed(reason)
+                        failedCount += 1
+                    case .cancelled:
+                        conversionQueue[queueIndex].status = .cancelled
+                    case nil:
+                        break
                     }
                 }
-                lastMessage =
-                    "Converted \(completedCount) file\(completedCount == 1 ? "" : "s") to Exports."
-            } catch {
-                for item in jobItems {
-                    guard let index = conversionQueue.firstIndex(where: { $0.id == item.id }) else {
-                        continue
+                performConversionCompletionAction(for: successURLs)
+                if failedCount > 0 {
+                    lastMessage =
+                        "Converted \(successURLs.count) of \(jobs.count + preflightFailures). \(failedCount) need attention."
+                } else {
+                    lastMessage =
+                        "Converted \(successURLs.count) file\(successURLs.count == 1 ? "" : "s")."
+                }
+            } catch is CancellationError {
+                for index in conversionQueue.indices {
+                    if case .converting = conversionQueue[index].status {
+                        conversionQueue[index].status = .cancelled
                     }
+                }
+                lastMessage = "Conversion cancelled."
+            } catch {
+                for index in conversionQueue.indices {
                     if case .converting = conversionQueue[index].status {
                         conversionQueue[index].status = .failed(error.localizedDescription)
                     }
                 }
-                lastMessage = "One or more conversions couldn't be completed."
+                lastMessage = "The conversion batch couldn't be completed."
             }
         }
     }
@@ -1497,12 +1635,68 @@ public final class AppModel {
         }
     }
 
+    private func resolvedConversionOutput(
+        for item: ConversionQueueItem,
+        index: Int,
+        reserved: inout Set<URL>
+    ) throws -> URL? {
+        let preset =
+            ConversionPreset.builtIns.first { $0.id == item.selectedPresetID }?.name
+            ?? item.target.displayName
+        let resolution: String
+        if let width = item.asset.width, let height = item.asset.height {
+            resolution = "\(width)x\(height)"
+        } else {
+            resolution = "source"
+        }
+        let proposed = try conversionDestination.resolve(
+            in: conversionDestinationFolder,
+            context: ExportTemplateContext(
+                project: item.inputURL.deletingPathExtension().lastPathComponent,
+                preset: preset,
+                codec: item.target.formatID.codec ?? item.target.fileExtension,
+                resolution: resolution,
+                duration: item.asset.duration.map { String(format: "%.1f", $0.seconds) } ?? "0",
+                index: index
+            ),
+            extension: item.target.fileExtension
+        )
+        switch conversionConflictPolicy {
+        case .rename:
+            return uniqueOutputURL(proposed: proposed, reserved: &reserved)
+        case .overwrite:
+            guard reserved.insert(proposed).inserted else {
+                throw ExportDestinationError.conflictingBatchOutput
+            }
+            return proposed
+        case .skip:
+            guard !FileManager.default.fileExists(atPath: proposed.path),
+                reserved.insert(proposed).inserted
+            else { return nil }
+            return proposed
+        }
+    }
+
+    private func performConversionCompletionAction(for outputs: [URL]) {
+        guard !outputs.isEmpty else { return }
+        switch conversionDestination.onCompletion {
+        case .reveal:
+            NSWorkspace.shared.activateFileViewerSelecting(outputs)
+        case .copyPath:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(
+                outputs.map(\.path).joined(separator: "\n"),
+                forType: .string
+            )
+        case .nothing:
+            break
+        }
+    }
+
     private func uniqueOutputURL(
-        folder: URL,
-        filename: String,
+        proposed: URL,
         reserved: inout Set<URL>
     ) -> URL {
-        let proposed = folder.appendingPathComponent(filename)
         if !FileManager.default.fileExists(atPath: proposed.path),
             reserved.insert(proposed).inserted
         {
@@ -1512,7 +1706,7 @@ public final class AppModel {
         let pathExtension = proposed.pathExtension
         var suffix = 2
         while true {
-            let candidate = folder.appendingPathComponent(
+            let candidate = proposed.deletingLastPathComponent().appendingPathComponent(
                 "\(stem)-\(suffix).\(pathExtension)"
             )
             if !FileManager.default.fileExists(atPath: candidate.path),
