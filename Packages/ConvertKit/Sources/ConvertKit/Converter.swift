@@ -274,6 +274,11 @@ public actor Converter {
                         }
                     }
                 }
+                // Individual workers yield after leaving BatchState. Their
+                // snapshots can therefore arrive out of order even though the
+                // actor counted every completion correctly. End with one
+                // deterministic aggregate update for UI and automation clients.
+                continuation.yield(await state.finalProgress())
                 continuation.finish()
             }
             continuation.onTermination = { termination in
@@ -406,6 +411,17 @@ private actor BatchState {
         }
         progressByIndex[index] = 1
         return snapshot()
+    }
+
+    func finalProgress() -> BatchProgress {
+        let final = snapshot()
+        return BatchProgress(
+            completed: final.completed,
+            total: final.total,
+            itemIndex: max(total - 1, 0),
+            itemProgress: 1,
+            aggregateProgress: final.aggregateProgress
+        )
     }
 
     private func snapshot() -> Snapshot {
