@@ -122,8 +122,9 @@ struct LibrarySidebar: View {
 
     /// Where the library lives. This used to be the absolute path and the words
     /// "Local only" printed under a rule — two lines of text that never changed
-    /// and that nobody reads twice. The folder name is the part worth keeping;
-    /// the path is on hover, and the folder itself is one click away.
+    /// and that nobody reads twice. The product label is the part worth keeping;
+    /// the folder itself is one click away. This also avoids exposing the legacy
+    /// "Reel" directory name when an existing library is preserved in place.
     private var libraryRow: some View {
         Button(action: model.revealLibraryRootInFinder) {
             HStack(spacing: 10) {
@@ -131,7 +132,7 @@ struct LibrarySidebar: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.palette.textTertiary)
                     .frame(width: 16)
-                Text(model.libraryRoot.lastPathComponent)
+                Text("Clip")
                     .font(theme.type.label.font)
                     .foregroundStyle(theme.palette.textTertiary)
                     .lineLimit(1)
@@ -143,7 +144,7 @@ struct LibrarySidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(ReelPlainButtonStyle())
-        .help("Reveal \(model.libraryRoot.path(percentEncoded: false)) in Finder")
+        .help("Reveal Clip library in Finder")
         .accessibilityIdentifier("sidebar-library-root")
     }
 
