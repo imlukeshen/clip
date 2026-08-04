@@ -79,6 +79,36 @@ struct V2OptionsTests {
         #expect(properties[kCGImagePropertyPixelHeight] as? Int == 18)
     }
 
+    @Test("JPEG conversion enforces a hard maximum file size")
+    func imageSizeLimit() async throws {
+        let folder = try fixtureFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let input = folder.appendingPathComponent("noisy-screenshot.tiff")
+        let output = folder.appendingPathComponent("web.jpg")
+        try makeNoisyImage(at: input)
+        let maximumBytes = 100 * 1_024
+        let options = ConversionOptions(
+            image: ImageConversionOptions(
+                quality: 0.92,
+                stripMetadata: true,
+                maximumFileSize: maximumBytes
+            )
+        )
+        let plan = try #require(
+            ConversionPlanner().plan(
+                from: ConversionFormats.tiff,
+                to: ConversionFormats.jpeg,
+                options: options
+            )
+        )
+        let stream = await Converter().convert(plan, input: input, output: output)
+        for try await _ in stream {}
+
+        let size = try #require(output.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        #expect(size <= maximumBytes)
+        #expect(CGImageSourceCreateWithURL(output as CFURL, nil) != nil)
+    }
+
     @Test("Custom presets persist beside immutable built-ins")
     func customPresetStore() async throws {
         let folder = try fixtureFolder()
@@ -172,6 +202,47 @@ struct V2OptionsTests {
             ],
         ]
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ConversionError.cannotCreateOutput
+        }
+    }
+
+    private func makeNoisyImage(at url: URL) throws {
+        let width = 1_600
+        let height = 1_000
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        var state: UInt64 = 0x9e37_79b9_7f4a_7c15
+        for offset in stride(from: 0, to: bytes.count, by: 4) {
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            bytes[offset] = UInt8(truncatingIfNeeded: state)
+            bytes[offset + 1] = UInt8(truncatingIfNeeded: state >> 8)
+            bytes[offset + 2] = UInt8(truncatingIfNeeded: state >> 16)
+        }
+        let image = try bytes.withUnsafeMutableBytes { buffer -> CGImage in
+            guard
+                let context = CGContext(
+                    data: buffer.baseAddress,
+                    width: width,
+                    height: height,
+                    bitsPerComponent: 8,
+                    bytesPerRow: width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ), let image = context.makeImage()
+            else { throw ConversionError.cannotCreateOutput }
+            return image
+        }
+        guard
+            let destination = CGImageDestinationCreateWithURL(
+                url as CFURL,
+                UTType.tiff.identifier as CFString,
+                1,
+                nil
+            )
+        else { throw ConversionError.cannotCreateOutput }
+        CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
             throw ConversionError.cannotCreateOutput
         }

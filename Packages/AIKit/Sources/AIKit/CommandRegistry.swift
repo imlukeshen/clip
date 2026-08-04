@@ -139,6 +139,45 @@ public enum CommandRegistry {
             required: ["assetID"],
             properties: ["assetID": string, "limit": number]),
         command(
+            "convert.listTargets", "List Conversion Targets", .file,
+            description:
+                "List the conversion formats that every supplied library asset can reach. Use asset IDs returned by library search.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetIDs"],
+            properties: ["assetIDs": array(string)]),
+        command(
+            "convert.plan", "Plan Conversion", .file,
+            description:
+                "Plan a conversion without writing files. Reports the backend route, lossy or lossless tradeoff, warnings, and size or resize constraints.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetIDs", "target"],
+            properties: [
+                "assetIDs": array(string), "target": string, "preset": string,
+                "quality": number, "longestSide": number, "maximumBytes": number,
+                "stripMetadata": boolean,
+            ]),
+        command(
+            "convert.presets", "List Conversion Presets", .file,
+            description:
+                "List built-in conversion presets with their target format and important tradeoffs.",
+            kind: .read,
+            exposure: .always),
+        command(
+            "convert.run", "Run Conversion", .file,
+            description:
+                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise Clip uses the configured export folder.",
+            kind: .confirm,
+            exposure: .always,
+            required: ["assetIDs", "target"],
+            properties: [
+                "assetIDs": array(string), "target": string, "preset": string,
+                "quality": number, "longestSide": number, "maximumBytes": number,
+                "stripMetadata": boolean, "destination": string,
+                "filenameTemplate": string, "conflictPolicy": string,
+            ]),
+        command(
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,
             properties: ["assetIDs": array(string)]),

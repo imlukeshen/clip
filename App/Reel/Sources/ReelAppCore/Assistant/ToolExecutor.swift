@@ -1,4 +1,5 @@
 import AIKit
+import ConvertKit
 import CoreModel
 import Foundation
 import LibraryStore
@@ -11,6 +12,8 @@ public struct ToolExecutionContext: Sendable {
     public typealias AssetSearcher = @Sendable (AssetID, String) async throws -> [SearchMoment]
     public typealias TextReader = @Sendable (AssetID, RationalTime) async throws -> [OCRSpan]
     public typealias SimilarSearcher = @Sendable (AssetID, Int) async throws -> [SearchHit]
+    public typealias BatchConverter =
+        @Sendable ([BatchConversionJob]) async throws -> [BatchItemOutcome]
 
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
@@ -22,6 +25,8 @@ public struct ToolExecutionContext: Sendable {
     public var searchingWithin: AssetSearcher
     public var readingText: TextReader
     public var searchingSimilar: SimilarSearcher
+    public var conversionDestination: URL?
+    public var converting: BatchConverter
 
     public init(
         document: ProjectDocument,
@@ -41,6 +46,10 @@ public struct ToolExecutionContext: Sendable {
         },
         searchingSimilar: @escaping SimilarSearcher = { _, _ in
             throw ToolExecutorError.searchUnavailable
+        },
+        conversionDestination: URL? = nil,
+        converting: @escaping BatchConverter = { _ in
+            throw ToolExecutorError.conversionUnavailable
         }
     ) {
         self.document = document
@@ -53,6 +62,8 @@ public struct ToolExecutionContext: Sendable {
         self.searchingWithin = searchingWithin
         self.readingText = readingText
         self.searchingSimilar = searchingSimilar
+        self.conversionDestination = conversionDestination
+        self.converting = converting
     }
 }
 
@@ -81,16 +92,22 @@ public struct ToolExecutor: Sendable {
         _ invocation: ToolInvocation,
         turnID: String,
         policy: ConfirmationPolicy,
-        context: ToolExecutionContext
+        context: ToolExecutionContext,
+        confirmed: Bool = false
     ) async throws -> ToolResult {
         guard let command = CommandRegistry.command(named: invocation.name) else {
             throw ToolExecutorError.unknownTool(invocation.name)
         }
         let schema = command.schema
-        if schema.kind == .confirm {
+        if schema.kind == .confirm && !confirmed {
+            let detail =
+                invocation.name == "convert.run"
+                ? try conversionConfirmation(
+                    invocation.arguments.decode(ConvertArguments.self), context: context)
+                : "\(invocation.name) requires your confirmation."
             return ToolResult(
                 callID: invocation.callID,
-                message: "\(invocation.name) requires your confirmation.",
+                message: detail,
                 requiresConfirmation: true
             )
         }
@@ -138,6 +155,71 @@ public struct ToolExecutor: Sendable {
             )
             patch = nil
             message = searchResults(hits, context: context)
+        case "convert.listTargets":
+            let arguments = try invocation.arguments.decode(ConvertAssetArguments.self)
+            let records = try conversionAssets(arguments.assetIDs, context: context)
+            let planner = ConversionPlanner()
+            let sets = try records.map { asset -> Set<TargetFormat> in
+                guard let source = FormatID(asset: asset) else {
+                    throw ToolExecutorError.invalidArguments(
+                        "The source format for \(asset.displayName) could not be identified"
+                    )
+                }
+                return Set(
+                    TargetFormat.allCases.filter { target in
+                        target.formatID != source
+                            && planner.plan(from: source, to: target.formatID) != nil
+                    }
+                )
+            }
+            let common = sets.dropFirst().reduce(sets.first ?? []) { $0.intersection($1) }
+            let targets = TargetFormat.allCases.filter(common.contains)
+            patch = nil
+            message =
+                targets.isEmpty
+                ? "No common conversion target is available for these assets."
+                : "Common targets for \(records.count) asset\(records.count == 1 ? "" : "s"): "
+                    + targets.map { "\($0.rawValue) (\($0.displayName))" }
+                    .joined(separator: ", ")
+        case "convert.plan":
+            let arguments = try invocation.arguments.decode(ConvertArguments.self)
+            patch = nil
+            message = try conversionPlanDescription(arguments, context: context)
+        case "convert.presets":
+            patch = nil
+            message = ConversionPreset.builtIns.map { preset in
+                let tradeoff = preset.options.removesMetadata ? "metadata removed" : "metadata kept"
+                return "\(preset.id): \(preset.name) → \(preset.target.rawValue) · \(tradeoff)"
+            }.joined(separator: "\n")
+        case "convert.run":
+            let arguments = try invocation.arguments.decode(ConvertArguments.self)
+            let prepared = try await prepareConversionJobs(arguments, context: context)
+            let outcomes =
+                prepared.jobs.isEmpty
+                ? [] : try await context.converting(prepared.jobs)
+            guard outcomes.count == prepared.jobs.count else {
+                throw ToolExecutorError.conversionFailed(
+                    "The converter returned \(outcomes.count) results for \(prepared.jobs.count) files"
+                )
+            }
+            let succeeded = outcomes.compactMap { outcome -> URL? in
+                if case .succeeded(let url) = outcome { return url }
+                return nil
+            }
+            let failures = outcomes.compactMap { outcome -> String? in
+                switch outcome {
+                case .failed(let reason): return reason
+                case .cancelled: return "cancelled"
+                case .succeeded: return nil
+                }
+            }
+            patch = nil
+            message =
+                "Converted \(succeeded.count) of \(prepared.requested) files"
+                + (prepared.skipped == 0 ? "" : "; skipped \(prepared.skipped) existing files")
+                + (failures.isEmpty ? "." : "; failures: \(failures.joined(separator: "; ")).")
+                + (succeeded.isEmpty
+                    ? "" : "\nOutputs:\n" + succeeded.map(\.path).joined(separator: "\n"))
         case "listCommands":
             let arguments = try invocation.arguments.decode(ListCommandsArguments.self)
             let category = arguments.category.flatMap(CommandCategory.init(rawValue:))
@@ -165,7 +247,8 @@ public struct ToolExecutor: Sendable {
                 ),
                 turnID: turnID,
                 policy: policy,
-                context: context
+                context: context,
+                confirmed: confirmed
             )
         case "describeTimeline":
             patch = nil
@@ -565,10 +648,11 @@ public struct ToolExecutor: Sendable {
             callID: invocation.callID,
             message: message,
             patch: patch,
-            requiresConfirmation: policy.requiresConfirmation(
-                for: schema.kind,
-                isDestructive: command.isDestructive
-            )
+            requiresConfirmation: !confirmed
+                && policy.requiresConfirmation(
+                    for: schema.kind,
+                    isDestructive: command.isDestructive
+                )
         )
     }
 
@@ -602,6 +686,8 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     case clipHasNoAudio(ItemID)
     case remoteCaptioningRequiresConsent
     case searchUnavailable
+    case conversionUnavailable
+    case conversionFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -615,6 +701,8 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
         case .clipHasNoAudio: return "This clip has no audio."
         case .remoteCaptioningRequiresConsent: return "Remote captioning requires explicit consent."
         case .searchUnavailable: return "Library search is unavailable."
+        case .conversionUnavailable: return "Conversion is unavailable in this workspace."
+        case .conversionFailed(let reason): return "Conversion failed: \(reason)."
         }
     }
 }
@@ -751,6 +839,363 @@ private struct SearchTextAtArguments: Codable {
 private struct SearchSimilarArguments: Codable {
     var assetID: String
     var limit: Int?
+}
+private struct ConvertAssetArguments: Codable {
+    var assetIDs: [String]
+}
+private struct ConvertArguments: Codable {
+    var assetIDs: [String]
+    var target: String
+    var preset: String?
+    var quality: Double?
+    var longestSide: Int?
+    var maximumBytes: Int?
+    var stripMetadata: Bool?
+    var destination: String?
+    var filenameTemplate: String?
+    var conflictPolicy: String?
+}
+
+private struct PreparedConversionJobs {
+    var jobs: [BatchConversionJob]
+    var skipped: Int
+    var requested: Int
+}
+
+private func conversionAssets(
+    _ rawIDs: [String],
+    context: ToolExecutionContext
+) throws -> [AssetRecord] {
+    guard !rawIDs.isEmpty else {
+        throw ToolExecutorError.invalidArguments("At least one assetID is required")
+    }
+    var seen: Set<AssetID> = []
+    return try rawIDs.compactMap { rawID in
+        let id = AssetID(rawValue: rawID)
+        guard seen.insert(id).inserted else { return nil }
+        guard let asset = context.assets[id] else {
+            throw ToolExecutorError.invalidArguments("Asset \(rawID) is not in the library")
+        }
+        guard !asset.isMissing else {
+            throw ToolExecutorError.invalidArguments("Asset \(rawID) is offline")
+        }
+        return asset
+    }
+}
+
+private func conversionTarget(_ rawValue: String) throws -> TargetFormat {
+    let normalized = rawValue.lowercased().filter(\.isLetter)
+    if let target = TargetFormat.allCases.first(where: { candidate in
+        let values = [candidate.rawValue, candidate.displayName, candidate.fileExtension]
+        return values.contains { $0.lowercased().filter(\.isLetter) == normalized }
+    }) {
+        return target
+    }
+    let aliases: [String: TargetFormat] = [
+        "jpg": .jpeg, "jpeg": .jpeg, "weboptimizedjpeg": .jpeg,
+        "gif": .animatedGIF, "animatedgif": .animatedGIF,
+        "mp4": .mp4H264, "h264": .mp4H264, "hevc": .mp4HEVC,
+        "webm": .webMVP9, "mkv": .matroska, "txt": .plainText,
+    ]
+    guard let target = aliases[normalized] else {
+        throw ToolExecutorError.invalidArguments("Unknown conversion target \(rawValue)")
+    }
+    return target
+}
+
+private func conversionOptions(
+    _ arguments: ConvertArguments,
+    target: TargetFormat
+) throws -> ConversionOptions {
+    var options: ConversionOptions
+    if let requestedPreset = arguments.preset {
+        let normalized = requestedPreset.lowercased()
+        guard
+            let preset = ConversionPreset.builtIns.first(where: {
+                $0.id.lowercased() == normalized || $0.name.lowercased() == normalized
+            })
+        else {
+            throw ToolExecutorError.invalidArguments("Unknown preset \(requestedPreset)")
+        }
+        guard preset.target == target else {
+            throw ToolExecutorError.invalidArguments(
+                "Preset \(preset.name) targets \(preset.target.rawValue), not \(target.rawValue)"
+            )
+        }
+        options = preset.options
+    } else {
+        options = ConversionOptions()
+    }
+
+    if let quality = arguments.quality {
+        let normalized = quality > 1 ? quality / 100 : quality
+        guard (0...1).contains(normalized) else {
+            throw ToolExecutorError.invalidArguments("Quality must be between 0 and 1 or 0 and 100")
+        }
+        if target.isImageTarget {
+            var image = options.image ?? ImageConversionOptions()
+            image.quality = normalized
+            options.image = image
+        } else {
+            var video = options.video ?? VideoConversionOptions()
+            video.quality = normalized
+            options.video = video
+        }
+    }
+    if let longestSide = arguments.longestSide {
+        guard target.isImageTarget, longestSide > 0 else {
+            throw ToolExecutorError.invalidArguments(
+                "longestSide requires a positive value and an image target"
+            )
+        }
+        var image = options.image ?? ImageConversionOptions()
+        image.resize = .longestSide(longestSide)
+        options.image = image
+    }
+    if let maximumBytes = arguments.maximumBytes {
+        guard maximumBytes > 0 else {
+            throw ToolExecutorError.invalidArguments("maximumBytes must be positive")
+        }
+        guard target.supportsHardSizeLimit else {
+            throw ToolExecutorError.invalidArguments(
+                "A hard maximumBytes limit is currently supported for ImageIO images and GIF"
+            )
+        }
+        if target.isImageTarget {
+            var image = options.image ?? ImageConversionOptions()
+            image.maximumFileSize = maximumBytes
+            options.image = image
+        } else {
+            var video = options.video ?? VideoConversionOptions()
+            video.maximumFileSize = maximumBytes
+            options.video = video
+        }
+    }
+    if arguments.stripMetadata == true { options.stripAllMetadata = true }
+    if let rawPolicy = arguments.conflictPolicy {
+        guard let conflictPolicy = ConversionConflictPolicy(rawValue: rawPolicy.lowercased()) else {
+            throw ToolExecutorError.invalidArguments(
+                "conflictPolicy must be rename, overwrite, or skip"
+            )
+        }
+        options.conflictPolicy = conflictPolicy
+    }
+    return options
+}
+
+private func conversionPlanDescription(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) throws -> String {
+    let target = try conversionTarget(arguments.target)
+    let options = try conversionOptions(arguments, target: target)
+    let assets = try conversionAssets(arguments.assetIDs, context: context)
+    let planner = ConversionPlanner()
+    let rows = try assets.map { asset in
+        let plan = try conversionPlan(
+            asset: asset,
+            target: target,
+            options: options,
+            planner: planner
+        )
+        let route = plan.steps.map(\.backend.rawValue).joined(separator: " → ")
+        let warnings =
+            plan.warnings.isEmpty
+            ? "none" : plan.warnings.joined(separator: " ")
+        return "\(asset.id.rawValue) (\(asset.displayName)): \(target.displayName) · "
+            + "\(plan.isLossless ? "lossless" : "lossy") · "
+            + "\(plan.steps.count) step\(plan.steps.count == 1 ? "" : "s") via \(route) · "
+            + "warnings: \(warnings)"
+    }
+    var constraints: [String] = []
+    if let quality = arguments.quality { constraints.append("quality \(quality.formatted())") }
+    if let longestSide = arguments.longestSide {
+        constraints.append("longest side \(longestSide) px")
+    }
+    if let maximumBytes = arguments.maximumBytes {
+        constraints.append("hard maximum \(maximumBytes) bytes")
+    }
+    if arguments.stripMetadata == true { constraints.append("metadata removed") }
+    let constraintLine =
+        constraints.isEmpty
+        ? "" : "\nConstraints: " + constraints.joined(separator: ", ") + "."
+    return "Conversion plan for \(assets.count) asset\(assets.count == 1 ? "" : "s"):\n"
+        + rows.joined(separator: "\n") + constraintLine
+}
+
+private func conversionConfirmation(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) throws -> String {
+    let destination =
+        arguments.destination
+        ?? context.conversionDestination?.path
+        ?? "the configured export folder"
+    return try conversionPlanDescription(arguments, context: context)
+        + "\nConfirm writing \(Set(arguments.assetIDs).count) converted file"
+        + "\(Set(arguments.assetIDs).count == 1 ? "" : "s") to \(destination)."
+}
+
+private func conversionPlan(
+    asset: AssetRecord,
+    target: TargetFormat,
+    options: ConversionOptions,
+    planner: ConversionPlanner
+) throws -> ConversionPlan {
+    guard let source = FormatID(asset: asset) else {
+        throw ToolExecutorError.invalidArguments(
+            "The source format for \(asset.displayName) could not be identified"
+        )
+    }
+    guard source != target.formatID else {
+        throw ToolExecutorError.invalidArguments(
+            "\(asset.displayName) is already \(target.displayName)"
+        )
+    }
+    guard let plan = planner.plan(from: source, to: target.formatID, options: options) else {
+        throw ToolExecutorError.invalidArguments(
+            "\(asset.displayName) cannot be converted to \(target.displayName) with these options"
+        )
+    }
+    return plan
+}
+
+private func prepareConversionJobs(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) async throws -> PreparedConversionJobs {
+    let assets = try conversionAssets(arguments.assetIDs, context: context)
+    let target = try conversionTarget(arguments.target)
+    let options = try conversionOptions(arguments, target: target)
+    let destination: URL
+    if let rawDestination = arguments.destination {
+        guard rawDestination.hasPrefix("/") else {
+            throw ToolExecutorError.invalidArguments("destination must be an absolute folder path")
+        }
+        destination = URL(fileURLWithPath: rawDestination, isDirectory: true).standardizedFileURL
+    } else if let configured = context.conversionDestination {
+        destination = configured.standardizedFileURL
+    } else {
+        throw ToolExecutorError.invalidArguments("No conversion destination is configured")
+    }
+    let planner = ConversionPlanner()
+    var jobs: [BatchConversionJob] = []
+    var reserved: Set<URL> = []
+    var skipped = 0
+    for (offset, asset) in assets.enumerated() {
+        let plan = try conversionPlan(
+            asset: asset,
+            target: target,
+            options: options,
+            planner: planner
+        )
+        let stem = (asset.displayName as NSString).deletingPathExtension
+        let filename = try conversionFilename(
+            template: arguments.filenameTemplate ?? "{name}",
+            name: stem,
+            target: target,
+            index: offset + 1
+        )
+        let proposed = destination.appendingPathComponent(filename)
+            .appendingPathExtension(target.fileExtension)
+        guard
+            let output = try resolvedAgentOutput(
+                proposed,
+                policy: options.conflictPolicy,
+                reserved: &reserved
+            )
+        else {
+            skipped += 1
+            continue
+        }
+        jobs.append(
+            BatchConversionJob(
+                plan: plan,
+                input: try await context.resolving(asset.id),
+                output: output
+            )
+        )
+    }
+    return PreparedConversionJobs(jobs: jobs, skipped: skipped, requested: assets.count)
+}
+
+private func conversionFilename(
+    template: String,
+    name: String,
+    target: TargetFormat,
+    index: Int
+) throws -> String {
+    let sanitizedName = name.replacingOccurrences(of: "/", with: "-")
+        .replacingOccurrences(of: ":", with: "-")
+    var filename =
+        template
+        .replacingOccurrences(of: "{name}", with: sanitizedName)
+        .replacingOccurrences(of: "{target}", with: target.fileExtension)
+        .replacingOccurrences(of: "{index}", with: String(index))
+    filename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !filename.isEmpty, !filename.contains("/"), !filename.contains("{"),
+        !filename.contains("}")
+    else {
+        throw ToolExecutorError.invalidArguments(
+            "filenameTemplate may use only {name}, {target}, and {index}"
+        )
+    }
+    return filename
+}
+
+private func resolvedAgentOutput(
+    _ proposed: URL,
+    policy: ConversionConflictPolicy,
+    reserved: inout Set<URL>
+) throws -> URL? {
+    switch policy {
+    case .overwrite:
+        guard reserved.insert(proposed).inserted else {
+            throw ToolExecutorError.invalidArguments(
+                "Two files resolve to \(proposed.lastPathComponent)")
+        }
+        return proposed
+    case .skip:
+        guard !FileManager.default.fileExists(atPath: proposed.path),
+            reserved.insert(proposed).inserted
+        else { return nil }
+        return proposed
+    case .rename:
+        if !FileManager.default.fileExists(atPath: proposed.path),
+            reserved.insert(proposed).inserted
+        {
+            return proposed
+        }
+        let stem = proposed.deletingPathExtension().lastPathComponent
+        var suffix = 2
+        while true {
+            let candidate = proposed.deletingLastPathComponent()
+                .appendingPathComponent("\(stem)-\(suffix)")
+                .appendingPathExtension(proposed.pathExtension)
+            if !FileManager.default.fileExists(atPath: candidate.path),
+                reserved.insert(candidate).inserted
+            {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+}
+
+extension TargetFormat {
+    fileprivate var isImageTarget: Bool {
+        switch self {
+        case .png, .jpeg, .heic, .tiff, .webP: true
+        default: false
+        }
+    }
+
+    fileprivate var supportsHardSizeLimit: Bool {
+        switch self {
+        case .png, .jpeg, .heic, .tiff, .animatedGIF: true
+        default: false
+        }
+    }
 }
 
 private func assistant(_ patch: GraphPatch, turnID: String) -> GraphPatch {

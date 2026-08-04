@@ -1171,17 +1171,7 @@ public final class AppModel {
         isAssistantWorking = true
         let turnID = UUID().uuidString.lowercased()
         let digest = editor.assistantContextDigest()
-        var context = editor.toolExecutionContext()
-        context.searching = { query in try await runtime.search(query) }
-        context.searchingWithin = { assetID, text in
-            try await runtime.searchWithin(assetID, text: text)
-        }
-        context.readingText = { assetID, time in
-            try await runtime.indexedText(at: time, in: assetID)
-        }
-        context.searchingSimilar = { assetID, limit in
-            try await runtime.similarAssets(to: assetID, limit: limit)
-        }
+        let context = assistantToolContext(editor: editor, runtime: runtime)
         let settings = aiSettings
 
         Task {
@@ -1202,6 +1192,19 @@ public final class AppModel {
                 }
                 for result in turn.results {
                     responseParts.append(result.message)
+                }
+                for (invocation, result) in zip(turn.invocations, turn.results)
+                where result.requiresConfirmation && result.patch == nil
+                    && supportsAssistantConfirmation(invocation)
+                {
+                    pendingAssistantActions.append(
+                        PendingAssistantAction(
+                            name: invocation.name,
+                            result: result,
+                            invocation: invocation
+                        )
+                    )
+                    responseParts.append("Review this file operation before applying.")
                 }
                 if let combinedPatch = turn.combinedPatch {
                     let requiresConfirmation = turn.results.contains(where: \.requiresConfirmation)
@@ -1237,25 +1240,91 @@ public final class AppModel {
     }
 
     public func approveAssistantAction(_ id: String) {
-        guard let index = pendingAssistantActions.firstIndex(where: { $0.id == id }),
-            let patch = pendingAssistantActions[index].result.patch,
-            let editor
+        guard let index = pendingAssistantActions.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let action = pendingAssistantActions[index]
+        if let patch = action.result.patch, let editor {
+            do {
+                try editor.perform(patch)
+                assistantMessages.append(
+                    AssistantMessage(role: .status, text: action.result.message))
+                pendingAssistantActions.removeAll { $0.id == id }
+            } catch {
+                assistantMessages.append(
+                    AssistantMessage(role: .status, text: error.localizedDescription))
+            }
+            return
+        }
+        guard let invocation = action.invocation, let editor, let runtime,
+            !isAssistantWorking
         else { return }
-        do {
-            try editor.perform(patch)
-            assistantMessages.append(
-                AssistantMessage(
-                    role: .status, text: pendingAssistantActions[index].result.message))
-            pendingAssistantActions.remove(at: index)
-        } catch {
-            assistantMessages.append(
-                AssistantMessage(role: .status, text: error.localizedDescription))
+        isAssistantWorking = true
+        let context = assistantToolContext(editor: editor, runtime: runtime)
+        let policy = aiSettings.confirmationPolicy
+        Task {
+            defer { isAssistantWorking = false }
+            do {
+                let result = try await ToolExecutor().execute(
+                    invocation,
+                    turnID: invocation.callID,
+                    policy: policy,
+                    context: context,
+                    confirmed: true
+                )
+                pendingAssistantActions.removeAll { $0.id == id }
+                assistantMessages.append(AssistantMessage(role: .status, text: result.message))
+            } catch {
+                assistantMessages.append(
+                    AssistantMessage(role: .status, text: error.localizedDescription))
+            }
         }
     }
 
     public func rejectAssistantAction(_ id: String) {
         pendingAssistantActions.removeAll { $0.id == id }
-        assistantMessages.append(AssistantMessage(role: .status, text: "Edit skipped."))
+        assistantMessages.append(AssistantMessage(role: .status, text: "Action skipped."))
+    }
+
+    private func assistantToolContext(
+        editor: EditorViewModel,
+        runtime: AppRuntime
+    ) -> ToolExecutionContext {
+        var context = editor.toolExecutionContext()
+        context.searching = { query in try await runtime.search(query) }
+        context.searchingWithin = { assetID, text in
+            try await runtime.searchWithin(assetID, text: text)
+        }
+        context.readingText = { assetID, time in
+            try await runtime.indexedText(at: time, in: assetID)
+        }
+        context.searchingSimilar = { assetID, limit in
+            try await runtime.similarAssets(to: assetID, limit: limit)
+        }
+        context.conversionDestination = conversionDestinationFolder
+        context.converting = { jobs in
+            let stream = await runtime.convert(jobs)
+            var outcomes: [UUID: BatchItemOutcome] = [:]
+            for try await progress in stream {
+                if let id = progress.itemID, let outcome = progress.outcome {
+                    outcomes[id] = outcome
+                }
+            }
+            return jobs.map { job in
+                outcomes[job.id]
+                    ?? .failed("The conversion ended without a result")
+            }
+        }
+        return context
+    }
+
+    private func supportsAssistantConfirmation(_ invocation: ToolInvocation) -> Bool {
+        if invocation.name == "convert.run" { return true }
+        guard invocation.name == "runCommand",
+            case .object(let fields) = invocation.arguments,
+            fields["id"] == .string("convert.run")
+        else { return false }
+        return true
     }
 
     public func openEditor(for assetID: AssetID, initialTime: RationalTime? = nil) {

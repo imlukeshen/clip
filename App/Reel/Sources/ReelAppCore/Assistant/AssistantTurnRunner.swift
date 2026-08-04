@@ -21,10 +21,12 @@ public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
     public var id: String { result.callID }
     public var name: String
     public var result: ToolResult
+    public var invocation: ToolInvocation?
 
-    public init(name: String, result: ToolResult) {
+    public init(name: String, result: ToolResult, invocation: ToolInvocation? = nil) {
         self.name = name
         self.result = result
+        self.invocation = invocation
     }
 }
 
@@ -167,12 +169,15 @@ public struct AssistantTurnRunner: Sendable {
     }
 
     private static let systemPrompt = """
-        You are Clip's editing assistant. Use the supplied tools for timeline edits. Keep each
-        requested operation as a separate tool call. Clip coalesces the completed turn into one undo.
+        You are Clip's editing assistant. Use the supplied tools for timeline edits, library search,
+        and file conversion. Keep each requested operation as a separate tool call. Clip coalesces
+        completed timeline edits into one undo.
         Never invent audio or click availability; trust hasAudio and alignment in the context.
         For requests that refer to visible or spoken content, decompose the task: search the library,
         search within the chosen asset for an exact source timestamp, then edit the corresponding
         timeline item. Search results include timestamps and item IDs. Quoted search text is exact.
-        Ask before actions represented by confirm tools.
+        For conversion requests, discover or use asset IDs, call convert.listTargets when the target
+        is uncertain, call convert.plan to report quality and size tradeoffs, and only then call
+        convert.run. Ask before actions represented by confirm tools.
         """
 }

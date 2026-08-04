@@ -93,19 +93,24 @@ public struct ImageConversionOptions: Codable, Sendable, Equatable {
     public var backgroundColor: ConversionColor?
     public var stripMetadata: Bool
     public var colorProfile: ConversionColorProfile
+    /// A hard output ceiling. ImageIO lowers lossy quality first, then dimensions,
+    /// and fails instead of silently producing an oversized file.
+    public var maximumFileSize: Int?
 
     public init(
         quality: Double? = nil,
         resize: ImageResize? = nil,
         backgroundColor: ConversionColor? = nil,
         stripMetadata: Bool = false,
-        colorProfile: ConversionColorProfile = .preserve
+        colorProfile: ConversionColorProfile = .preserve,
+        maximumFileSize: Int? = nil
     ) {
         self.quality = quality
         self.resize = resize
         self.backgroundColor = backgroundColor
         self.stripMetadata = stripMetadata
         self.colorProfile = colorProfile
+        self.maximumFileSize = maximumFileSize
     }
 }
 
@@ -210,7 +215,7 @@ public struct ConversionOptions: Codable, Sendable, Equatable {
             if video.twoPass { result.insert(.twoPass) }
         }
         if let image {
-            if image.quality != nil { result.insert(.quality) }
+            if image.quality != nil || image.maximumFileSize != nil { result.insert(.quality) }
             if image.resize != nil { result.insert(.resize) }
             if image.backgroundColor != nil { result.insert(.backgroundColor) }
             if image.stripMetadata { result.insert(.stripMetadata) }
