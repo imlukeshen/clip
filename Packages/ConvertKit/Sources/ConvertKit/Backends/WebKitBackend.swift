@@ -19,7 +19,9 @@ public struct WebKitBackend: ConversionBackend {
                 cost: .cheap,
                 isLossless: false,
                 warnings: ["Document layout may change during PDF rendering."],
-                supportedOptions: [.stripMetadata]
+                supportedOptions: [
+                    .stripMetadata, .rasterizationDPI, .pageSize, .margins, .embedFonts,
+                ]
             )
         ]
     }
@@ -39,7 +41,7 @@ public struct WebKitBackend: ConversionBackend {
                     else {
                         throw ConversionError.unsupported("Unsupported WebKit conversion")
                     }
-                    data = try await Self.renderPDF(input)
+                    data = try await Self.renderPDF(input, options: step.options)
                     try Task.checkCancellation()
                     let temporary = try AtomicOutput.prepareTemporaryURL(for: output)
                     defer { try? FileManager.default.removeItem(at: temporary) }
@@ -58,13 +60,21 @@ public struct WebKitBackend: ConversionBackend {
     }
 
     @MainActor
-    private static func renderPDF(_ input: URL) async throws -> Data {
+    private static func renderPDF(_ input: URL, options: ConversionOptions) async throws -> Data {
         let configuration = try await offlineConfiguration()
+        let pageSize = pageSize(for: options.document?.pageSize)
         let webView = WKWebView(
-            frame: CGRect(x: 0, y: 0, width: 612, height: 792),
+            frame: CGRect(origin: .zero, size: pageSize),
             configuration: configuration
         )
-        let html = try String(contentsOf: input, encoding: .utf8)
+        var html = try String(contentsOf: input, encoding: .utf8)
+        if let margins = options.document?.margins {
+            html = """
+                <style>@page { margin: \(margins.top)pt \(margins.trailing)pt \
+                \(margins.bottom)pt \(margins.leading)pt; }</style>
+                \(html)
+                """
+        }
         let waiter = NavigationWaiter()
         webView.navigationDelegate = waiter
         webView.loadHTMLString(html, baseURL: input.deletingLastPathComponent())
@@ -73,6 +83,13 @@ public struct WebKitBackend: ConversionBackend {
         let pdfConfiguration = WKPDFConfiguration()
         pdfConfiguration.rect = webView.bounds
         return try await webView.pdf(configuration: pdfConfiguration)
+    }
+
+    private static func pageSize(for option: ConversionPageSize?) -> CGSize {
+        switch option ?? .letter {
+        case .source, .letter: CGSize(width: 612, height: 792)
+        case .a4: CGSize(width: 595.28, height: 841.89)
+        }
     }
 
     @MainActor

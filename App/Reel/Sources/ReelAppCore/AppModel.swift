@@ -939,6 +939,16 @@ public final class AppModel {
         conversionQueue[index].selectTarget(target)
     }
 
+    public func applyConversionPreset(_ preset: ConversionPreset, for id: UUID) {
+        guard let index = conversionQueue.firstIndex(where: { $0.id == id }) else { return }
+        conversionQueue[index].applyPreset(preset)
+    }
+
+    public func setConversionMetadataStripping(_ enabled: Bool, for id: UUID) {
+        guard let index = conversionQueue.firstIndex(where: { $0.id == id }) else { return }
+        conversionQueue[index].setStripMetadata(enabled)
+    }
+
     public func removeConversion(_ id: UUID) {
         guard let item = conversionQueue.first(where: { $0.id == id }) else { return }
         if case .converting = item.status { return }

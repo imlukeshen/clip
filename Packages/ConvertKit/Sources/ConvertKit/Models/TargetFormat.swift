@@ -23,7 +23,7 @@ public enum FFmpegRecipe: String, Sendable, Equatable, CaseIterable {
 }
 
 /// Formats exposed by the conversion queue.
-public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiable {
+public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
     case mp4H264
     case mp4HEVC
     case movH264

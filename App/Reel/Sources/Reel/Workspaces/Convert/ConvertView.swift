@@ -120,6 +120,39 @@ private struct ConversionQueueRow: View {
             BackendBadge(backendTitle, style: backendStyle)
                 .frame(width: 150, alignment: .leading)
 
+            Menu {
+                Button {
+                    model.setConversionMetadataStripping(!item.stripsMetadata, for: item.id)
+                } label: {
+                    Label(
+                        item.stripsMetadata ? "Keep metadata" : "Strip metadata",
+                        systemImage: item.stripsMetadata ? "checkmark.shield" : "shield"
+                    )
+                }
+                if !item.compatiblePresets.isEmpty {
+                    Divider()
+                    ForEach(item.compatiblePresets) { preset in
+                        Button {
+                            model.applyConversionPreset(preset, for: item.id)
+                        } label: {
+                            if item.selectedPresetID == preset.id {
+                                Label(preset.name, systemImage: "checkmark")
+                            } else {
+                                Text(preset.name)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .frame(width: 20, height: 20)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(isConverting)
+            .accessibilityLabel("Conversion options for \(item.asset.displayName)")
+
             status
                 .frame(width: 92, alignment: .trailing)
 

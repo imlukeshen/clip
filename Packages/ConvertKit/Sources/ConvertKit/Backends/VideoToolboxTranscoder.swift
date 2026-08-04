@@ -23,7 +23,7 @@ public actor VideoToolboxTranscoder: VideoTranscoding, ConversionBackend {
                 isLossless: false,
                 warnings: ["The video will be re-encoded."],
                 supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata,
                 ]
             )
         }
@@ -37,13 +37,32 @@ public actor VideoToolboxTranscoder: VideoTranscoding, ConversionBackend {
         guard case .videoToolbox(let codec) = step.implementation else {
             return failedStream(ConversionError.invalidInput)
         }
-        return await transcode(input: input, output: output, codec: codec)
+        return await transcode(
+            input: input,
+            output: output,
+            codec: codec,
+            options: step.options
+        )
     }
 
     func transcode(
         input: URL,
         output: URL,
         codec: VideoCodec
+    ) async -> AsyncThrowingStream<Double, Error> {
+        await transcode(
+            input: input,
+            output: output,
+            codec: codec,
+            options: ConversionOptions()
+        )
+    }
+
+    func transcode(
+        input: URL,
+        output: URL,
+        codec: VideoCodec,
+        options: ConversionOptions
     ) async -> AsyncThrowingStream<Double, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -53,7 +72,8 @@ public actor VideoToolboxTranscoder: VideoTranscoding, ConversionBackend {
                         input: input,
                         output: output,
                         preset: preset(for: codec),
-                        fileType: AVExport.fileType(for: output)
+                        fileType: AVExport.fileType(for: output),
+                        options: options
                     )
                     continuation.yield(1)
                     continuation.finish()

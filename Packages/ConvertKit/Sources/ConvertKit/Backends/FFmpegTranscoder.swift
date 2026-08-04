@@ -19,7 +19,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
                 supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
                 ]
             ),
             ConversionEdge(
@@ -31,7 +31,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
                 supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
                 ]
             ),
             ConversionEdge(
@@ -43,7 +43,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
                 supportedOptions: [
-                    .quality, .resize, .frameRate, .trim, .stripMetadata,
+                    .quality, .resize, .frameRate, .trim, .mute, .stripMetadata, .twoPass,
                 ]
             ),
             ConversionEdge(
@@ -55,7 +55,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
                 supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .stripMetadata,
+                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
                 ]
             ),
             ConversionEdge(
@@ -96,7 +96,27 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
         output: URL,
         recipe: FFmpegRecipe
     ) async -> AsyncThrowingStream<Double, Error> {
-        AsyncThrowingStream { continuation in
+        await transcode(
+            input: input,
+            output: output,
+            recipe: recipe,
+            options: ConversionOptions()
+        )
+    }
+
+    public func transcode(
+        input: URL,
+        output: URL,
+        recipe: FFmpegRecipe,
+        options: ConversionOptions
+    ) async -> AsyncThrowingStream<Double, Error> {
+        if recipe == .animatedGIF,
+            options.video?.maximumFileSize != nil || options.video?.resolution != nil
+                || options.video?.frameRate != nil
+        {
+            return AdaptiveGIFEncoder.convert(input: input, output: output, options: options)
+        }
+        return AsyncThrowingStream { continuation in
             let progress = FFmpegProgress(continuation: continuation)
             let task = Task.detached(priority: .userInitiated) {
                 let temporary: URL

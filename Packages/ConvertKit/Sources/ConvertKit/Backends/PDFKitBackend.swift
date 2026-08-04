@@ -30,7 +30,9 @@ public struct PDFKitBackend: ConversionBackend {
             ConversionEdge(
                 from: .oneOf(ConversionFormats.imageInputs), to: ConversionFormats.pdf,
                 backend: id, implementation: .pdfKit, cost: .cheap, isLossless: true,
-                supportedOptions: [.stripMetadata]),
+                supportedOptions: [
+                    .rasterizationDPI, .pageSize, .margins, .stripMetadata,
+                ]),
         ]
     }
 
@@ -46,7 +48,12 @@ public struct PDFKitBackend: ConversionBackend {
                     let temporary = try AtomicOutput.prepareTemporaryURL(for: output)
                     defer { try? FileManager.default.removeItem(at: temporary) }
                     if step.from.type == ConversionFormats.pdf.type {
-                        try Self.exportPDF(input, to: temporary, format: step.to)
+                        try Self.exportPDF(
+                            input,
+                            to: temporary,
+                            format: step.to,
+                            options: step.options
+                        )
                     } else if step.to.type == ConversionFormats.pdf.type {
                         try Self.createPDF(from: input, at: temporary)
                     } else {
@@ -65,7 +72,12 @@ public struct PDFKitBackend: ConversionBackend {
         }
     }
 
-    private static func exportPDF(_ input: URL, to output: URL, format: FormatID) throws {
+    private static func exportPDF(
+        _ input: URL,
+        to output: URL,
+        format: FormatID,
+        options: ConversionOptions
+    ) throws {
         guard let document = PDFDocument(url: input), document.pageCount > 0 else {
             throw ConversionError.invalidInput
         }
@@ -73,9 +85,13 @@ public struct PDFKitBackend: ConversionBackend {
             try Data((document.string ?? "").utf8).write(to: output, options: .atomic)
             return
         }
-        guard let page = document.page(at: 0) else { throw ConversionError.invalidInput }
+        let pageIndex = max((options.document?.pageRange?.firstPage ?? 1) - 1, 0)
+        guard pageIndex < document.pageCount, let page = document.page(at: pageIndex) else {
+            throw ConversionError.invalidInput
+        }
         let bounds = page.bounds(for: .mediaBox)
-        let scale: CGFloat = 2
+        let dpi = min(max(options.document?.rasterizationDPI ?? 144, 36), 600)
+        let scale = CGFloat(dpi / 72)
         let width = max(Int(ceil(bounds.width * scale)), 1)
         let height = max(Int(ceil(bounds.height * scale)), 1)
         guard

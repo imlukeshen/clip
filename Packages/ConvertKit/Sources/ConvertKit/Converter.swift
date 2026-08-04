@@ -80,17 +80,27 @@ public actor Converter {
     ) async -> AsyncThrowingStream<Double, Error> {
         switch step.backend {
         case .passthrough:
-            return await remuxer.remux(input: input, output: output)
+            return await remuxer.remux(input: input, output: output, options: step.options)
         case .videoToolbox:
             guard case .videoToolbox(let codec) = step.implementation else {
                 return failedStream(ConversionError.invalidInput)
             }
-            return await videoToolbox.transcode(input: input, output: output, codec: codec)
+            return await videoToolbox.transcode(
+                input: input,
+                output: output,
+                codec: codec,
+                options: step.options
+            )
         case .imageIO:
             guard case .imageIO(let format) = step.implementation else {
                 return failedStream(ConversionError.invalidInput)
             }
-            return await imageIO.transcode(input: input, output: output, format: format)
+            return await imageIO.transcode(
+                input: input,
+                output: output,
+                format: format,
+                options: step.options
+            )
         case .pdfKit:
             return await pdfKit.run(step, input: input, output: output)
         case .attributedString:
@@ -103,7 +113,12 @@ public actor Converter {
             guard case .ffmpeg(let recipe) = step.implementation else {
                 return failedStream(ConversionError.invalidInput)
             }
-            return await ffmpeg.transcode(input: input, output: output, recipe: recipe)
+            return await ffmpeg.transcode(
+                input: input,
+                output: output,
+                recipe: recipe,
+                options: step.options
+            )
         case .libreOffice:
             return failedStream(ConversionError.backendUnavailable("LibreOffice is not available"))
         }

@@ -15,7 +15,8 @@ public actor RemuxTranscoder: Remuxing, ConversionBackend {
                 backend: id,
                 implementation: .remux,
                 cost: .passthrough,
-                isLossless: true
+                isLossless: true,
+                supportedOptions: [.stripMetadata]
             ),
             ConversionEdge(
                 from: .exact(ConversionFormats.mp4H264),
@@ -23,7 +24,8 @@ public actor RemuxTranscoder: Remuxing, ConversionBackend {
                 backend: id,
                 implementation: .remux,
                 cost: .passthrough,
-                isLossless: true
+                isLossless: true,
+                supportedOptions: [.stripMetadata]
             ),
         ]
     }
@@ -36,10 +38,18 @@ public actor RemuxTranscoder: Remuxing, ConversionBackend {
         guard step.backend == id else {
             return failedStream(ConversionError.invalidInput)
         }
-        return await remux(input: input, output: output)
+        return await remux(input: input, output: output, options: step.options)
     }
 
     func remux(input: URL, output: URL) async -> AsyncThrowingStream<Double, Error> {
+        await remux(input: input, output: output, options: ConversionOptions())
+    }
+
+    func remux(
+        input: URL,
+        output: URL,
+        options: ConversionOptions
+    ) async -> AsyncThrowingStream<Double, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -48,7 +58,8 @@ public actor RemuxTranscoder: Remuxing, ConversionBackend {
                         input: input,
                         output: output,
                         preset: AVAssetExportPresetPassthrough,
-                        fileType: AVExport.fileType(for: output)
+                        fileType: AVExport.fileType(for: output),
+                        options: options
                     )
                     continuation.yield(1)
                     continuation.finish()

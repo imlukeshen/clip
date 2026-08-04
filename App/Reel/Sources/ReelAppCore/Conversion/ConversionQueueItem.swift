@@ -15,6 +15,8 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
     public let inputURL: URL
     public private(set) var target: TargetFormat
     public private(set) var plan: ConversionPlan
+    public private(set) var options: ConversionOptions
+    public private(set) var selectedPresetID: String?
     public var progress: Double
     public var status: ConversionQueueStatus
 
@@ -23,6 +25,8 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         asset: AssetRecord,
         inputURL: URL,
         target: TargetFormat? = nil,
+        options: ConversionOptions = ConversionOptions(),
+        selectedPresetID: String? = nil,
         progress: Double = 0,
         status: ConversionQueueStatus = .waiting
     ) {
@@ -31,16 +35,31 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         self.asset = asset
         self.inputURL = inputURL
         self.target = selectedTarget
-        self.plan = ConvertKit.plan(from: asset, to: selectedTarget)
+        self.options = options
+        self.selectedPresetID = selectedPresetID
+        self.plan = ConvertKit.plan(from: asset, to: selectedTarget, options: options)
         self.progress = progress
         self.status = status
     }
 
     public var availableTargets: [TargetFormat] {
         guard let source = FormatID(asset: asset) else { return [] }
-        let reachable = Set(ConversionPlanner().reachableTargets(from: source))
+        let reachable = Set(ConversionPlanner().reachableTargets(from: source, options: options))
         return TargetFormat.allCases.filter { reachable.contains($0.formatID) }
     }
+
+    public var compatiblePresets: [ConversionPreset] {
+        guard let source = FormatID(asset: asset) else { return [] }
+        return ConversionPreset.builtIns.filter { preset in
+            ConversionPlanner().plan(
+                from: source,
+                to: preset.target.formatID,
+                options: preset.options
+            ) != nil
+        }
+    }
+
+    public var stripsMetadata: Bool { options.removesMetadata }
 
     public var sourceDescription: String {
         let container = asset.container?.uppercased() ?? asset.kind.rawValue.capitalized
@@ -57,7 +76,34 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         if case .converting = status { return }
         guard availableTargets.contains(target) else { return }
         self.target = target
-        self.plan = ConvertKit.plan(from: asset, to: target)
+        selectedPresetID = nil
+        self.plan = ConvertKit.plan(from: asset, to: target, options: options)
+        progress = 0
+        status = .waiting
+    }
+
+    public mutating func applyPreset(_ preset: ConversionPreset) {
+        if case .converting = status { return }
+        guard let source = FormatID(asset: asset),
+            let plan = ConversionPlanner().plan(
+                from: source,
+                to: preset.target.formatID,
+                options: preset.options
+            )
+        else { return }
+        target = preset.target
+        options = preset.options
+        selectedPresetID = preset.id
+        self.plan = plan
+        progress = 0
+        status = .waiting
+    }
+
+    public mutating func setStripMetadata(_ shouldStrip: Bool) {
+        if case .converting = status { return }
+        options.stripAllMetadata = shouldStrip
+        selectedPresetID = nil
+        plan = ConvertKit.plan(from: asset, to: target, options: options)
         progress = 0
         status = .waiting
     }
@@ -74,9 +120,7 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         case .image: return .jpeg
         case .audio: return .flac
         case .document: return .png
-        // No text target exists yet (T2/T3); the planner reports it unsupported,
-        // so this placeholder is never actually offered or run.
-        case .text: return .png
+        case .text: return .pdf
         }
     }
 }

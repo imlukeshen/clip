@@ -113,7 +113,7 @@ public enum ConversionCost: Int, Sendable, Equatable, Comparable {
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-public struct ConversionOptionSupport: OptionSet, Sendable, Hashable {
+public struct ConversionOptionSupport: OptionSet, Codable, Sendable, Hashable {
     public let rawValue: UInt64
 
     public init(rawValue: UInt64) { self.rawValue = rawValue }
@@ -126,14 +126,13 @@ public struct ConversionOptionSupport: OptionSet, Sendable, Hashable {
     public static let stripMetadata = Self(rawValue: 1 << 5)
     public static let pageRange = Self(rawValue: 1 << 6)
     public static let rasterizationDPI = Self(rawValue: 1 << 7)
-}
-
-public struct ConversionOptions: Sendable, Equatable {
-    public var requested: ConversionOptionSupport
-
-    public init(requested: ConversionOptionSupport = []) {
-        self.requested = requested
-    }
+    public static let mute = Self(rawValue: 1 << 8)
+    public static let twoPass = Self(rawValue: 1 << 9)
+    public static let backgroundColor = Self(rawValue: 1 << 10)
+    public static let colorProfile = Self(rawValue: 1 << 11)
+    public static let pageSize = Self(rawValue: 1 << 12)
+    public static let margins = Self(rawValue: 1 << 13)
+    public static let embedFonts = Self(rawValue: 1 << 14)
 }
 
 public struct ConversionEdge: Sendable {
@@ -175,8 +174,13 @@ public struct PlannedStep: Sendable, Equatable {
     public var cost: ConversionCost
     public var isLossless: Bool
     public var warnings: [String]
+    public var options: ConversionOptions
 
-    public init(from: FormatID, edge: ConversionEdge) {
+    public init(
+        from: FormatID,
+        edge: ConversionEdge,
+        options: ConversionOptions = ConversionOptions()
+    ) {
         self.from = from
         self.to = edge.to
         self.backend = edge.backend
@@ -184,6 +188,7 @@ public struct PlannedStep: Sendable, Equatable {
         self.cost = edge.cost
         self.isLossless = edge.isLossless
         self.warnings = edge.warnings
+        self.options = options
     }
 }
 
