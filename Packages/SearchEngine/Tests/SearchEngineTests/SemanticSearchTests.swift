@@ -87,6 +87,23 @@ struct SemanticSearchTests {
         )
     }
 
+    @Test("Similar search uses an asset centroid and excludes the source")
+    func similarAssets() async throws {
+        let fixture = try await SemanticFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let provider = ConceptEmbeddingProvider(model: "concept-v1")
+        let processor = LocalIndexStageProcessor(store: fixture.store, embeddingProvider: provider)
+        for asset in fixture.assets {
+            _ = try await processor.process(assetID: asset.id, stage: .embedding)
+        }
+        let engine = SearchEngine(store: fixture.store, embeddingProvider: provider)
+
+        let hits = try await engine.similar(to: fixture.assets[0].id, limit: 5)
+
+        #expect(!hits.contains { $0.assetID == fixture.assets[0].id })
+        #expect(hits.first?.assetID == fixture.assets[1].id)
+    }
+
     @Test("Apple contextual vectors are normalized and preserve a billing concept")
     func appleContextualEmbedding() async throws {
         let provider = NaturalLanguageEmbeddingProvider()

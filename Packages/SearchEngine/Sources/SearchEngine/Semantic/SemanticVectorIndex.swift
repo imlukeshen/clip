@@ -22,17 +22,42 @@ public actor SemanticVectorIndex {
     public func matches(text: String, limit: Int) async throws -> [SemanticTextMatch] {
         guard limit > 0 else { return [] }
         let query = try await provider.embedding(for: text)
-        let count = try await store.embeddingCount(model: query.model)
+        return try await matches(vector: query.vector, model: query.model, limit: limit)
+    }
+
+    /// Finds chunks nearest to the mean embedding for an existing asset. The
+    /// source asset is excluded so callers receive true library neighbours.
+    public func matches(similarTo assetID: AssetID, limit: Int) async throws
+        -> [SemanticTextMatch]
+    {
+        guard limit > 0 else { return [] }
+        var candidates: [SemanticTextMatch] = []
+        for model in await provider.currentModelIdentifiers().sorted() {
+            let source = try await store.embeddings(for: assetID, model: model)
+            guard let vector = Self.centroid(source.map(\.vector)) else { continue }
+            candidates += try await matches(
+                vector: vector,
+                model: model,
+                limit: limit * 2
+            ).filter { $0.assetID != assetID }
+        }
+        return candidates.sorted(by: Self.matchOrdering).prefix(limit).map { $0 }
+    }
+
+    private func matches(vector: [Float], model: String, limit: Int) async throws
+        -> [SemanticTextMatch]
+    {
+        let count = try await store.embeddingCount(model: model)
         guard count > 0 else { return [] }
         let generation = try await store.embeddingGeneration()
         if count <= Self.inMemoryChunkLimit {
-            if cache?.model != query.model || cache?.generation != generation {
-                let records = try await store.embeddings(model: query.model, limit: count)
-                cache = Cache(model: query.model, generation: generation, records: records)
+            if cache?.model != model || cache?.generation != generation {
+                let records = try await store.embeddings(model: model, limit: count)
+                cache = Cache(model: model, generation: generation, records: records)
             }
             guard let cache else { return [] }
             return Self.rank(
-                query.vector, metadata: cache.metadata, vectors: cache.vectors, limit: limit)
+                vector, metadata: cache.metadata, vectors: cache.vectors, limit: limit)
         }
 
         Self.logger.warning(
@@ -42,19 +67,19 @@ public actor SemanticVectorIndex {
         var candidates: [SemanticTextMatch] = []
         while offset < count {
             let records = try await store.embeddings(
-                model: query.model,
+                model: model,
                 limit: Self.pageSize,
                 offset: offset
             )
             guard !records.isEmpty else { break }
-            let page = Cache(model: query.model, generation: generation, records: records)
+            let page = Cache(model: model, generation: generation, records: records)
             candidates += Self.rank(
-                query.vector,
+                vector,
                 metadata: page.metadata,
                 vectors: page.vectors,
                 limit: limit
             )
-            candidates.sort { $0.score > $1.score }
+            candidates.sort(by: Self.matchOrdering)
             if candidates.count > limit { candidates.removeLast(candidates.count - limit) }
             offset += records.count
         }
@@ -146,10 +171,30 @@ public actor SemanticVectorIndex {
                 }
             }
         }
-        return matches.sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
-            if $0.assetID != $1.assetID { return $0.assetID.rawValue < $1.assetID.rawValue }
-            return ($0.start ?? .zero) < ($1.start ?? .zero)
-        }.prefix(limit).map { $0 }
+        return matches.sorted(by: matchOrdering).prefix(limit).map { $0 }
+    }
+
+    private nonisolated static func centroid(_ vectors: [[Float]]) -> [Float]? {
+        guard let dimensions = vectors.first?.count, dimensions > 0,
+            vectors.allSatisfy({ $0.count == dimensions })
+        else { return nil }
+        var result = [Float](repeating: 0, count: dimensions)
+        for vector in vectors {
+            for index in result.indices { result[index] += vector[index] }
+        }
+        let magnitude = sqrt(result.reduce(0) { $0 + $1 * $1 })
+        guard magnitude.isFinite, magnitude > 0 else { return nil }
+        return result.map { $0 / magnitude }
+    }
+
+    private nonisolated static func matchOrdering(
+        _ lhs: SemanticTextMatch,
+        _ rhs: SemanticTextMatch
+    ) -> Bool {
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        if lhs.assetID != rhs.assetID {
+            return lhs.assetID.rawValue < rhs.assetID.rawValue
+        }
+        return (lhs.start ?? .zero) < (rhs.start ?? .zero)
     }
 }

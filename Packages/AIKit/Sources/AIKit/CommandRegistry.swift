@@ -103,6 +103,42 @@ public enum CommandRegistry {
             "asset.search", "Search Library", .asset,
             shortcut: .init("f"), kind: .confirm, exposure: .onDemand),
         command(
+            "search.library", "Search Library Content", .asset,
+            description:
+                "Search the full local library with optional filters. Results include asset IDs, timeline item IDs when open, timestamped moments, and snippets. Quoted text forces exact matching.",
+            kind: .read,
+            exposure: .always,
+            required: ["text"],
+            properties: [
+                "text": string, "kind": string, "after": string, "before": string,
+                "folder": string, "minimumDuration": number, "maximumDuration": number,
+                "hasAudio": boolean, "mode": string, "limit": number,
+            ]),
+        command(
+            "search.withinAsset", "Search Within Asset", .asset,
+            description:
+                "Find exact timestamped moments inside one asset. Results include source timestamps and the corresponding open timeline item IDs. Quoted text forces exact matching.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID", "text"],
+            properties: ["assetID": string, "text": string]),
+        command(
+            "search.textAt", "Read Text at Timestamp", .asset,
+            description:
+                "Return OCR text spans and bounding boxes visible at a source timestamp in an asset. Use this to copy or reason about exact on-screen text.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID", "time"],
+            properties: ["assetID": string, "time": number]),
+        command(
+            "search.similar", "Find Similar Assets", .asset,
+            description:
+                "Find semantic nearest neighbours to an asset. Results include asset IDs, timestamped moments, and snippets; quoted search text is exact in the other search tools.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID"],
+            properties: ["assetID": string, "limit": number]),
+        command(
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,
             properties: ["assetIDs": array(string)]),
@@ -378,6 +414,7 @@ public enum CommandRegistry {
         _ category: CommandCategory,
         shortcut: CommandShortcut? = nil,
         destructive: Bool = false,
+        description: String? = nil,
         kind: ToolKind = .write,
         exposure: AgentExposure,
         required: [String] = [],
@@ -392,7 +429,7 @@ public enum CommandRegistry {
             agentExposure: exposure,
             schema: ToolSchema(
                 name: id.rawValue,
-                description: title,
+                description: description ?? title,
                 kind: kind,
                 parameters: typedObject(properties, required: required)
             )

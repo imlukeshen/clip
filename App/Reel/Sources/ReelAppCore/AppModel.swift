@@ -1017,13 +1017,23 @@ public final class AppModel {
 
     public func sendAssistantMessage() {
         let prompt = assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isAssistantWorking, let editor else { return }
+        guard !prompt.isEmpty, !isAssistantWorking, let editor, let runtime else { return }
         assistantDraft = ""
         assistantMessages.append(AssistantMessage(role: .user, text: prompt))
         isAssistantWorking = true
         let turnID = UUID().uuidString.lowercased()
         let digest = editor.assistantContextDigest()
-        let context = editor.toolExecutionContext()
+        var context = editor.toolExecutionContext()
+        context.searching = { query in try await runtime.search(query) }
+        context.searchingWithin = { assetID, text in
+            try await runtime.searchWithin(assetID, text: text)
+        }
+        context.readingText = { assetID, time in
+            try await runtime.indexedText(at: time, in: assetID)
+        }
+        context.searchingSimilar = { assetID, limit in
+            try await runtime.similarAssets(to: assetID, limit: limit)
+        }
         let settings = aiSettings
 
         Task {

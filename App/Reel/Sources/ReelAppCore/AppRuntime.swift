@@ -315,6 +315,10 @@ public actor AppRuntime {
         try await searchEngine.textAt(assetID, time: time)
     }
 
+    public func similarAssets(to assetID: AssetID, limit: Int = 20) async throws -> [SearchHit] {
+        try await searchEngine.similar(to: assetID, limit: limit)
+    }
+
     public func embeddingModelStatus() async -> EmbeddingIndexStatus {
         await searchEngine.embeddingModelStatus()
     }

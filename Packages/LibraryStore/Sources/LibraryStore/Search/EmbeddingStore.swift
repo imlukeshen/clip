@@ -141,6 +141,29 @@ extension LibraryStore {
         }
     }
 
+    public func embeddings(for assetID: AssetID, model: String) async throws
+        -> [EmbeddingRecord]
+    {
+        do {
+            return try await database.read { db in
+                try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT asset_id, chunk_index, kind,
+                               start_value, start_scale, end_value, end_scale,
+                               text, vector, dims, model
+                        FROM embedding
+                        WHERE asset_id = ? AND model = ?
+                        ORDER BY chunk_index, kind
+                        """,
+                    arguments: [assetID.rawValue, model]
+                ).compactMap(Self.decodeEmbedding)
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("read asset embeddings")
+        }
+    }
+
     private nonisolated static func encodeVector(_ vector: [Float]) -> Data {
         var data = Data(capacity: vector.count * MemoryLayout<UInt32>.size)
         for value in vector {

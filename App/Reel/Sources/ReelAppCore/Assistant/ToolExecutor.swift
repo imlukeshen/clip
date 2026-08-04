@@ -3,15 +3,25 @@ import CoreModel
 import Foundation
 import LibraryStore
 import MediaEngine
+import SearchEngine
 
 /// Immutable App-layer state used to resolve one assistant turn.
 public struct ToolExecutionContext: Sendable {
+    public typealias LibrarySearcher = @Sendable (SearchQuery) async throws -> SearchResponse
+    public typealias AssetSearcher = @Sendable (AssetID, String) async throws -> [SearchMoment]
+    public typealias TextReader = @Sendable (AssetID, RationalTime) async throws -> [OCRSpan]
+    public typealias SimilarSearcher = @Sendable (AssetID, Int) async throws -> [SearchHit]
+
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
     public var eventTracks: [AssetID: EventTrack]
     public var selectedItemIDs: Set<ItemID>
     public var playhead: RationalTime
     public var resolving: @Sendable (AssetID) async throws -> URL
+    public var searching: LibrarySearcher
+    public var searchingWithin: AssetSearcher
+    public var readingText: TextReader
+    public var searchingSimilar: SimilarSearcher
 
     public init(
         document: ProjectDocument,
@@ -19,7 +29,19 @@ public struct ToolExecutionContext: Sendable {
         eventTracks: [AssetID: EventTrack],
         selectedItemIDs: Set<ItemID> = [],
         playhead: RationalTime = .zero,
-        resolving: @escaping @Sendable (AssetID) async throws -> URL
+        resolving: @escaping @Sendable (AssetID) async throws -> URL,
+        searching: @escaping LibrarySearcher = { _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        searchingWithin: @escaping AssetSearcher = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        readingText: @escaping TextReader = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        searchingSimilar: @escaping SimilarSearcher = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        }
     ) {
         self.document = document
         self.assets = assets
@@ -27,6 +49,10 @@ public struct ToolExecutionContext: Sendable {
         self.selectedItemIDs = selectedItemIDs
         self.playhead = playhead
         self.resolving = resolving
+        self.searching = searching
+        self.searchingWithin = searchingWithin
+        self.readingText = readingText
+        self.searchingSimilar = searchingSimilar
     }
 }
 
@@ -72,6 +98,46 @@ public struct ToolExecutor: Sendable {
         let patch: GraphPatch?
         let message: String
         switch invocation.name {
+        case "search.library":
+            let arguments = try invocation.arguments.decode(SearchLibraryArguments.self)
+            let filters = try searchFilters(arguments)
+            let mode = try searchMode(arguments.mode)
+            let response = try await context.searching(
+                SearchQuery(
+                    text: arguments.text,
+                    filters: filters,
+                    mode: mode,
+                    limit: arguments.limit ?? 20
+                )
+            )
+            patch = nil
+            message =
+                searchResults(response.hits, context: context)
+                + (response.isComplete
+                    ? "\nIndex status: complete." : "\nIndex status: still indexing.")
+        case "search.withinAsset":
+            let arguments = try invocation.arguments.decode(SearchWithinArguments.self)
+            let assetID = AssetID(rawValue: arguments.assetID)
+            let moments = try await context.searchingWithin(assetID, arguments.text)
+            patch = nil
+            message = momentResults(moments, assetID: assetID, context: context)
+        case "search.textAt":
+            let arguments = try invocation.arguments.decode(SearchTextAtArguments.self)
+            let assetID = AssetID(rawValue: arguments.assetID)
+            let spans = try await context.readingText(
+                assetID,
+                RationalTime(seconds: arguments.time)
+            )
+            patch = nil
+            message = textResults(spans, assetID: assetID, time: arguments.time)
+        case "search.similar":
+            let arguments = try invocation.arguments.decode(SearchSimilarArguments.self)
+            let hits = try await context.searchingSimilar(
+                AssetID(rawValue: arguments.assetID),
+                arguments.limit ?? 10
+            )
+            patch = nil
+            message = searchResults(hits, context: context)
         case "listCommands":
             let arguments = try invocation.arguments.decode(ListCommandsArguments.self)
             let category = arguments.category.flatMap(CommandCategory.init(rawValue:))
@@ -535,6 +601,7 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     case silenceDetectionUnavailable
     case clipHasNoAudio(ItemID)
     case remoteCaptioningRequiresConsent
+    case searchUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -547,6 +614,7 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
         case .silenceDetectionUnavailable: return "Silence detection is unavailable."
         case .clipHasNoAudio: return "This clip has no audio."
         case .remoteCaptioningRequiresConsent: return "Remote captioning requires explicit consent."
+        case .searchUnavailable: return "Library search is unavailable."
         }
     }
 }
@@ -660,6 +728,30 @@ private struct RunCommandArguments: Codable {
     var id: String
     var arguments: JSONValue?
 }
+private struct SearchLibraryArguments: Codable {
+    var text: String
+    var kind: String?
+    var after: String?
+    var before: String?
+    var folder: String?
+    var minimumDuration: Double?
+    var maximumDuration: Double?
+    var hasAudio: Bool?
+    var mode: String?
+    var limit: Int?
+}
+private struct SearchWithinArguments: Codable {
+    var assetID: String
+    var text: String
+}
+private struct SearchTextAtArguments: Codable {
+    var assetID: String
+    var time: Double
+}
+private struct SearchSimilarArguments: Codable {
+    var assetID: String
+    var limit: Int?
+}
 
 private func assistant(_ patch: GraphPatch, turnID: String) -> GraphPatch {
     GraphPatch(
@@ -729,4 +821,130 @@ private func transform(from fields: [String: JSONValue]) throws -> Transform2D {
 extension JSONValue {
     fileprivate var text: String? { if case .string(let value) = self { value } else { nil } }
     fileprivate var number: Double? { if case .number(let value) = self { value } else { nil } }
+}
+
+private func searchFilters(_ arguments: SearchLibraryArguments) throws -> SearchFilters {
+    let kind: AssetKind?
+    if let rawKind = arguments.kind {
+        guard let value = AssetKind(rawValue: rawKind.lowercased()) else {
+            throw ToolExecutorError.invalidArguments("Unknown asset kind \(rawKind)")
+        }
+        kind = value
+    } else {
+        kind = nil
+    }
+    return SearchFilters(
+        kind: kind,
+        after: try arguments.after.map { try searchDate($0, endOfDay: false) },
+        before: try arguments.before.map { try searchDate($0, endOfDay: true) },
+        folder: arguments.folder,
+        minimumDuration: arguments.minimumDuration.map(RationalTime.init(seconds:)),
+        maximumDuration: arguments.maximumDuration.map(RationalTime.init(seconds:)),
+        hasAudio: arguments.hasAudio
+    )
+}
+
+private func searchMode(_ value: String?) throws -> SearchMode {
+    guard let value else { return .auto }
+    guard let mode = SearchMode(rawValue: value.lowercased()) else {
+        throw ToolExecutorError.invalidArguments("Search mode must be auto, keyword, or semantic")
+    }
+    return mode
+}
+
+private func searchDate(_ value: String, endOfDay: Bool) throws -> Date {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd"
+    guard let date = formatter.date(from: value) else {
+        throw ToolExecutorError.invalidArguments("Dates must use YYYY-MM-DD")
+    }
+    return endOfDay ? date.addingTimeInterval(86_400 - 0.001) : date
+}
+
+private func searchResults(_ hits: [SearchHit], context: ToolExecutionContext) -> String {
+    guard !hits.isEmpty else { return "No matching assets." }
+    let rows = hits.prefix(12).enumerated().map { index, hit in
+        let itemIDs = timelineItemIDs(for: hit.assetID, context: context)
+        let score = String(format: "%.4f", hit.score)
+        let moment =
+            hit.moments.first.map {
+                " sourceAt=\(searchSeconds($0.start))s source=\($0.source.rawValue) timelineTargets=\(timelineTargets(for: hit.assetID, sourceTime: $0.start, context: context))"
+            } ?? ""
+        return
+            "\(index + 1). assetID=\(hit.assetID.rawValue) itemIDs=\(itemIDs) score=\(score)\(moment) text=\(quoted(hit.snippet))"
+    }
+    let suffix = hits.count == 1 ? "" : "s"
+    return "\(hits.count) matching asset\(suffix):\n" + rows.joined(separator: "\n")
+}
+
+private func momentResults(
+    _ moments: [SearchMoment],
+    assetID: AssetID,
+    context: ToolExecutionContext
+) -> String {
+    guard !moments.isEmpty else { return "No matching moments in assetID=\(assetID.rawValue)." }
+    let itemIDs = timelineItemIDs(for: assetID, context: context)
+    let rows = moments.prefix(20).enumerated().map { index, moment in
+        let end = moment.end.map { " end=\(searchSeconds($0))s" } ?? ""
+        let targets = timelineTargets(for: assetID, sourceTime: moment.start, context: context)
+        return
+            "\(index + 1). sourceAt=\(searchSeconds(moment.start))s\(end) timelineTargets=\(targets) source=\(moment.source.rawValue) text=\(quoted(moment.snippet))"
+    }
+    return "\(moments.count) moments for assetID=\(assetID.rawValue) itemIDs=\(itemIDs):\n"
+        + rows.joined(separator: "\n")
+}
+
+private func textResults(_ spans: [OCRSpan], assetID: AssetID, time: Double) -> String {
+    let formattedTime = String(format: "%.3f", time)
+    guard !spans.isEmpty else {
+        return "No OCR text near source time \(formattedTime)s in assetID=\(assetID.rawValue)."
+    }
+    let rows = spans.prefix(40).enumerated().map { index, span in
+        let box = span.boundingBox
+        return
+            "\(index + 1). text=\(quoted(span.text)) box=(x:\(box.x), y:\(box.y), width:\(box.width), height:\(box.height))"
+    }
+    return "OCR at source time \(formattedTime)s in assetID=\(assetID.rawValue):\n"
+        + rows.joined(separator: "\n")
+}
+
+private func timelineItemIDs(for assetID: AssetID, context: ToolExecutionContext) -> String {
+    let ids = context.document.timeline.videoTracks.flatMap(\.items)
+        .filter { $0.assetID == assetID }
+        .map { $0.id.rawValue }
+    return ids.isEmpty ? "[]" : "[\(ids.joined(separator: ","))]"
+}
+
+private func timelineTargets(
+    for assetID: AssetID,
+    sourceTime: RationalTime,
+    context: ToolExecutionContext
+) -> String {
+    let targets = context.document.timeline.videoTracks.flatMap(\.items).compactMap {
+        item -> String? in
+        guard item.assetID == assetID,
+            sourceTime >= item.sourceRange.start,
+            sourceTime <= item.sourceRange.end
+        else { return nil }
+        let offset = (sourceTime - item.sourceRange.start).scaled(by: 1 / item.speed)
+        return "itemID=\(item.id.rawValue) splitAt=\(searchSeconds(item.timelineStart + offset))s"
+    }
+    return targets.isEmpty ? "[]" : "[\(targets.joined(separator: ";"))]"
+}
+
+private func searchSeconds(_ time: RationalTime) -> String {
+    String(format: "%.3f", time.seconds)
+}
+
+private func quoted(_ value: AttributedString) -> String {
+    quoted(String(value.characters))
+}
+
+private func quoted(_ value: String) -> String {
+    let compact = value.replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(String(compact.prefix(320)))\""
 }

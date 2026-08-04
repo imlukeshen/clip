@@ -179,6 +179,57 @@ public actor SearchEngine {
         try await store.ocrSpans(for: assetID, at: time)
     }
 
+    /// Returns the closest other assets using the indexed semantic chunks for
+    /// `assetID` as the query. Results retain their best timestamped moments.
+    public func similar(to assetID: AssetID, limit: Int = 20) async throws -> [SearchHit] {
+        let resultLimit = min(max(limit, 1), 100)
+        let assets = try await store.assets(kind: nil, limit: Int.max, offset: 0)
+        let allowed = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+        let matches = try await semanticIndex.matches(
+            similarTo: assetID,
+            limit: min(max(resultLimit * 20, 200), 2_000)
+        )
+        var buckets: [AssetID: HitBucket] = [:]
+        for match in matches where match.assetID != assetID {
+            guard allowed[match.assetID] != nil else { continue }
+            var bucket = buckets[match.assetID] ?? HitBucket()
+            bucket.score = max(bucket.score, Double(match.score))
+            bucket.sources.insert(match.kind)
+            if let start = match.start {
+                let moment = SearchMoment(
+                    assetID: match.assetID,
+                    start: start,
+                    end: match.end,
+                    snippet: AttributedString(match.text),
+                    source: match.kind
+                )
+                if bucket.moments.count < 5,
+                    !bucket.moments.contains(where: { $0.id == moment.id })
+                {
+                    bucket.moments.append(moment)
+                }
+            }
+            if bucket.snippet == nil { bucket.snippet = AttributedString(match.text) }
+            buckets[match.assetID] = bucket
+        }
+        return buckets.compactMap { id, bucket in
+            guard let asset = allowed[id] else { return nil }
+            return SearchHit(
+                assetID: id,
+                score: bucket.score,
+                moments: bucket.moments.sorted { $0.start < $1.start },
+                snippet: bucket.snippet ?? AttributedString(asset.displayName),
+                sources: bucket.sources,
+                isUnavailable: asset.isMissing
+            )
+        }
+        .sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.assetID.rawValue < $1.assetID.rawValue
+        }
+        .prefix(resultLimit).map { $0 }
+    }
+
     public func embeddingModelStatus() async -> EmbeddingIndexStatus {
         await semanticIndex.modelStatus()
     }
