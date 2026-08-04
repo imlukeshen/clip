@@ -124,10 +124,16 @@ public struct AssistantTurnRunner: Sendable {
             }
 
             guard !roundInvocations.isEmpty, !reachedToolLimit else { break }
+            let canContinueTextRepair = roundInvocations.allSatisfy { invocation in
+                ["tex.compile", "tex.diagnostics", "text.format"].contains(invocation.name)
+            }
             let containsWrite = roundInvocations.contains { invocation in
                 ToolCatalog.schema(named: invocation.name)?.kind != .read
             }
-            guard !containsWrite, round + 1 < Self.maximumReadRounds else { break }
+            let awaitsConfirmation = roundResults.contains(where: \.requiresConfirmation)
+            guard !containsWrite || canContinueTextRepair, !awaitsConfirmation,
+                round + 1 < Self.maximumReadRounds
+            else { break }
 
             let called = roundInvocations.map(\.name).joined(separator: ", ")
             messages.append(
@@ -179,5 +185,9 @@ public struct AssistantTurnRunner: Sendable {
         For conversion requests, discover or use asset IDs, call convert.listTargets when the target
         is uncertain, call convert.plan to report quality and size tradeoffs, and only then call
         convert.run. Ask before actions represented by confirm tools.
+        In a text workspace, use tex.compile before tex.diagnostics. To repair LaTeX, read the
+        structured diagnostics and source context, apply the smallest non-overlapping line edits
+        with text.format, then compile again to verify. Never invent source that diagnostics did not
+        expose. Use text.export only after the user approves the destination write.
         """
 }

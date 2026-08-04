@@ -272,6 +272,7 @@ public actor SearchEngine {
 
     private func sourceWeight(_ source: SearchHitSource) -> Double {
         switch source {
+        case .text: 1.6
         case .ocr: 1.35
         case .transcript: 1.25
         case .filename: 1

@@ -6,26 +6,47 @@ import TextEngine
 
 struct TextInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: TextEditorViewModel
+    @State private var panel = Panel.inspector
+
+    private enum Panel: String, CaseIterable, Identifiable {
+        case inspector = "Inspector"
+        case chat = "Chat"
+
+        var id: Self { self }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Picker("Panel", selection: $panel) {
+                ForEach(Panel.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(12)
+            Divider().overlay(theme.palette.line)
+
+            if panel == .inspector {
+                inspector
+            } else {
+                chat
+            }
+        }
+        .accessibilityIdentifier("text-inspector")
+    }
+
+    private var inspector: some View {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: theme.metrics.spacing.sm) {
-                Text("Inspector")
+                Text("Text")
                     .font(theme.type.title.font)
                 Spacer()
-                Label("Text", systemImage: "textformat")
-                    .font(theme.type.caption.font)
+                Image(systemName: "textformat")
                     .foregroundStyle(theme.palette.textSecondary)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(theme.palette.surfaceRaised)
-                    .clipShape(Capsule())
-                    .fixedSize()
             }
             .padding(.horizontal, theme.metrics.spacing.lg)
-            .frame(height: 48)
-            Divider().overlay(theme.palette.line)
+            .frame(height: 44)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xxl) {
@@ -39,7 +60,75 @@ struct TextInspector: View {
             }
             .scrollIndicators(.visible)
         }
-        .accessibilityIdentifier("text-inspector")
+    }
+
+    private var chat: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if model.assistantMessages.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text("Text context")
+                                    .font(theme.type.label.font)
+                                Text(
+                                    "Ask Clip to inspect LaTeX errors, format source, search the library, or prepare an export."
+                                )
+                                .font(theme.type.caption.font)
+                                .foregroundStyle(theme.palette.textTertiary)
+                            }
+                        }
+                        ForEach(model.assistantMessages) { message in
+                            TextAssistantBubble(message: message)
+                                .id(message.id)
+                        }
+                        ForEach(model.pendingAssistantActions) { action in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(action.result.message)
+                                    .font(theme.type.caption.font)
+                                HStack {
+                                    Button("Apply") { model.approveAssistantAction(action.id) }
+                                    Button("Skip") { model.rejectAssistantAction(action.id) }
+                                }
+                            }
+                            .padding(10)
+                            .background(theme.palette.surfaceRaised)
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: theme.metrics.radius.control,
+                                    style: .continuous
+                                )
+                            )
+                        }
+                        if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                    }
+                    .padding(12)
+                }
+                .onChange(of: model.assistantMessages.count) {
+                    if let id = model.assistantMessages.last?.id {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            Divider().overlay(theme.palette.line)
+            HStack(alignment: .bottom, spacing: 7) {
+                TextField("Ask Clip…", text: $model.assistantDraft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .onSubmit { model.sendAssistantMessage() }
+                Button(action: model.sendAssistantMessage) {
+                    Image(systemName: "arrow.up.circle.fill")
+                }
+                .buttonStyle(ReelPlainButtonStyle())
+                .foregroundStyle(theme.palette.accent)
+                .disabled(
+                    model.assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.isAssistantWorking
+                )
+            }
+            .padding(10)
+            .background(theme.palette.surfaceRaised)
+        }
     }
 
     private var documentSection: some View {
@@ -415,6 +504,32 @@ struct TextInspector: View {
 
     private var languageChoices: [LanguageID] {
         [.plainText] + LanguageID.treeSitterGrammars
+    }
+}
+
+private struct TextAssistantBubble: View {
+    @Environment(\.theme) private var theme
+    let message: AssistantMessage
+
+    var body: some View {
+        Text(message.text)
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textPrimary)
+            .textSelection(.enabled)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+            )
+    }
+
+    private var background: Color {
+        switch message.role {
+        case .user: theme.palette.accentDim
+        case .assistant: theme.palette.surfaceRaised
+        case .status: theme.palette.surfaceRaised.opacity(0.6)
+        }
     }
 }
 

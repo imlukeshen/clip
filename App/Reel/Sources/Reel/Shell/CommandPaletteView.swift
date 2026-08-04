@@ -82,6 +82,7 @@ struct CommandPaletteView: View {
         case .timeline: "timeline.selection"
         case .image: "photo.badge.wand.fill"
         case .pdf: "doc.richtext"
+        case .text: "curlybraces"
         case .file: "doc"
         case .view: "rectangle.3.group"
         case .app: "command"

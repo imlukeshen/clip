@@ -9,7 +9,7 @@ public struct CommandID: RawRepresentable, Codable, Sendable, Hashable, Expressi
 }
 
 public enum CommandCategory: String, Codable, Sendable, CaseIterable {
-    case asset, clip, effect, audio, timeline, image, pdf, file, view, app
+    case asset, clip, effect, audio, timeline, image, pdf, text, file, view, app
 }
 
 public enum AgentExposure: String, Codable, Sendable {
@@ -177,6 +177,55 @@ public enum CommandRegistry {
                 "stripMetadata": boolean, "destination": string,
                 "filenameTemplate": string, "conflictPolicy": string,
             ]),
+        command(
+            "text.create", "Create Text Buffer", .text,
+            description:
+                "Create and open a persistent scratch text buffer, optionally with initial content, a safe filename, and an explicit language.",
+            exposure: .always,
+            properties: ["name": string, "language": string, "contents": string]),
+        command(
+            "text.setLanguage", "Set Text Language", .text,
+            description:
+                "Set the explicit syntax language for the active text file. Use a LanguageID such as markdown, latex, swift, json, or plainText.",
+            exposure: .always,
+            required: ["language"],
+            properties: ["language": string]),
+        command(
+            "text.format", "Format Text", .text,
+            description:
+                "Apply deterministic edits to the active text file. Supply complete contents or non-overlapping one-based inclusive line edits; optional cleanup trims trailing whitespace or normalizes line endings.",
+            exposure: .always,
+            properties: [
+                "file": string,
+                "contents": string,
+                "edits": array(
+                    typedObject(
+                        ["startLine": number, "endLine": number, "replacement": string],
+                        required: ["startLine", "endLine", "replacement"]
+                    )
+                ),
+                "trimTrailingWhitespace": boolean,
+                "lineEnding": string,
+            ]),
+        command(
+            "tex.compile", "Compile LaTeX", .text,
+            description:
+                "Compile the active LaTeX project in Clip's confined TeX workspace and wait for success or diagnostics.",
+            exposure: .always),
+        command(
+            "tex.diagnostics", "Read LaTeX Diagnostics", .text,
+            description:
+                "Read structured diagnostics and bounded source context from the most recent LaTeX compile.",
+            kind: .read,
+            exposure: .always),
+        command(
+            "text.export", "Export Text", .text,
+            description:
+                "Write the active file as a self-contained syntax-colored HTML, RTF, or plain-text file. destination must be an absolute file path.",
+            kind: .confirm,
+            exposure: .always,
+            required: ["format", "destination"],
+            properties: ["format": string, "destination": string]),
         command(
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,

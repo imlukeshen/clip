@@ -181,6 +181,7 @@ struct SearchResultsView: View {
     private func sourceDescription(_ sources: Set<SearchHitSource>) -> String {
         sources.sorted(by: { $0.rawValue < $1.rawValue }).map { source in
             switch source {
+            case .text: "Document text"
             case .ocr: "On-screen text"
             case .transcript: "Spoken words"
             case .filename: "Filename"

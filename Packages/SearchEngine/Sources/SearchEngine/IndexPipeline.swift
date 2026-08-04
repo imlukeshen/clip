@@ -213,6 +213,25 @@ public actor IndexPipeline {
         }
     }
 
+    /// Replaces selected stages for one changed asset without racing the active worker.
+    public func reindex(_ assetID: AssetID, stages: Set<IndexStage>) async {
+        guard !stages.isEmpty else { return }
+        if currentJob?.assetID == assetID {
+            workerTask?.cancel()
+            _ = await workerTask?.value
+            workerTask = nil
+            currentJob = nil
+            try? await store.resetInterruptedIndexJobs()
+        }
+        do {
+            try await store.rebuildIndexJobs(scope: .assets([assetID]), stages: stages)
+            await publishProgress()
+            startWorkerIfNeeded()
+        } catch {
+            await publishProgress()
+        }
+    }
+
     /// Pauses immediately for foreground media work and resumes from the same durable job.
     public func setPauseReasons(_ reasons: Set<IndexPauseReason>) async {
         guard reasons != manualPauseReasons else { return }

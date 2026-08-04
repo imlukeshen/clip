@@ -3,6 +3,7 @@ import Foundation
 /// A durable stage in Clip's local media index.
 public enum IndexStage: String, Codable, Sendable, CaseIterable, Hashable {
     case metadata
+    case text
     case ocr
     case transcript
     case embedding
@@ -12,10 +13,11 @@ public enum IndexStage: String, Codable, Sendable, CaseIterable, Hashable {
     public var order: Int {
         switch self {
         case .metadata: 0
-        case .ocr: 1
-        case .transcript: 2
-        case .embedding: 3
-        case .summary: 4
+        case .text: 1
+        case .ocr: 2
+        case .transcript: 3
+        case .embedding: 4
+        case .summary: 5
         }
     }
 }
@@ -133,6 +135,7 @@ public struct TranscriptSpan: Codable, Sendable, Equatable, Identifiable {
 
 /// Exact-text source returned by the durable keyword index.
 public enum SearchHitSource: String, Codable, Sendable, Equatable, Hashable {
+    case text
     case ocr
     case transcript
     case summary

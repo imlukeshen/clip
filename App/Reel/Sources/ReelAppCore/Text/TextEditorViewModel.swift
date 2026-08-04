@@ -15,6 +15,26 @@ public enum TeXCompilationState: Sendable, Equatable {
     case failed(String)
 }
 
+public enum TextEditorCommandError: Error, Sendable, Equatable, LocalizedError {
+    case fileNotFound(String)
+    case invalidLineRange(Int, Int)
+    case overlappingLineEdits
+    case unsupportedLineEnding(String)
+    case noFormattingRequested
+
+    public var errorDescription: String? {
+        switch self {
+        case .fileNotFound(let file): return "The text project has no file named \(file)."
+        case .invalidLineRange(let start, let end):
+            return "The line range \(start)–\(end) is outside the active file."
+        case .overlappingLineEdits: return "Text line edits must not overlap."
+        case .unsupportedLineEnding(let value):
+            return "Line ending must be lf, crlf, or cr; received \(value)."
+        case .noFormattingRequested: return "No text formatting change was requested."
+        }
+    }
+}
+
 /// Drives one open text or code document.
 ///
 /// This view model is deliberately split from the patch-graph editors. Its
@@ -330,6 +350,105 @@ public final class TextEditorViewModel {
 
     /// Shows a short result from an editor-adjacent action such as copy or export.
     public func reportNotice(_ message: String) { notice = message }
+
+    /// Applies an assistant or command edit through the editor's shared undo manager.
+    @discardableResult
+    public func applyToolFormat(_ request: TextToolFormatRequest) throws -> Int {
+        if let file = request.file {
+            guard let target = projectFile(matching: file) else {
+                throw TextEditorCommandError.fileNotFound(file)
+            }
+            selectFile(target.id)
+        }
+        var updated = request.contents ?? text
+        let edits = request.edits.sorted {
+            if $0.startLine != $1.startLine { return $0.startLine > $1.startLine }
+            return $0.endLine > $1.endLine
+        }
+        var priorStart = Int.max
+        for edit in edits {
+            guard edit.startLine >= 1, edit.endLine >= edit.startLine,
+                let range = Self.lineRange(
+                    from: edit.startLine,
+                    through: edit.endLine,
+                    in: updated
+                )
+            else {
+                throw TextEditorCommandError.invalidLineRange(edit.startLine, edit.endLine)
+            }
+            guard edit.endLine < priorStart else {
+                throw TextEditorCommandError.overlappingLineEdits
+            }
+            updated = (updated as NSString).replacingCharacters(
+                in: range,
+                with: edit.replacement
+            )
+            priorStart = edit.startLine
+        }
+        if request.trimsTrailingWhitespace {
+            updated = TextEditingOperations.trimmingTrailingWhitespace(in: updated)
+        }
+        if let rawEnding = request.lineEnding {
+            guard let ending = LineEnding(rawValue: rawEnding.lowercased()), ending != .mixed else {
+                throw TextEditorCommandError.unsupportedLineEnding(rawEnding)
+            }
+            updated = TextEditingOperations.normalizingLineEndings(in: updated, to: ending)
+        }
+        guard
+            request.contents != nil || !edits.isEmpty || request.trimsTrailingWhitespace
+                || request.lineEnding != nil
+        else {
+            throw TextEditorCommandError.noFormattingRequested
+        }
+        guard updated != text else { return 0 }
+        replaceContentsForCommand(updated, actionName: "Format Text")
+        notice = "Updated \(activeFile?.relativePath ?? "the active file")."
+        return max(edits.count, 1)
+    }
+
+    /// Compiles and waits so an assistant can immediately consume structured diagnostics.
+    public func compileForTool() async -> TeXCompilationState {
+        requestTeXCompile()
+        if needsTeXPackageConsent {
+            return .paused("Choose cached-only or network package access in the editor first.")
+        }
+        let task = texCompileTask
+        _ = await task?.value
+        return texCompilationState
+    }
+
+    /// Returns structured diagnostics with bounded, line-numbered source context.
+    public func toolDiagnosticReport(maximumSourceLines: Int = 240) -> String {
+        var rows: [String] = []
+        if texDiagnostics.isEmpty {
+            rows.append("No structured LaTeX diagnostics are available.")
+        } else {
+            rows.append("LaTeX diagnostics (\(texDiagnostics.count)):")
+            rows += texDiagnostics.map { diagnostic in
+                let file = diagnostic.file ?? mainFile?.relativePath ?? "unknown"
+                let line = diagnostic.line.map(String.init) ?? "?"
+                return "\(file):\(line): \(diagnostic.severity.rawValue): \(diagnostic.message)"
+            }
+        }
+        let relevantFiles = Set(
+            texDiagnostics.compactMap(\.file)
+                + [activeFile?.relativePath, mainFile?.relativePath].compactMap { $0 }
+        )
+        var remaining = max(maximumSourceLines, 0)
+        for file in document.files where relevantFiles.contains(file.relativePath) && remaining > 0
+        {
+            guard let source = textBuffers[file.id] else { continue }
+            let lines = source.components(separatedBy: .newlines)
+            let selected = lines.prefix(remaining)
+            rows.append("Source \(file.relativePath):")
+            rows += selected.enumerated().map { offset, line in "\(offset + 1) │ \(line)" }
+            if selected.count < lines.count {
+                rows.append("… \(lines.count - selected.count) lines omitted")
+            }
+            remaining -= selected.count
+        }
+        return rows.joined(separator: "\n")
+    }
 
     /// Supplies the engine selected by the app's distribution channel.
     public func configureTeXEngine(_ engine: any TeXEngine) {
@@ -903,6 +1022,48 @@ public final class TextEditorViewModel {
                 target.notice = "That change could not be undone."
             }
         }
+    }
+
+    private func replaceContentsForCommand(_ value: String, actionName: String) {
+        let previous = text
+        undoManager.registerUndo(withTarget: self) { target in
+            target.replaceContentsForCommand(previous, actionName: actionName)
+        }
+        undoManager.setActionName(actionName)
+        text = value
+    }
+
+    private static func lineRange(
+        from startLine: Int,
+        through endLine: Int,
+        in text: String
+    ) -> NSRange? {
+        let source = text as NSString
+        var currentLine = 1
+        var location = 0
+        while currentLine < startLine, location < source.length {
+            var end = 0
+            source.getLineStart(
+                nil, end: &end, contentsEnd: nil, for: NSRange(location: location, length: 0))
+            location = end
+            currentLine += 1
+        }
+        guard currentLine == startLine, location <= source.length else { return nil }
+        let start = location
+        while currentLine <= endLine, location < source.length {
+            var end = 0
+            source.getLineStart(
+                nil, end: &end, contentsEnd: nil, for: NSRange(location: location, length: 0))
+            location = end
+            currentLine += 1
+        }
+        guard currentLine > endLine else {
+            if start == source.length, startLine == endLine {
+                return NSRange(location: start, length: 0)
+            }
+            return nil
+        }
+        return NSRange(location: start, length: location - start)
     }
 
     private func rebuildTeXProjectAnalysis() {

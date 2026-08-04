@@ -62,10 +62,11 @@ extension LibraryStore {
                             ORDER BY
                               CASE stage
                                 WHEN 'metadata' THEN 0
-                                WHEN 'ocr' THEN 1
-                                WHEN 'transcript' THEN 2
-                                WHEN 'embedding' THEN 3
-                                ELSE 4
+                                WHEN 'text' THEN 1
+                                WHEN 'ocr' THEN 2
+                                WHEN 'transcript' THEN 3
+                                WHEN 'embedding' THEN 4
+                                ELSE 5
                               END,
                               updated_at ASC,
                               asset_id ASC

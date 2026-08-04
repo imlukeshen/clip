@@ -518,6 +518,26 @@ public final class AppModel {
             isCommandPalettePresented = false
             return
         }
+        if CommandRegistry.command(id: id)?.category == .text {
+            switch id.rawValue {
+            case "text.create":
+                createScratchTextEditor()
+            case "tex.compile":
+                textEditor?.requestTeXCompile()
+            case "tex.diagnostics":
+                let count = textEditor?.texDiagnostics.count ?? 0
+                lastMessage =
+                    count == 0
+                    ? "No LaTeX diagnostics are available. Build the document first."
+                    : "\(count) LaTeX diagnostic\(count == 1 ? "" : "s") are shown below the editor."
+            default:
+                assistantDraft = "Run \(id.rawValue) for the active text file."
+                isInspectorVisible = true
+                lastMessage = "Command prepared in the Text inspector's Chat tab."
+            }
+            isCommandPalettePresented = false
+            return
+        }
         guard let editor else {
             lastMessage =
                 "Open a document to run \(CommandRegistry.command(id: id)?.title ?? id.rawValue)."
@@ -1242,13 +1262,15 @@ public final class AppModel {
 
     public func sendAssistantMessage() {
         let prompt = assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isAssistantWorking, let editor, let runtime else { return }
+        guard !prompt.isEmpty, !isAssistantWorking, let runtime,
+            let session = assistantSession(runtime: runtime)
+        else { return }
         assistantDraft = ""
         assistantMessages.append(AssistantMessage(role: .user, text: prompt))
         isAssistantWorking = true
         let turnID = UUID().uuidString.lowercased()
-        let digest = editor.assistantContextDigest()
-        let context = assistantToolContext(editor: editor, runtime: runtime)
+        let digest = session.digest
+        let context = session.context
         let settings = aiSettings
 
         Task {
@@ -1296,8 +1318,12 @@ public final class AppModel {
                             PendingAssistantAction(name: "assistant.turn", result: result)
                         )
                         responseParts.append("Review the complete edit plan before applying.")
-                    } else {
+                    } else if let editor {
                         try editor.perform(combinedPatch)
+                    } else {
+                        throw ToolExecutorError.invalidArguments(
+                            "A timeline edit was returned while the text editor was active"
+                        )
                     }
                 }
                 if responseParts.isEmpty {
@@ -1333,11 +1359,11 @@ public final class AppModel {
             }
             return
         }
-        guard let invocation = action.invocation, let editor, let runtime,
-            !isAssistantWorking
+        guard let invocation = action.invocation, let runtime,
+            let session = assistantSession(runtime: runtime), !isAssistantWorking
         else { return }
         isAssistantWorking = true
-        let context = assistantToolContext(editor: editor, runtime: runtime)
+        let context = session.context
         let policy = aiSettings.confirmationPolicy
         Task {
             defer { isAssistantWorking = false }
@@ -1368,6 +1394,48 @@ public final class AppModel {
         runtime: AppRuntime
     ) -> ToolExecutionContext {
         var context = editor.toolExecutionContext()
+        configureSharedAssistantServices(&context, runtime: runtime)
+        return context
+    }
+
+    private func assistantSession(
+        runtime: AppRuntime
+    ) -> (digest: ContextDigest, context: ToolExecutionContext)? {
+        if let editor {
+            return (
+                editor.assistantContextDigest(),
+                assistantToolContext(editor: editor, runtime: runtime)
+            )
+        }
+        guard let textEditor,
+            let emptyProject = try? ProjectDocument(
+                id: .generate(),
+                name: textEditor.activeFile?.relativePath ?? "Text document",
+                createdAt: .now,
+                modifiedAt: .now
+            )
+        else { return nil }
+        var context = ToolExecutionContext(
+            document: emptyProject,
+            assets: Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) }),
+            eventTracks: [:],
+            resolving: { assetID in try await runtime.url(for: assetID) }
+        )
+        configureSharedAssistantServices(&context, runtime: runtime)
+        let digest = ContextDigest(
+            projectName: textEditor.activeFile?.relativePath ?? "Text document",
+            duration: 0,
+            canvas: "text:\(textEditor.language.rawValue)",
+            selectedItemID: nil,
+            items: []
+        )
+        return (digest, context)
+    }
+
+    private func configureSharedAssistantServices(
+        _ context: inout ToolExecutionContext,
+        runtime: AppRuntime
+    ) {
         context.searching = { query in try await runtime.search(query) }
         context.searchingWithin = { assetID, text in
             try await runtime.searchWithin(assetID, text: text)
@@ -1393,16 +1461,201 @@ public final class AppModel {
                     ?? .failed("The conversion ended without a result")
             }
         }
-        return context
+        context.textCommand = { [weak self] request in
+            guard let self else { throw ToolExecutorError.textUnavailable }
+            return try await self.executeTextTool(request)
+        }
     }
 
     private func supportsAssistantConfirmation(_ invocation: ToolInvocation) -> Bool {
-        if invocation.name == "convert.run" { return true }
+        if invocation.name == "convert.run" || invocation.name == "text.export"
+            || invocation.name == "text.create" || invocation.name == "text.setLanguage"
+            || invocation.name == "text.format" || invocation.name == "tex.compile"
+        {
+            return true
+        }
         guard invocation.name == "runCommand",
             case .object(let fields) = invocation.arguments,
-            fields["id"] == .string("convert.run")
+            let idValue = fields["id"], case .string(let id) = idValue
         else { return false }
-        return true
+        return [
+            "convert.run", "text.export", "text.create", "text.setLanguage", "text.format",
+            "tex.compile",
+        ].contains(id)
+    }
+
+    private func executeTextTool(_ request: TextToolRequest) async throws -> String {
+        switch request {
+        case .create(let name, let rawLanguage, let contents):
+            guard editor == nil, imageEditor == nil, pdfEditor == nil, let runtime
+            else {
+                throw ToolExecutorError.invalidArguments(
+                    "Close the current editor before creating another text buffer"
+                )
+            }
+            if let textEditor {
+                guard !textEditor.hasExternalConflict,
+                    !textEditor.isDetached || textEditor.hasSavedDetachedCopy
+                else {
+                    throw ToolExecutorError.invalidArguments(
+                        "Resolve or save the active text file before creating another buffer"
+                    )
+                }
+                textEditor.stop()
+                self.textEditor = nil
+            }
+            guard Int64(contents.utf8.count) <= TextFileLoader.maximumByteSize else {
+                throw ToolExecutorError.invalidArguments("Initial text exceeds the 20 MB limit")
+            }
+            var buffer = try await runtime.createScratchTextBuffer()
+            var document = buffer.document
+            guard let fileID = document.files.first?.id else {
+                throw ToolExecutorError.textUnavailable
+            }
+            let safeName = try validatedTextFileName(name ?? "Untitled.txt")
+            _ = try document.apply(.renameFile(fileID, safeName))
+            let language =
+                rawLanguage.map(normalizedLanguage)
+                ?? LanguageDetector.detect(path: safeName, contents: contents)
+            _ = try document.apply(
+                .setLanguage(fileID, language, explicit: rawLanguage != nil)
+            )
+            try await runtime.saveScratchTextDocument(document)
+            try await runtime.saveScratchTextContents(Data(contents.utf8), for: document.id)
+            buffer = ScratchTextBuffer(
+                document: document,
+                contents: LoadedTextFile(
+                    text: contents,
+                    encoding: .utf8,
+                    lineEnding: TextFileLoader.lineEnding(in: contents)
+                )
+            )
+            openScratchTextEditor(buffer, runtime: runtime)
+            await refreshScratchBuffers()
+            return "Created \(safeName) as \(language.rawValue)."
+        case .setLanguage(let rawLanguage):
+            guard let textEditor else { throw ToolExecutorError.textUnavailable }
+            let language = normalizedLanguage(rawLanguage)
+            textEditor.setLanguage(language)
+            return
+                "Set \(textEditor.activeFile?.relativePath ?? "the active file") to \(language.rawValue)."
+        case .format(let request):
+            guard let textEditor else { throw ToolExecutorError.textUnavailable }
+            let changeCount = try textEditor.applyToolFormat(request)
+            return changeCount == 0
+                ? "The active text already matched the requested format."
+                : "Applied \(changeCount) text change\(changeCount == 1 ? "" : "s") with undo available."
+        case .compileTeX:
+            guard let textEditor, textEditor.language == .latex else {
+                throw ToolExecutorError.invalidArguments(
+                    "Open a LaTeX source file before compiling")
+            }
+            switch await textEditor.compileForTool() {
+            case .idle: return "LaTeX compile did not start."
+            case .compiling: return "LaTeX compile is still running."
+            case .succeeded:
+                return
+                    "LaTeX compiled successfully with \(textEditor.texDiagnostics.count) diagnostic\(textEditor.texDiagnostics.count == 1 ? "" : "s")."
+            case .paused(let reason): return "LaTeX compile paused: \(reason)"
+            case .failed(let reason):
+                return "LaTeX compile failed: \(reason)\nRun tex.diagnostics for structured errors."
+            }
+        case .diagnostics:
+            guard let textEditor, textEditor.language == .latex else {
+                throw ToolExecutorError.invalidArguments(
+                    "Open a LaTeX source file before reading diagnostics"
+                )
+            }
+            return textEditor.toolDiagnosticReport()
+        case .export(let rawFormat, let rawDestination):
+            guard let textEditor else { throw ToolExecutorError.textUnavailable }
+            guard rawDestination.hasPrefix("/") else {
+                throw ToolExecutorError.invalidArguments(
+                    "destination must be an absolute file path")
+            }
+            let url = URL(fileURLWithPath: rawDestination).standardizedFileURL
+            let data = try await exportedTextData(
+                format: rawFormat,
+                editor: textEditor
+            )
+            try await Task.detached(priority: .userInitiated) {
+                let parent = url.deletingLastPathComponent()
+                var isDirectory: ObjCBool = false
+                guard
+                    FileManager.default.fileExists(
+                        atPath: parent.path,
+                        isDirectory: &isDirectory
+                    ), isDirectory.boolValue
+                else {
+                    throw ToolExecutorError.invalidArguments(
+                        "The destination folder does not exist"
+                    )
+                }
+                try data.write(to: url, options: .atomic)
+            }.value
+            return "Exported \(url.lastPathComponent) to \(url.path)."
+        }
+    }
+
+    private func validatedTextFileName(_ value: String) throws -> String {
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != ".", name != "..", name.utf8.count <= 255,
+            !name.contains("/"), !name.contains(":"), !name.contains("\0")
+        else {
+            throw ToolExecutorError.invalidArguments(
+                "name must be a safe filename without path separators"
+            )
+        }
+        return name
+    }
+
+    private func normalizedLanguage(_ value: String) -> LanguageID {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["plain", "plaintext", "plain_text", "txt", "text"].contains(normalized) {
+            return .plainText
+        }
+        return LanguageID(rawValue: normalized)
+    }
+
+    private func exportedTextData(
+        format rawFormat: String,
+        editor: TextEditorViewModel
+    ) async throws -> Data {
+        let format = rawFormat.lowercased().filter(\.isLetter)
+        if ["text", "txt", "plaintext", "source"].contains(format) {
+            return Data(editor.text.utf8)
+        }
+        guard ["html", "rtf", "richtext"].contains(format) else {
+            throw ToolExecutorError.invalidArguments(
+                "format must be html, rtf, or plain text; use convert.run for PDF or DOCX"
+            )
+        }
+        let source = editor.text
+        let highlighted = await SyntaxHighlighter().highlights(
+            in: source,
+            language: editor.language,
+            visibleRange: NSRange(location: 0, length: (source as NSString).length)
+        )
+        let attributed = TextSnippetOperations.attributedString(
+            source: source,
+            tokens: highlighted.tokens
+        )
+        if format == "html" {
+            let html = TextSnippetOperations.standaloneHTML(
+                title: editor.activeFile?.relativePath ?? "Untitled",
+                attributedString: attributed
+            )
+            return Data(html.utf8)
+        }
+        guard
+            let data = TextSnippetOperations.richTextData(
+                from: attributed,
+                backgroundColor: .white
+            )
+        else {
+            throw ToolExecutorError.invalidArguments("The active file is empty")
+        }
+        return data
     }
 
     public func openEditor(for assetID: AssetID, initialTime: RationalTime? = nil) {

@@ -77,7 +77,7 @@ extension LibraryStore {
         }
     }
 
-    /// Runs escaped BM25 lookup over filenames, OCR, and on-device transcripts.
+    /// Runs escaped BM25 lookup over filenames, direct text, OCR, and transcripts.
     /// User input is always quoted here; callers cannot inject FTS5 operators.
     public func keywordMatches(
         terms: [String],
@@ -93,6 +93,16 @@ extension LibraryStore {
         do {
             return try await database.read { db in
                 var matches = try Self.filenameMatches(db, pattern: pattern, limit: limit)
+                matches += try Self.spanMatches(
+                    db,
+                    table: "text_span",
+                    ftsTable: "text_fts",
+                    source: .text,
+                    pattern: pattern,
+                    literal: queryText,
+                    script: script,
+                    limit: limit
+                )
                 matches += try Self.spanMatches(
                     db,
                     table: "ocr_span",
@@ -126,8 +136,8 @@ extension LibraryStore {
             return try await database.read { db in
                 let stages =
                     includeEmbeddings
-                    ? "'ocr', 'transcript', 'embedding'"
-                    : "'ocr', 'transcript'"
+                    ? "'text', 'ocr', 'transcript', 'embedding'"
+                    : "'text', 'ocr', 'transcript'"
                 let count =
                     try Int.fetchOne(
                         db,

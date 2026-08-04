@@ -531,6 +531,7 @@ public actor AppRuntime {
         contentHash: String
     ) async throws {
         _ = try await library.saveTextContents(data, for: assetID, contentHash: contentHash)
+        await indexPipeline.reindex(assetID, stages: [.text, .embedding])
     }
 
     /// Lists persisted scratch buffers without loading their full contents.
@@ -590,7 +591,8 @@ public actor AppRuntime {
         case .image: [.metadata, .ocr, .embedding]
         case .video: [.metadata, .ocr, .transcript, .embedding]
         case .audio: [.metadata, .transcript, .embedding]
-        case .document, .text: [.metadata, .embedding]
+        case .document: [.metadata, .embedding]
+        case .text: [.metadata, .text, .embedding]
         }
     }
 }

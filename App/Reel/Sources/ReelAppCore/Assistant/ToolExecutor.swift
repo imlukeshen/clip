@@ -6,6 +6,49 @@ import LibraryStore
 import MediaEngine
 import SearchEngine
 
+public struct TextToolLineEdit: Sendable, Equatable {
+    public var startLine: Int
+    public var endLine: Int
+    public var replacement: String
+
+    public init(startLine: Int, endLine: Int, replacement: String) {
+        self.startLine = startLine
+        self.endLine = endLine
+        self.replacement = replacement
+    }
+}
+
+public struct TextToolFormatRequest: Sendable, Equatable {
+    public var file: String?
+    public var contents: String?
+    public var edits: [TextToolLineEdit]
+    public var trimsTrailingWhitespace: Bool
+    public var lineEnding: String?
+
+    public init(
+        file: String? = nil,
+        contents: String? = nil,
+        edits: [TextToolLineEdit] = [],
+        trimsTrailingWhitespace: Bool = false,
+        lineEnding: String? = nil
+    ) {
+        self.file = file
+        self.contents = contents
+        self.edits = edits
+        self.trimsTrailingWhitespace = trimsTrailingWhitespace
+        self.lineEnding = lineEnding
+    }
+}
+
+public enum TextToolRequest: Sendable, Equatable {
+    case create(name: String?, language: String?, contents: String)
+    case setLanguage(String)
+    case format(TextToolFormatRequest)
+    case compileTeX
+    case diagnostics
+    case export(format: String, destination: String)
+}
+
 /// Immutable App-layer state used to resolve one assistant turn.
 public struct ToolExecutionContext: Sendable {
     public typealias LibrarySearcher = @Sendable (SearchQuery) async throws -> SearchResponse
@@ -14,6 +57,7 @@ public struct ToolExecutionContext: Sendable {
     public typealias SimilarSearcher = @Sendable (AssetID, Int) async throws -> [SearchHit]
     public typealias BatchConverter =
         @Sendable ([BatchConversionJob]) async throws -> [BatchItemOutcome]
+    public typealias TextCommander = @Sendable (TextToolRequest) async throws -> String
 
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
@@ -28,6 +72,7 @@ public struct ToolExecutionContext: Sendable {
     public var conversionDestination: URL?
     public var conversionCapabilities: ConversionCapabilities
     public var converting: BatchConverter
+    public var textCommand: TextCommander
 
     public init(
         document: ProjectDocument,
@@ -52,6 +97,9 @@ public struct ToolExecutionContext: Sendable {
         conversionCapabilities: ConversionCapabilities = .appStore,
         converting: @escaping BatchConverter = { _ in
             throw ToolExecutorError.conversionUnavailable
+        },
+        textCommand: @escaping TextCommander = { _ in
+            throw ToolExecutorError.textUnavailable
         }
     ) {
         self.document = document
@@ -67,6 +115,7 @@ public struct ToolExecutionContext: Sendable {
         self.conversionDestination = conversionDestination
         self.conversionCapabilities = conversionCapabilities
         self.converting = converting
+        self.textCommand = textCommand
     }
 }
 
@@ -102,12 +151,26 @@ public struct ToolExecutor: Sendable {
             throw ToolExecutorError.unknownTool(invocation.name)
         }
         let schema = command.schema
-        if schema.kind == .confirm && !confirmed {
+        let executesTextSideEffect = [
+            "text.create", "text.setLanguage", "text.format", "tex.compile", "text.export",
+        ].contains(invocation.name)
+        let needsUpfrontConfirmation =
+            schema.kind == .confirm
+            || (executesTextSideEffect
+                && policy.requiresConfirmation(
+                    for: schema.kind,
+                    isDestructive: command.isDestructive
+                ))
+        if needsUpfrontConfirmation && !confirmed {
             let detail =
                 invocation.name == "convert.run"
                 ? try conversionConfirmation(
                     invocation.arguments.decode(ConvertArguments.self), context: context)
-                : "\(invocation.name) requires your confirmation."
+                : invocation.name == "text.export"
+                    ? try textExportConfirmation(
+                        invocation.arguments.decode(TextExportArguments.self)
+                    )
+                    : "\(invocation.name) requires your confirmation."
             return ToolResult(
                 callID: invocation.callID,
                 message: detail,
@@ -118,6 +181,52 @@ public struct ToolExecutor: Sendable {
         let patch: GraphPatch?
         let message: String
         switch invocation.name {
+        case "text.create":
+            let arguments = try invocation.arguments.decode(TextCreateArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .create(
+                    name: arguments.name,
+                    language: arguments.language,
+                    contents: arguments.contents ?? ""
+                )
+            )
+        case "text.setLanguage":
+            let arguments = try invocation.arguments.decode(TextLanguageArguments.self)
+            patch = nil
+            message = try await context.textCommand(.setLanguage(arguments.language))
+        case "text.format":
+            let arguments = try invocation.arguments.decode(TextFormatArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .format(
+                    TextToolFormatRequest(
+                        file: arguments.file,
+                        contents: arguments.contents,
+                        edits: (arguments.edits ?? []).map {
+                            TextToolLineEdit(
+                                startLine: $0.startLine,
+                                endLine: $0.endLine,
+                                replacement: $0.replacement
+                            )
+                        },
+                        trimsTrailingWhitespace: arguments.trimTrailingWhitespace ?? false,
+                        lineEnding: arguments.lineEnding
+                    )
+                )
+            )
+        case "tex.compile":
+            patch = nil
+            message = try await context.textCommand(.compileTeX)
+        case "tex.diagnostics":
+            patch = nil
+            message = try await context.textCommand(.diagnostics)
+        case "text.export":
+            let arguments = try invocation.arguments.decode(TextExportArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .export(format: arguments.format, destination: arguments.destination)
+            )
         case "search.library":
             let arguments = try invocation.arguments.decode(SearchLibraryArguments.self)
             let filters = try searchFilters(arguments)
@@ -690,6 +799,7 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     case remoteCaptioningRequiresConsent
     case searchUnavailable
     case conversionUnavailable
+    case textUnavailable
     case conversionFailed(String)
 
     public var errorDescription: String? {
@@ -705,6 +815,7 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
         case .remoteCaptioningRequiresConsent: return "Remote captioning requires explicit consent."
         case .searchUnavailable: return "Library search is unavailable."
         case .conversionUnavailable: return "Conversion is unavailable in this workspace."
+        case .textUnavailable: return "Text commands are unavailable in this workspace."
         case .conversionFailed(let reason): return "Conversion failed: \(reason)."
         }
     }
@@ -857,6 +968,36 @@ private struct ConvertArguments: Codable {
     var destination: String?
     var filenameTemplate: String?
     var conflictPolicy: String?
+}
+private struct TextCreateArguments: Codable {
+    var name: String?
+    var language: String?
+    var contents: String?
+}
+private struct TextLanguageArguments: Codable { var language: String }
+private struct TextFormatArguments: Codable {
+    struct LineEdit: Codable {
+        var startLine: Int
+        var endLine: Int
+        var replacement: String
+    }
+
+    var file: String?
+    var contents: String?
+    var edits: [LineEdit]?
+    var trimTrailingWhitespace: Bool?
+    var lineEnding: String?
+}
+private struct TextExportArguments: Codable {
+    var format: String
+    var destination: String
+}
+
+private func textExportConfirmation(_ arguments: TextExportArguments) throws -> String {
+    guard arguments.destination.hasPrefix("/") else {
+        throw ToolExecutorError.invalidArguments("destination must be an absolute file path")
+    }
+    return "Confirm exporting the active text as \(arguments.format) to \(arguments.destination)."
 }
 
 private struct PreparedConversionJobs {

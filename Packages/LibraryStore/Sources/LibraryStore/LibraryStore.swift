@@ -257,13 +257,15 @@ public actor LibraryStore {
         try await setMissing(nil, for: record)
     }
 
-    /// Overwrites the on-disk bytes of an editable text asset and re-indexes it.
+    /// Overwrites the on-disk bytes of an editable text asset for subsequent re-indexing.
     ///
     /// This is the **only** sanctioned write into `Media/`. It exists because
     /// text assets are invariant I5's documented exception (ADR-0009): unlike
     /// video, image, and PDF assets — which stay frozen while edits accumulate in
     /// a `.reel/` overlay — an edited text file *is* the deliverable, so the file
-    /// on disk must reflect what the user typed for external tools and indexing.
+    /// on disk must reflect what the user typed for external tools and indexing. The
+    /// App-layer indexing coordinator requeues direct-text and embedding stages after
+    /// this atomic write completes.
     ///
     /// The caller supplies the freshly hashed content (using the same sampled
     /// SHA-256 as ingest) so `LibraryStore` need not depend on the hasher; this

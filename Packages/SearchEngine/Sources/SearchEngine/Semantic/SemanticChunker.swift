@@ -32,11 +32,15 @@ public enum SemanticChunker {
     public static func chunks(
         asset: AssetRecord,
         ocr: [OCRSpan],
-        transcripts: [TranscriptSpan]
+        transcripts: [TranscriptSpan],
+        text: [String] = []
     ) -> [SemanticChunk] {
         var drafts: [Draft] = [
             Draft(kind: .filename, bucket: -2, start: nil, end: nil, texts: [asset.displayName])
         ]
+        drafts += text.enumerated().map { index, value in
+            Draft(kind: .text, bucket: -1 + index, start: nil, end: nil, texts: [value])
+        }
         drafts += groupedOCR(ocr)
         drafts += groupedTranscripts(transcripts)
         drafts.sort {

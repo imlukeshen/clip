@@ -102,6 +102,49 @@ struct KeywordSearchTests {
         #expect(try await engine.search(SearchQuery(text: "請求")).hits.first?.assetID == asset.id)
     }
 
+    @Test("Markdown content is indexed directly and returned as the strongest source")
+    func directTextContent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-text-search-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await LibraryStore(
+            root: root,
+            bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+        )
+        let id = AssetID(rawValue: "release-notes")
+        let contents = "# Release notes\n\nThe polished command palette ships today.\n"
+        let url = LibraryLayout.inbox(in: root).appendingPathComponent("release-notes.md")
+        try Data(contents.utf8).write(to: url)
+        let asset = AssetRecord(
+            id: id,
+            relativePath: "Media/Inbox/release-notes.md",
+            displayName: "release-notes.md",
+            kind: .text,
+            container: "md",
+            createdAt: .now,
+            importedAt: .now,
+            byteSize: Int64(contents.utf8.count),
+            contentHash: "release-notes-hash",
+            ingestState: .ready
+        )
+        try await store.insert(asset)
+        let processor = LocalIndexStageProcessor(store: store)
+
+        #expect(try await processor.process(assetID: id, stage: .text) == .completed)
+        let response = try await SearchEngine(store: store).search(
+            SearchQuery(text: "\"polished command palette\"", mode: .keyword)
+        )
+
+        #expect(response.hits.first?.assetID == id)
+        #expect(response.hits.first?.sources == [.text])
+        #expect(
+            response.hits.first.map { String($0.snippet.characters).contains("ships today") }
+                == true
+        )
+    }
+
     @Test("Keyword retrieval stays under 150 ms over one thousand assets")
     func thousandAssetPerformance() async throws {
         let fixture = try await SearchFixture(count: 1_000)

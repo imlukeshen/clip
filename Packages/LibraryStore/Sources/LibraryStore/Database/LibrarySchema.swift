@@ -245,6 +245,70 @@ enum LibrarySchema {
                     """
             )
         }
+        migrator.registerMigration("v8-search-text-content") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE text_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      chunk_index INTEGER NOT NULL,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      script      TEXT NOT NULL,
+                      UNIQUE (asset_id, chunk_index)
+                    );
+                    CREATE INDEX idx_text_span_asset ON text_span(asset_id, chunk_index);
+
+                    CREATE VIRTUAL TABLE text_fts USING fts5(
+                      text,
+                      content='text_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE text_fts_cjk USING fts5(
+                      text,
+                      content='text_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+                    CREATE TRIGGER text_fts_insert AFTER INSERT ON text_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO text_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER text_fts_delete AFTER DELETE ON text_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO text_fts(text_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER text_fts_cjk_insert AFTER INSERT ON text_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO text_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER text_fts_cjk_delete AFTER DELETE ON text_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO text_fts_cjk(text_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+
+                    INSERT OR IGNORE INTO index_job
+                      (asset_id, stage, state, attempts, error, updated_at)
+                    SELECT id, 'text', 'pending', 0, NULL, unixepoch('now')
+                    FROM asset WHERE kind = 'text';
+                    INSERT OR IGNORE INTO index_job
+                      (asset_id, stage, state, attempts, error, updated_at)
+                    SELECT id, 'embedding', 'pending', 0, NULL, unixepoch('now')
+                    FROM asset WHERE kind = 'text';
+                    UPDATE index_job
+                    SET state = 'pending', attempts = 0, error = NULL,
+                        updated_at = unixepoch('now')
+                    WHERE stage = 'embedding'
+                      AND asset_id IN (SELECT id FROM asset WHERE kind = 'text');
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }
