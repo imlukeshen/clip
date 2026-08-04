@@ -83,6 +83,20 @@ struct PlanningTests {
         #expect(result.warnings == ["Document layout may change during PDF rendering."])
     }
 
+    @Test("LaTeX to PDF uses the bundled Tectonic backend")
+    func latexToPDF() throws {
+        let result = try #require(
+            ConversionPlanner().plan(
+                from: ConversionFormats.latex,
+                to: ConversionFormats.pdf
+            )
+        )
+
+        #expect(result.steps.map(\.backend) == [.tectonic])
+        #expect(result.steps.map(\.implementation) == [.tectonic])
+        #expect(result.warnings == ["TeX package downloads require consent in the editor"])
+    }
+
     @Test("Reachability is derived from the graph and paths stop at three hops")
     func reachableAndBounded() {
         let a = FormatID(type: ConversionFormats.type("graph-a"))

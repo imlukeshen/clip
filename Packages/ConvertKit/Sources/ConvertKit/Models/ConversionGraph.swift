@@ -40,6 +40,7 @@ public enum ConversionFormats {
     public static let html = FormatID(type: .html)
     public static let plainText = FormatID(type: .plainText)
     public static let markdown = FormatID(type: type("md"))
+    public static let latex = FormatID(type: type("tex"))
     public static let rtf = FormatID(type: .rtf)
     public static let doc = FormatID(type: type("doc"))
     public static let docx = FormatID(type: type("docx"))
@@ -110,6 +111,7 @@ public enum BackendID: String, Sendable, Equatable, Hashable {
     case attributedString
     case webKit
     case markdown
+    case tectonic
     case ffmpeg
     case libreOffice
 }

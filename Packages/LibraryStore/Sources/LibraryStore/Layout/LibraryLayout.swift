@@ -51,6 +51,16 @@ public enum LibraryLayout {
         internalDirectory(in: root).appendingPathComponent("scratch", isDirectory: true)
     }
 
+    /// Tectonic packages fetched only after consent, kept inspectable and clearable.
+    public static func texCache(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("tex-cache", isDirectory: true)
+    }
+
+    /// LaTeX project metadata such as the selected main file.
+    public static func texProjects(in root: URL) -> URL {
+        internalDirectory(in: root).appendingPathComponent("tex", isDirectory: true)
+    }
+
     /// Copies of recent system captures, staged for pasting.
     ///
     /// Deliberately outside `Media/`: entries here are not assets, they expire,

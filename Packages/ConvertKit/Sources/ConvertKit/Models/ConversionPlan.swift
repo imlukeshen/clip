@@ -8,6 +8,7 @@ public enum Backend: Sendable, Equatable {
     case attributedString
     case webKit
     case markdown
+    case tectonic
     case ffmpeg(FFmpegRecipe)
     case libreOffice
     case unsupported(String)

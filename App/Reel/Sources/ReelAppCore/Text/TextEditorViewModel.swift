@@ -7,6 +7,14 @@ import LibraryStore
 import Observation
 import TextEngine
 
+public enum TeXCompilationState: Sendable, Equatable {
+    case idle
+    case compiling
+    case succeeded
+    case paused(String)
+    case failed(String)
+}
+
 /// Drives one open text or code document.
 ///
 /// This view model is deliberately split from the patch-graph editors. Its
@@ -37,6 +45,7 @@ public final class TextEditorViewModel {
             guard !isApplyingExternalText else { return }
             isDirty = true
             scheduleContentAutosave()
+            scheduleTeXCompilation()
         }
     }
     /// The file currently shown in the editor.
@@ -55,6 +64,22 @@ public final class TextEditorViewModel {
     public private(set) var isDetached = false
     /// Whether the current detached contents have been copied somewhere safe.
     public private(set) var hasSavedDetachedCopy = false
+    /// Current LaTeX compilation state. A failed build does not clear the last PDF.
+    public private(set) var texCompilationState: TeXCompilationState = .idle
+    /// Most recent successful PDF, retained while a later compile fails.
+    public private(set) var texPDFURL: URL?
+    /// Most recent SyncTeX sidecar, consumed by T4 source navigation.
+    public private(set) var texSyncTeXURL: URL?
+    /// Complete engine output. T4 adds structured presentation on top of this log.
+    public private(set) var texLog = ""
+    /// Parsed diagnostics emitted by the engine.
+    public private(set) var texDiagnostics: [TeXDiagnostic] = []
+    /// Whether the editor is waiting for the one-time package-network choice.
+    public private(set) var needsTeXPackageConsent = false
+    /// Automatic, on-save, or manual scheduling.
+    public private(set) var texCompileMode: TeXCompileMode
+    /// `nil` until the user chooses whether Tectonic may fetch packages.
+    public private(set) var texPackageAccess: TeXPackageAccess?
 
     /// The source file on disk, or `nil` for an unsaved scratch buffer.
     public let sourceURL: URL?
@@ -74,6 +99,10 @@ public final class TextEditorViewModel {
     private var externalReloadTask: Task<Void, Never>?
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
+    @ObservationIgnored private var texEngine: (any TeXEngine)?
+    private var texCompileTask: Task<Void, Never>?
+    private var texCompileGeneration = UUID()
+    private let texPreferences: UserDefaults
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
     private let autosaveInterval: Duration = .seconds(2)
@@ -95,7 +124,8 @@ public final class TextEditorViewModel {
         sourceURL: URL?,
         hashingWith hashData: @escaping @Sendable (Data) -> String,
         persistingStructure: @escaping @Sendable (TextDocument) async throws -> Void,
-        persistingContents: @escaping @Sendable (Data, String) async throws -> Void
+        persistingContents: @escaping @Sendable (Data, String) async throws -> Void,
+        texPreferences: UserDefaults = .standard
     ) {
         self.document = document
         self.text = text
@@ -104,6 +134,13 @@ public final class TextEditorViewModel {
         self.hashData = hashData
         self.persistStructure = persistingStructure
         self.persistContents = persistingContents
+        self.texPreferences = texPreferences
+        self.texCompileMode =
+            texPreferences.string(forKey: "clip.tex.compileMode")
+            .flatMap(TeXCompileMode.init(rawValue:)) ?? .automatic
+        self.texPackageAccess =
+            texPreferences.string(forKey: "clip.tex.packageAccess")
+            .flatMap(TeXPackageAccess.init(rawValue:))
     }
 
     /// The file record currently being edited.
@@ -123,12 +160,14 @@ public final class TextEditorViewModel {
 
     /// Starts editor-owned background work.
     public func start() {
-        guard fileMonitor == nil, let sourceURL else { return }
-        fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.scheduleExternalReload()
+        if fileMonitor == nil, let sourceURL {
+            fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.scheduleExternalReload()
+                }
             }
         }
+        scheduleTeXCompilation()
     }
 
     /// Stops background work and flushes any dirty content before closing.
@@ -137,8 +176,10 @@ public final class TextEditorViewModel {
         contentTask?.cancel()
         cleanupTask?.cancel()
         externalReloadTask?.cancel()
+        texCompileTask?.cancel()
         fileMonitor?.cancel()
         fileMonitor = nil
+        removeTeXResults()
         // A pending edit must not be lost when the editor closes.
         flushContentAutosave()
     }
@@ -164,6 +205,11 @@ public final class TextEditorViewModel {
             .setLanguage(activeFileID, language, explicit: true),
             actionName: "Set Language"
         )
+        if language == .latex {
+            scheduleTeXCompilation()
+        } else {
+            cancelTeXCompilation(resetState: true)
+        }
     }
 
     /// Replaces the shared editor settings.
@@ -179,6 +225,51 @@ public final class TextEditorViewModel {
 
     /// Clears the transient editor notice.
     public func clearNotice() { notice = nil }
+
+    /// Supplies the engine selected by the app's distribution channel.
+    public func configureTeXEngine(_ engine: any TeXEngine) {
+        texEngine = engine
+        if language == .latex { scheduleTeXCompilation() }
+    }
+
+    /// Requests a build, showing the package-network decision before first use.
+    public func requestTeXCompile() {
+        guard language == .latex else { return }
+        guard sourceURL != nil else {
+            notice = "Save this LaTeX scratch buffer before compiling it."
+            return
+        }
+        guard texPackageAccess != nil else {
+            needsTeXPackageConsent = true
+            return
+        }
+        beginTeXCompilation()
+    }
+
+    /// Persists the package-network choice and resumes the requested build.
+    public func resolveTeXPackageConsent(allowNetwork: Bool) {
+        let access: TeXPackageAccess = allowNetwork ? .allowNetwork : .cachedOnly
+        texPackageAccess = access
+        texPreferences.set(access.rawValue, forKey: "clip.tex.packageAccess")
+        needsTeXPackageConsent = false
+        beginTeXCompilation()
+    }
+
+    public func cancelTeXPackageConsent() {
+        needsTeXPackageConsent = false
+    }
+
+    public func setTeXCompileMode(_ mode: TeXCompileMode) {
+        guard texCompileMode != mode else { return }
+        texCompileMode = mode
+        texPreferences.set(mode.rawValue, forKey: "clip.tex.compileMode")
+        if mode == .automatic { scheduleTeXCompilation() }
+    }
+
+    public func cancelTeXCompilation() {
+        cancelTeXCompilation(resetState: false)
+        texCompilationState = texPDFURL == nil ? .idle : .succeeded
+    }
 
     /// Updates the layout safety mode reported by the native editor.
     public func setSoftWrapSuppressed(_ suppressed: Bool) {
@@ -305,6 +396,104 @@ public final class TextEditorViewModel {
             }
             writeContents()
         }
+        if language == .latex, texCompileMode == .onSave {
+            requestTeXCompile()
+        }
+    }
+
+    private func scheduleTeXCompilation() {
+        guard language == .latex, texCompileMode == .automatic,
+            texPackageAccess != nil, sourceURL != nil, texEngine != nil
+        else { return }
+        texCompileTask?.cancel()
+        let generation = UUID()
+        texCompileGeneration = generation
+        texCompileTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(1_500))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, texCompileGeneration == generation else { return }
+            guard TeXCompileDiscipline.allowsAutomaticCompileNow else {
+                texCompilationState = .paused(
+                    "Auto-compile is paused for battery or thermal conditions."
+                )
+                return
+            }
+            beginTeXCompilation()
+        }
+    }
+
+    private func beginTeXCompilation() {
+        guard let texEngine, texEngine.isAvailable else {
+            texCompilationState = .failed("The bundled TeX engine is unavailable.")
+            return
+        }
+        guard let sourceURL, let packageAccess = texPackageAccess else { return }
+        texCompileTask?.cancel()
+        let generation = UUID()
+        texCompileGeneration = generation
+        let source = text
+        let projectDirectory = sourceURL.deletingLastPathComponent()
+        let job = TeXJob(
+            mainFile: sourceURL,
+            workingDirectory: projectDirectory,
+            sourceOverrides: [sourceURL.lastPathComponent: Data(source.utf8)],
+            timeout: .seconds(120),
+            packageAccess: packageAccess
+        )
+        texCompilationState = .compiling
+        texLog = ""
+        texDiagnostics = []
+        texCompileTask = Task { [weak self] in
+            do {
+                for try await event in texEngine.compile(job) {
+                    guard let self, texCompileGeneration == generation else { return }
+                    switch event {
+                    case .pass:
+                        break
+                    case .logLine(let line):
+                        texLog += texLog.isEmpty ? line : "\n\(line)"
+                    case .diagnostic(let diagnostic):
+                        texDiagnostics.append(diagnostic)
+                    case .finished(let pdf, let synctex):
+                        replaceTeXResults(pdf: pdf, synctex: synctex)
+                        texCompilationState = .succeeded
+                    }
+                }
+            } catch TeXEngineError.cancelled {
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, texCompileGeneration == generation else { return }
+                texCompilationState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func cancelTeXCompilation(resetState: Bool) {
+        texCompileTask?.cancel()
+        texCompileTask = nil
+        texCompileGeneration = UUID()
+        if resetState { texCompilationState = .idle }
+    }
+
+    private func replaceTeXResults(pdf: URL, synctex: URL?) {
+        if let previous = texPDFURL, previous != pdf {
+            try? FileManager.default.removeItem(at: previous.deletingLastPathComponent())
+        }
+        texPDFURL = pdf
+        texSyncTeXURL = synctex
+    }
+
+    private func removeTeXResults() {
+        if let texPDFURL {
+            try? FileManager.default.removeItem(at: texPDFURL.deletingLastPathComponent())
+        }
+        texPDFURL = nil
+        texSyncTeXURL = nil
     }
 
     private func scheduleContentAutosave() {

@@ -142,6 +142,7 @@ public enum BuiltInConversionGraph {
             + AttributedStringBackend().edges()
             + WebKitBackend().edges()
             + MarkdownBackend().edges()
+            + TectonicBackend().edges()
             + FFmpegTranscoder().edges()
             + LibreOfficeBackend(capabilities: capabilities).edges()
     }

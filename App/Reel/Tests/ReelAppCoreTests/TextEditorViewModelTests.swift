@@ -149,6 +149,59 @@ struct TextEditorViewModelTests {
         #expect(textView.string == original)
     }
 
+    @Test("LaTeX package access is an explicit one-time choice")
+    func latexPackageConsent() throws {
+        let fixture = try TeXEditorFixture()
+        defer { fixture.remove() }
+        let editor = try fixture.editor(engine: StubTeXEngine.result(.success))
+
+        editor.requestTeXCompile()
+        #expect(editor.needsTeXPackageConsent)
+
+        editor.resolveTeXPackageConsent(allowNetwork: false)
+        #expect(!editor.needsTeXPackageConsent)
+        #expect(editor.texPackageAccess == .cachedOnly)
+        #expect(
+            fixture.preferences.string(forKey: "clip.tex.packageAccess")
+                == TeXPackageAccess.cachedOnly.rawValue
+        )
+    }
+
+    @Test("A failed rebuild keeps the last successful LaTeX PDF visible")
+    func latexRetainsLastSuccessfulPDF() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let editor = try fixture.editor(engine: StubTeXEngine.result(.success))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        let successfulPDF = try #require(editor.texPDFURL)
+        #expect(FileManager.default.fileExists(atPath: successfulPDF.path))
+
+        editor.configureTeXEngine(StubTeXEngine.result(.failure))
+        editor.requestTeXCompile()
+        await waitUntil {
+            if case .failed = editor.texCompilationState { return true }
+            return false
+        }
+
+        #expect(editor.texPDFURL == successfulPDF)
+        #expect(FileManager.default.fileExists(atPath: successfulPDF.path))
+    }
+
+    @Test("Cancelling a LaTeX build returns the editor to a stable state")
+    func cancellingLatexBuildResetsState() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let editor = try fixture.editor(engine: StubTeXEngine.result(.neverFinishes))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .compiling }
+        editor.cancelTeXCompilation()
+
+        #expect(editor.texCompilationState == .idle)
+    }
+
     private func makeEditor(
         file: TextFile,
         text: String,
@@ -162,6 +215,121 @@ struct TextEditorViewModelTests {
             persistingStructure: { _ in },
             persistingContents: { _, _ in }
         )
+    }
+}
+
+@MainActor
+private func waitUntil(
+    attempts: Int = 50,
+    _ condition: @escaping @MainActor () -> Bool
+) async {
+    for _ in 0..<attempts {
+        if condition() { return }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+private struct TeXEditorFixture {
+    let directory: URL
+    let source: URL
+    let preferences: UserDefaults
+
+    init(packageAccess: TeXPackageAccess? = nil) throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-tex-editor-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        source = directory.appendingPathComponent("main.tex")
+        try Data("\\documentclass{article}\\begin{document}Hi\\end{document}".utf8)
+            .write(to: source)
+        let suite = "clip-tex-editor-tests-\(UUID().uuidString)"
+        guard let preferences = UserDefaults(suiteName: suite) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        self.preferences = preferences
+        preferences.removePersistentDomain(forName: suite)
+        preferences.set(TeXCompileMode.manual.rawValue, forKey: "clip.tex.compileMode")
+        if let packageAccess {
+            preferences.set(packageAccess.rawValue, forKey: "clip.tex.packageAccess")
+        }
+    }
+
+    @MainActor
+    func editor(engine: some TeXEngine) throws -> TextEditorViewModel {
+        let file = TextFile(
+            id: FileID(rawValue: "main"),
+            relativePath: "main.tex",
+            language: .latex,
+            languageIsExplicit: true
+        )
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: try String(contentsOf: source, encoding: .utf8),
+            sourceURL: source,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in },
+            texPreferences: preferences
+        )
+        editor.configureTeXEngine(engine)
+        return editor
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+private struct StubTeXEngine: TeXEngine {
+    enum Result: Sendable {
+        case success
+        case failure
+        case neverFinishes
+    }
+
+    let id: EngineID = "test"
+    let displayName = "Test TeX"
+    let isAvailable = true
+    let result: Result
+
+    static func result(_ result: Result) -> Self { Self(result: result) }
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                switch result {
+                case .success:
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                        "clip-tex-test-result-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                    try FileManager.default.createDirectory(
+                        at: directory,
+                        withIntermediateDirectories: true
+                    )
+                    let pdf = directory.appendingPathComponent("main.pdf")
+                    try Data("%PDF-test".utf8).write(to: pdf)
+                    continuation.yield(.finished(pdf: pdf, synctex: nil))
+                    continuation.finish()
+                case .failure:
+                    continuation.finish(
+                        throwing: TeXEngineError.compilationFailed(
+                            status: 1,
+                            message: "Expected test failure"
+                        )
+                    )
+                case .neverFinishes:
+                    do {
+                        try await Task.sleep(for: .seconds(60))
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: TeXEngineError.cancelled)
+                    }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

@@ -9,6 +9,7 @@ public actor Converter {
     private let attributedString = AttributedStringBackend()
     private let webKit = WebKitBackend()
     private let markdown = MarkdownBackend()
+    private let tectonic = TectonicBackend()
     private let libreOffice: LibreOfficeBackend
     private nonisolated let cancellationRegistry = BatchCancellationRegistry()
 
@@ -119,6 +120,8 @@ public actor Converter {
             return await webKit.run(step, input: input, output: output)
         case .markdown:
             return await markdown.run(step, input: input, output: output)
+        case .tectonic:
+            return await tectonic.run(step, input: input, output: output)
         case .ffmpeg:
             guard case .ffmpeg(let recipe) = step.implementation else {
                 return failedStream(ConversionError.invalidInput)
@@ -155,7 +158,7 @@ public actor Converter {
             return await imageIO.transcode(input: input, output: output, format: format)
         case .ffmpeg(let recipe):
             return await ffmpeg.transcode(input: input, output: output, recipe: recipe)
-        case .pdfKit, .attributedString, .webKit, .markdown, .libreOffice:
+        case .pdfKit, .attributedString, .webKit, .markdown, .tectonic, .libreOffice:
             return failedStream(
                 ConversionError.backendUnavailable("This plan has no executable step"))
         case .unsupported(let reason):

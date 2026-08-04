@@ -1,4 +1,5 @@
 import AIKit
+import AppKit
 import CaptureKit
 import DesignSystem
 import Foundation
@@ -26,6 +27,7 @@ private struct SettingsContent: View {
     @State private var anthropicKey = ""
     @State private var googleKey = ""
     @State private var showsAcknowledgements = false
+    @State private var confirmsTeXCacheClear = false
 
     var body: some View {
         Form {
@@ -57,6 +59,31 @@ private struct SettingsContent: View {
                     "Screenshots always go to the capture history. Nothing is added to "
                         + "your library until you save it, and the file macOS wrote stays "
                         + "where it is."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            }
+            Section("LaTeX") {
+                LabeledContent("Package cache") {
+                    Text(model.texPackageCacheURL.path(percentEncoded: false))
+                        .font(theme.type.numeric.font)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([
+                            model.texPackageCacheURL
+                        ])
+                    }
+                    Button("Clear cache…", role: .destructive) {
+                        confirmsTeXCacheClear = true
+                    }
+                }
+                Text(
+                    "Package downloads happen only after your one-time choice and are recorded "
+                        + "in the egress ledger. Clearing the cache may require downloading packages again."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -123,6 +150,16 @@ private struct SettingsContent: View {
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
                 .environment(\.theme, theme)
+        }
+        .confirmationDialog(
+            "Clear cached TeX packages?",
+            isPresented: $confirmsTeXCacheClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear cache", role: .destructive) { model.clearTeXPackageCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your documents and generated PDFs will not be removed.")
         }
     }
 

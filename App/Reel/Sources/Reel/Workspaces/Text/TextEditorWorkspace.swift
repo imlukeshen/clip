@@ -4,6 +4,7 @@ import CoreModel
 import DesignSystem
 import ReelAppCore
 import SwiftUI
+import TextEngine
 
 struct TextEditorWorkspace: View {
     @Environment(\.theme) private var theme
@@ -66,10 +67,38 @@ struct TextEditorWorkspace: View {
                     .environment(\.theme, theme)
             }
         }
+        .alert(
+            "Allow LaTeX Package Downloads?",
+            isPresented: Binding(
+                get: { editor.needsTeXPackageConsent },
+                set: { if !$0 { editor.cancelTeXPackageConsent() } }
+            )
+        ) {
+            Button("Cached packages only") {
+                editor.resolveTeXPackageConsent(allowNetwork: false)
+            }
+            Button("Allow downloads") {
+                editor.resolveTeXPackageConsent(allowNetwork: true)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel, action: editor.cancelTeXPackageConsent)
+        } message: {
+            Text(
+                "Tectonic may need to download LaTeX packages. Clip records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
+            )
+        }
     }
 
     @ViewBuilder private var editorSurface: some View {
-        if editor.language == .markdown, showsMarkdownPreview {
+        if editor.language == .latex {
+            HSplitView {
+                codeEditor
+                    .frame(minWidth: 340)
+                TeXPDFPreview(editor: editor)
+                    .frame(minWidth: 340)
+            }
+            .accessibilityIdentifier("latex-split-editor")
+        } else if editor.language == .markdown, showsMarkdownPreview {
             HSplitView {
                 codeEditor
                     .frame(minWidth: 340)
@@ -167,6 +196,40 @@ struct TextEditorWorkspace: View {
                 .disabled(model.textEditorExportTargets.isEmpty)
                 .help("Export through Clip's conversion queue")
                 .accessibilityIdentifier("markdown-export")
+            }
+
+            if editor.language == .latex {
+                Menu {
+                    Button("Automatic") { editor.setTeXCompileMode(.automatic) }
+                    Button("On Save") { editor.setTeXCompileMode(.onSave) }
+                    Button("Manual") { editor.setTeXCompileMode(.manual) }
+                } label: {
+                    Label(editor.texCompileMode.editorTitle, systemImage: "clock.arrow.circlepath")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Choose when LaTeX recompiles")
+
+                if editor.texCompilationState == .compiling {
+                    ProgressView()
+                        .controlSize(.small)
+                    Button(action: editor.cancelTeXCompilation) {
+                        Image(systemName: "stop.fill")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(ReelIconButtonStyle())
+                    .help("Stop compilation")
+                    .accessibilityIdentifier("latex-cancel")
+                } else {
+                    Button(action: editor.requestTeXCompile) {
+                        Label("Build", systemImage: "hammer")
+                    }
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(editor.sourceURL == nil)
+                    .keyboardShortcut("b", modifiers: .command)
+                    .help("Compile LaTeX (Command-B)")
+                    .accessibilityIdentifier("latex-compile")
+                }
             }
 
             saveControl
@@ -287,6 +350,10 @@ struct TextEditorWorkspace: View {
                 statusDivider
                 statusItem("Preview")
             }
+            if editor.language == .latex {
+                statusDivider
+                statusItem(editor.texCompilationState.statusTitle)
+            }
         }
         .font(theme.type.numeric.font)
         .foregroundStyle(theme.palette.textTertiary)
@@ -306,6 +373,28 @@ struct TextEditorWorkspace: View {
             .fill(theme.palette.textTertiary.opacity(0.55))
             .frame(width: 2, height: 2)
             .accessibilityHidden(true)
+    }
+}
+
+extension TeXCompileMode {
+    fileprivate var editorTitle: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .onSave: "On Save"
+        case .manual: "Manual"
+        }
+    }
+}
+
+extension TeXCompilationState {
+    fileprivate var statusTitle: String {
+        switch self {
+        case .idle: "Not built"
+        case .compiling: "Building"
+        case .succeeded: "PDF ready"
+        case .paused: "Auto-build paused"
+        case .failed: "Build failed"
+        }
     }
 }
 

@@ -87,3 +87,14 @@ preview; no CDN or runtime download is used.
 - Source: <https://github.com/KaTeX/KaTeX/releases/tag/v0.17.0>
 - Package checksum (SHA-256): `252efd48f892d178136fe3ba3530d3718b2b087ea81c3a40a877227bc61d5256`
 - License: [`Vendor/licenses/KATEX-LICENSE`](Vendor/licenses/KATEX-LICENSE)
+
+## Tectonic 0.16.9
+
+Copyright © 2016–2026 the Tectonic Project contributors. Licensed under the
+MIT License. Clip bundles the official static Apple silicon executable and runs
+it in untrusted mode inside a scoped temporary workspace. TeX package network
+access requires explicit consent.
+
+- Source: <https://github.com/tectonic-typesetting/tectonic/releases/tag/tectonic%400.16.9>
+- Executable checksum (SHA-256): `e62304878074c889e7f96d169698632c4fe695b525fb54a3473d7b2128f54512`
+- License: [`Vendor/tectonic/LICENSE`](Vendor/tectonic/LICENSE)

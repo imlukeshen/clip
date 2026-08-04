@@ -21,11 +21,19 @@ require_setting() {
 require_setting "$direct_settings" "ENABLE_HARDENED_RUNTIME = YES"
 require_setting "$direct_settings" "ARCHS = arm64"
 require_setting "$direct_settings" "CODE_SIGN_ENTITLEMENTS = App/Reel/Config/Reel.entitlements"
+require_setting "$direct_settings" "ENABLE_USER_SCRIPT_SANDBOXING = NO"
 require_setting "$direct_settings" "DIRECT_BUILD"
 require_setting "$store_settings" "ENABLE_HARDENED_RUNTIME = YES"
 require_setting "$store_settings" "ARCHS = arm64"
 require_setting "$store_settings" "CODE_SIGN_ENTITLEMENTS = App/Reel/Config/Reel-AppStore.entitlements"
+require_setting "$store_settings" "ENABLE_USER_SCRIPT_SANDBOXING = NO"
 require_setting "$store_settings" "APPSTORE_BUILD"
+
+if ! grep -Fq 'Sign bundled Tectonic' project.yml \
+    || ! grep -Fq 'TextEngine_TextEngine.bundle' project.yml; then
+    echo "Distribution builds must sign the bundled Tectonic executable" >&2
+    exit 1
+fi
 
 for plist in App/Reel/Config/ExportOptions-Direct.plist App/Reel/Config/ExportOptions-AppStore.plist; do
     plutil -lint "$plist" >/dev/null

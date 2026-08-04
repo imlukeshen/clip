@@ -81,6 +81,11 @@ public final class AppModel {
     public let aiSettings: AISettingsModel
     public let conversionCapabilities: ConversionCapabilities
 
+    /// The inspectable package cache used by the bundled LaTeX engine.
+    public var texPackageCacheURL: URL {
+        LibraryLayout.texCache(in: libraryRoot)
+    }
+
     private let shortcutReader: ShortcutReader
     private var runtime: AppRuntime?
     private var libraryChangesTask: Task<Void, Never>?
@@ -1579,6 +1584,7 @@ public final class AppModel {
                         )
                     }
                 )
+                textEditor.configureTeXEngine(makeTeXEngine())
                 self.textEditor = textEditor
                 selectedWorkspace = .text
                 try await runtime.saveTextDocument(document, for: assetID)
@@ -1696,9 +1702,46 @@ public final class AppModel {
                 try await runtime.saveScratchTextContents(data, for: documentID)
             }
         )
+        textEditor.configureTeXEngine(makeTeXEngine())
         self.textEditor = textEditor
         selectedWorkspace = .text
         textEditor.start()
+    }
+
+    private func makeTeXEngine() -> TectonicEngine {
+        let ledger = aiSettings.ledger
+        return TectonicEngine(
+            cacheDirectory: LibraryLayout.texCache(in: libraryRoot),
+            networkAccessObserver: {
+                await ledger.record(
+                    EgressEntry(
+                        provider: .tectonic,
+                        model: TectonicEngine.version,
+                        purpose: .texPackage,
+                        mediaAttached: false
+                    )
+                )
+            }
+        )
+    }
+
+    /// Clears cached TeX packages without touching source files or compiled PDFs.
+    public func clearTeXPackageCache() {
+        let cache = texPackageCacheURL
+        Task { [weak self] in
+            do {
+                try await Task.detached(priority: .utility) {
+                    let manager = FileManager.default
+                    if manager.fileExists(atPath: cache.path) {
+                        try manager.removeItem(at: cache)
+                    }
+                    try manager.createDirectory(at: cache, withIntermediateDirectories: true)
+                }.value
+                self?.lastMessage = "The TeX package cache was cleared."
+            } catch {
+                self?.lastMessage = "The TeX package cache could not be cleared."
+            }
+        }
     }
 
     private func refreshFolderTree() async {

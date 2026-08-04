@@ -2,7 +2,7 @@ import Foundation
 
 /// The user-visible reason for an outbound request.
 public enum EgressPurpose: String, Codable, Sendable, Equatable {
-    case chat, transcribe, vision, caption
+    case chat, transcribe, vision, caption, texPackage
 }
 
 /// Non-sensitive metadata recorded before a provider request leaves the device.

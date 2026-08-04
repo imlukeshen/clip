@@ -70,6 +70,22 @@ targets:
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The final build phase must re-sign the bundled Tectonic executable.
+        # Xcode's user-script sandbox otherwise prevents codesign from reading
+        # the enclosing SwiftPM resource bundle.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postBuildScripts:
+      - name: Sign bundled Tectonic
+        basedOnDependencyAnalysis: false
+        script: |
+          TEXT_ENGINE_BUNDLE="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TextEngine_TextEngine.bundle"
+          TECTONIC_PATH="$TEXT_ENGINE_BUNDLE/Contents/Resources/Resources/Tectonic/tectonic"
+          if [[ -x "$TECTONIC_PATH" && "$CODE_SIGNING_ALLOWED" != "NO" ]]; then
+            SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
+            /usr/bin/codesign --remove-signature "$TECTONIC_PATH" 2>/dev/null || true
+            /usr/bin/codesign --force --options runtime --timestamp=none --sign "$SIGNING_IDENTITY" "$TECTONIC_PATH"
+            /usr/bin/codesign --force --timestamp=none --sign "$SIGNING_IDENTITY" "$TEXT_ENGINE_BUNDLE"
+          fi
 
   ReelUITests:
     type: bundle.ui-testing

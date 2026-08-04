@@ -203,6 +203,7 @@ private func backendDisplayName(_ backend: BackendID) -> String {
     case .attributedString: "Rich Text"
     case .webKit: "WebKit"
     case .markdown: "Markdown"
+    case .tectonic: "Tectonic"
     case .ffmpeg: "FFmpeg"
     case .libreOffice: "LibreOffice"
     }
@@ -217,6 +218,7 @@ private func backendDisplayName(_ backend: Backend) -> String {
     case .attributedString: "Rich Text"
     case .webKit: "WebKit"
     case .markdown: "Markdown"
+    case .tectonic: "Tectonic"
     case .ffmpeg: "FFmpeg"
     case .libreOffice: "LibreOffice"
     case .unsupported(let reason): reason

@@ -1,0 +1,214 @@
+import Foundation
+import Testing
+
+@testable import TextEngine
+
+@Test func bundledTectonicIsAnExecutableArm64Release() throws {
+    let engine = TectonicEngine()
+
+    #expect(engine.isAvailable)
+    #expect(TectonicEngine.version == "0.16.9")
+    let attributes = try FileManager.default.attributesOfItem(atPath: engine.executableURL.path)
+    let permissions = attributes[.posixPermissions] as? NSNumber
+    #expect((permissions?.intValue ?? 0) & 0o111 != 0)
+}
+
+@Test func tectonicRunsInAnUntrustedScopedWorkspace() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+    let observer = NetworkObserver()
+    let engine = TectonicEngine(
+        executableURL: fixture.executable,
+        cacheDirectory: fixture.cache,
+        networkAccessObserver: { await observer.record() }
+    )
+    let job = TeXJob(
+        mainFile: fixture.mainFile,
+        sourceOverrides: [
+            "main.tex": Data("\\documentclass{article}\\begin{document}Clip\\end{document}".utf8)
+        ],
+        timeout: .seconds(2),
+        packageAccess: .cachedOnly
+    )
+
+    let events = try await collect(engine.compile(job))
+    let logs = events.compactMap { event -> String? in
+        guard case .logLine(let line) = event else { return nil }
+        return line
+    }.joined(separator: "\n")
+    guard case .finished(let pdf, let synctex) = events.last else {
+        Issue.record("Tectonic did not produce a finished event")
+        return
+    }
+    defer { try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent()) }
+
+    #expect(try Data(contentsOf: pdf).starts(with: Data("%PDF".utf8)))
+    #expect(synctex != nil)
+    #expect(logs.contains("--untrusted"))
+    #expect(logs.contains("--only-cached"))
+    #expect(logs.contains("untrusted:1"))
+    #expect(logs.contains("openin:p"))
+    #expect(logs.contains("openout:p"))
+    #expect(!logs.contains(fixture.mainFile.deletingLastPathComponent().path))
+    #expect(await observer.count == 0)
+}
+
+@Test func packageNetworkAccessIsExplicitAndObserved() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+    let observer = NetworkObserver()
+    let engine = TectonicEngine(
+        executableURL: fixture.executable,
+        cacheDirectory: fixture.cache,
+        networkAccessObserver: { await observer.record() }
+    )
+    let events = try await collect(
+        engine.compile(
+            TeXJob(
+                mainFile: fixture.mainFile,
+                timeout: .seconds(2),
+                packageAccess: .allowNetwork
+            )
+        )
+    )
+    if case .finished(let pdf, _) = events.last {
+        try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+    }
+    let logs = events.compactMap { event -> String? in
+        guard case .logLine(let line) = event else { return nil }
+        return line
+    }.joined(separator: "\n")
+
+    #expect(await observer.count == 1)
+    #expect(!logs.contains("--only-cached"))
+}
+
+@Test func shellEscapeIsRefusedBeforeTheEngineStarts() async throws {
+    let marker = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "clip-tex-marker-\(UUID().uuidString)"
+    )
+    let script = """
+        #!/bin/sh
+        : > "\(marker.path)"
+        exit 0
+        """
+    let fixture = try TeXFixture(
+        script: script,
+        source: "\\documentclass{article}\n\\write18{touch /tmp/unsafe}\n"
+    )
+    defer {
+        fixture.remove()
+        try? FileManager.default.removeItem(at: marker)
+    }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    do {
+        _ = try await collect(engine.compile(TeXJob(mainFile: fixture.mainFile)))
+        Issue.record("Shell escape should have been refused")
+    } catch {
+        #expect(error as? TeXEngineError == .unsafeSource("shell escape is disabled"))
+    }
+    #expect(!FileManager.default.fileExists(atPath: marker.path))
+}
+
+@Test func anInfiniteCompileIsHardKilledAtTheDeadline() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            while :; do :; done
+            """
+    )
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+    let clock = ContinuousClock()
+    let started = clock.now
+
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(mainFile: fixture.mainFile, timeout: .milliseconds(80))
+            )
+        )
+        Issue.record("An infinite compile should time out")
+    } catch {
+        #expect(error as? TeXEngineError == .timedOut)
+    }
+    #expect(started.duration(to: clock.now) < .seconds(2))
+}
+
+@Test func oversizedPDFsAreNeverCopiedOutOfTheSandbox() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(mainFile: fixture.mainFile, timeout: .seconds(2), outputSizeLimit: 2)
+            )
+        )
+        Issue.record("An oversized PDF should be refused")
+    } catch {
+        #expect(error as? TeXEngineError == .outputTooLarge(limit: 2))
+    }
+}
+
+private func collect(
+    _ stream: AsyncThrowingStream<TeXEvent, Error>
+) async throws -> [TeXEvent] {
+    var events: [TeXEvent] = []
+    for try await event in stream { events.append(event) }
+    return events
+}
+
+private actor NetworkObserver {
+    private(set) var count = 0
+
+    func record() { count += 1 }
+}
+
+private struct TeXFixture {
+    let root: URL
+    let mainFile: URL
+    let executable: URL
+    let cache: URL
+
+    init(script: String, source: String = "\\documentclass{article}\n") throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-tex-test-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        mainFile = root.appendingPathComponent("main.tex")
+        executable = root.appendingPathComponent("fake-tectonic")
+        cache = root.appendingPathComponent("cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(source.utf8).write(to: mainFile)
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
+            ofItemAtPath: executable.path
+        )
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: root) }
+
+    static let successScript = """
+        #!/bin/sh
+        outdir=""
+        input=""
+        previous=""
+        for argument in "$@"; do
+            if [ "$previous" = "--outdir" ]; then outdir="$argument"; fi
+            previous="$argument"
+            input="$argument"
+        done
+        name="${input##*/}"
+        name="${name%.tex}"
+        printf '%%PDF-1.4\n' > "$outdir/$name.pdf"
+        printf 'SyncTeX Version:1\n' > "$outdir/$name.synctex.gz"
+        printf 'args:%s\n' "$*" >&2
+        printf 'untrusted:%s\n' "$TECTONIC_UNTRUSTED_MODE" >&2
+        printf 'openin:%s\n' "$openin_any" >&2
+        printf 'openout:%s\n' "$openout_any" >&2
+        """
+}
