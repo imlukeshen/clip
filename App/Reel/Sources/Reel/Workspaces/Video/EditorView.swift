@@ -33,7 +33,7 @@ struct EditorView: View {
                 }
                 Divider().overlay(theme.palette.line)
                 timeline
-                    .frame(height: 224)
+                    .frame(height: timelineHeight)
             }
 
             if let notice = editor.notice {
@@ -57,7 +57,7 @@ struct EditorView: View {
         }
         .fileImporter(
             isPresented: $showsMediaImporter,
-            allowedContentTypes: [.movie, .image],
+            allowedContentTypes: [.movie, .image, .audio],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
@@ -102,32 +102,63 @@ struct EditorView: View {
             Spacer()
 
             Menu {
-                Button("Paste Video or Photo") {
+                Button("Paste Video, Photo, or Audio") {
                     model.pasteMediaIntoTimeline()
                 }
-                Button("Choose Video or Photo…") {
+                Button("Choose Media…") {
                     showsMediaImporter = true
                 }
                 Divider()
-                ForEach(editor.availableVideoAssets) { asset in
-                    Button(asset.displayName) { editor.insert(asset) }
+                if !editor.availableVideoAssets.isEmpty {
+                    Section("Video") {
+                        ForEach(editor.availableVideoAssets) { asset in
+                            Button(asset.displayName) { editor.insert(asset) }
+                        }
+                    }
                 }
-                if editor.availableVideoAssets.isEmpty {
-                    Text("All video assets are in this project")
+                if !editor.availableAudioAssets.isEmpty {
+                    Section("Audio") {
+                        ForEach(editor.availableAudioAssets) { asset in
+                            Button(asset.displayName) { editor.insert(asset) }
+                        }
+                    }
+                }
+                if editor.availableVideoAssets.isEmpty && editor.availableAudioAssets.isEmpty {
+                    Text("No library media is available")
                 }
             } label: {
                 Label("Add media", systemImage: "plus")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .help("Add video, photos, or audio to the targeted timeline track")
+            .accessibilityIdentifier("video-add-media-menu")
 
-            Button {
-                editor.cycleTargetVideoTrack()
+            Menu {
+                Section("Target video track") {
+                    ForEach(editor.document.timeline.videoTracks) { track in
+                        Button {
+                            editor.targetVideoTrack(track.id)
+                        } label: {
+                            if track.id == editor.targetedVideoTrackID {
+                                Label(track.name, systemImage: "checkmark")
+                            } else {
+                                Text(track.name)
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("New Overlay Track", systemImage: "square.stack.3d.up.badge.plus") {
+                    editor.addOverlayTrack()
+                }
             } label: {
-                Label(targetedTrackName, systemImage: "scope")
+                Label(targetedTrackName, systemImage: "square.stack.3d.up")
             }
-            .buttonStyle(ReelPlainButtonStyle())
-            .help("Cycle targeted video track")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Choose where added video appears, or create an overlay track")
+            .accessibilityIdentifier("video-track-target-menu")
 
             if editor.isExporting {
                 ProgressView(value: editor.exportProgress)
@@ -143,6 +174,8 @@ struct EditorView: View {
                 }
                 .buttonStyle(ReelPlainButtonStyle())
                 .fixedSize()
+                .help("Export the edited project")
+                .accessibilityIdentifier("video-export-button")
             }
 
             Button {
@@ -154,6 +187,7 @@ struct EditorView: View {
             .disabled(!editor.undoManager.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             .help("Undo")
+            .accessibilityIdentifier("video-undo-button")
 
             Button {
                 editor.redo()
@@ -164,9 +198,10 @@ struct EditorView: View {
             .disabled(!editor.undoManager.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
+            .accessibilityIdentifier("video-redo-button")
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: 44)
         .background(theme.palette.surfacePanel)
     }
 
@@ -174,14 +209,18 @@ struct EditorView: View {
         VStack(spacing: 5) {
             ToolButton(
                 systemName: "arrow.up.left",
-                help: "Select (V)",
+                title: "Select",
+                detail: "Select and move clips · V",
+                identifier: "video-tool-select",
                 isActive: editor.activeTool == .select
             ) {
                 editor.selectTool(.select)
             }
             ToolButton(
                 systemName: "scissors",
-                help: "Razor (C)",
+                title: "Razor",
+                detail: "Click a clip to split it · C",
+                identifier: "video-tool-razor",
                 isActive: editor.activeTool == .razor
             ) {
                 editor.selectTool(.razor)
@@ -189,40 +228,100 @@ struct EditorView: View {
             .keyboardShortcut("c", modifiers: [])
             ToolButton(
                 systemName: "magnet",
-                help: "Toggle snapping (S)",
+                title: "Snapping",
+                detail: "Snap edits to clips and markers · S",
+                identifier: "video-tool-snapping",
                 isActive: editor.isSnappingEnabled
             ) {
                 editor.toggleSnapping()
             }
             .keyboardShortcut("s", modifiers: [])
-            ToolButton(systemName: "scissors.badge.ellipsis", help: "Split at playhead") {
+            ToolButton(
+                systemName: "scissors.badge.ellipsis",
+                title: "Split at Playhead",
+                detail: "Cut the selected clip at the red line",
+                identifier: "video-tool-split"
+            ) {
                 editor.splitAtPlayhead()
             }
             .keyboardShortcut("k", modifiers: [.command, .shift])
-            ToolButton(systemName: "delete.forward", help: "Ripple delete (Shift-Delete)") {
+            ToolButton(
+                systemName: "trash",
+                title: "Delete Selected",
+                detail: "Remove selected video or audio · Delete",
+                identifier: "video-tool-delete",
+                isDisabled: editor.selection.isEmpty
+            ) {
+                editor.deleteSelected()
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            ToolButton(
+                systemName: "delete.forward",
+                title: "Ripple Delete",
+                detail: "Delete a V1 clip and close the gap",
+                identifier: "video-tool-ripple-delete",
+                isDisabled: !editor.canRippleDeleteSelected
+            ) {
                 editor.rippleDeleteSelected()
             }
             .keyboardShortcut(.delete, modifiers: .shift)
-            ToolButton(systemName: "mappin", help: "Add marker (M)") {
+            ToolButton(
+                systemName: "speaker.wave.2",
+                title: "Separate Audio",
+                detail: "Put source audio on editable A tracks",
+                identifier: "video-tool-separate-audio",
+                isDisabled: !editor.canSeparateSelectedAudio
+            ) {
+                editor.separateSelectedAudio()
+            }
+            ToolButton(
+                systemName: "link",
+                title: editor.selectedNestID == nil ? "Nest Selection" : "Unnest Selection",
+                detail: "Shift-select media, then edit it as one group",
+                identifier: "video-tool-nest",
+                isActive: editor.selectedNestID != nil,
+                isDisabled: !editor.canNestSelection && editor.selectedNestID == nil
+            ) {
+                if editor.selectedNestID == nil {
+                    editor.nestSelection()
+                } else {
+                    editor.unnestSelection()
+                }
+            }
+            ToolButton(
+                systemName: "mappin",
+                title: "Add Marker",
+                detail: "Mark the current playhead time · M",
+                identifier: "video-tool-marker"
+            ) {
                 editor.addMarkerAtPlayhead()
             }
             .keyboardShortcut("m", modifiers: [])
-            ToolButton(systemName: "magnifyingglass", help: "Add zoom effect") {
+            ToolButton(
+                systemName: "magnifyingglass",
+                title: "Zoom Effect",
+                detail: "Add a manual zoom to the selected clip",
+                identifier: "video-tool-zoom",
+                isDisabled: editor.selectedItem == nil
+            ) {
                 guard let itemID = editor.selectedItem?.id else { return }
                 editor.addZoom(to: itemID)
             }
             ToolButton(
                 systemName: "cursorarrow.click.2",
-                help: editor.autoZoomUnavailableReason ?? "Zoom on recorded clicks",
+                title: "Auto Zoom",
+                detail: editor.autoZoomUnavailableReason ?? "Create zooms from recorded clicks",
+                identifier: "video-tool-auto-zoom",
                 isDisabled: editor.autoZoomUnavailableReason != nil
             ) {
                 editor.autoZoomSelectedClip()
             }
             Spacer()
         }
-        .padding(.vertical, 9)
-        .frame(width: 42)
+        .padding(.vertical, 8)
+        .frame(width: 52)
         .background(theme.palette.surfacePanel)
+        .zIndex(20)
     }
 
     private var preview: some View {
@@ -266,11 +365,13 @@ struct EditorView: View {
                                 Image(systemName: "film.stack")
                                     .font(.system(size: 30, weight: .regular))
                                     .foregroundStyle(theme.palette.textTertiary)
-                                Text("Paste a video or photo")
+                                Text("Paste video, a photo, or audio")
                                     .font(theme.type.title.font)
-                                Text("Press Command-V, drop files here, or choose Add media.")
-                                    .font(theme.type.caption.font)
-                                    .foregroundStyle(theme.palette.textSecondary)
+                                Text(
+                                    "Press Command-V, drop files here, or choose Add media. Add V2 for picture-in-picture overlays."
+                                )
+                                .font(theme.type.caption.font)
+                                .foregroundStyle(theme.palette.textSecondary)
                                 Button("Paste", action: model.pasteMediaIntoTimeline)
                                     .buttonStyle(ReelBorderedButtonStyle())
                             }
@@ -339,6 +440,8 @@ struct EditorView: View {
                 }
                 .buttonStyle(ReelPlainButtonStyle())
                 .keyboardShortcut(.space, modifiers: [])
+                .help(editor.isPlaying ? "Pause · Space" : "Play · Space")
+                .accessibilityIdentifier("video-playback-toggle")
                 Button {
                     editor.shuttleBackward()
                 } label: {
@@ -444,7 +547,7 @@ struct EditorView: View {
             timelineToolbar
             Divider().overlay(theme.palette.line)
             GeometryReader { proxy in
-                ScrollView(.horizontal) {
+                ScrollView([.horizontal, .vertical]) {
                     timelineCanvas
                         .frame(
                             width: CGFloat(
@@ -453,7 +556,7 @@ struct EditorView: View {
                                     zoom: timelineZoom
                                 )
                             ),
-                            height: proxy.size.height
+                            height: max(proxy.size.height, timelineCanvasContentHeight)
                         )
                 }
                 .scrollIndicators(.visible)
@@ -540,8 +643,24 @@ struct EditorView: View {
     }
 
     private var clipCountLabel: String {
-        let count = editor.document.timeline.video.count
-        return "\(count) \(count == 1 ? "clip" : "clips")"
+        let videoCount = editor.document.timeline.videoTracks.flatMap(\.items).count
+        let audioCount = editor.document.timeline.audioTracks.flatMap(\.items).count
+        if audioCount == 0 {
+            return "\(videoCount) \(videoCount == 1 ? "clip" : "clips")"
+        }
+        return "\(videoCount) video · \(audioCount) audio"
+    }
+
+    private var timelineHeight: CGFloat {
+        let videoTracks = max(editor.document.timeline.videoTracks.count, 1)
+        let audioTracks = max(editor.document.timeline.audioTracks.count, 1)
+        return min(max(CGFloat(126 + videoTracks * 40 + audioTracks * 30), 224), 420)
+    }
+
+    private var timelineCanvasContentHeight: CGFloat {
+        let videoTracks = max(editor.document.timeline.videoTracks.count, 1)
+        let audioTracks = max(editor.document.timeline.audioTracks.count, 1)
+        return CGFloat(64 + videoTracks * 40 + audioTracks * 32)
     }
 
     private var timelineCanvas: some View {
@@ -786,20 +905,68 @@ private struct SavedExportPreference: Codable {
 }
 
 private struct ToolButton: View {
+    @Environment(\.theme) private var theme
+    @State private var isHovered = false
     let systemName: String
-    let help: String
+    let title: String
+    let detail: String
+    let identifier: String
     var isActive = false
     var isDisabled = false
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .frame(width: 30, height: 28)
+        ZStack {
+            Button(action: action) {
+                Image(systemName: systemName)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 34, height: 32)
+            }
+            .buttonStyle(ReelIconButtonStyle(isActive: isActive))
+            .disabled(isDisabled)
         }
-        .buttonStyle(ReelIconButtonStyle(isActive: isActive))
-        .disabled(isDisabled)
-        .help(help)
+        .contentShape(Rectangle())
+        .overlay(alignment: .leading) {
+            if isHovered {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(theme.type.label.font)
+                        .foregroundStyle(theme.palette.textPrimary)
+                    Text(detail)
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textSecondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .fixedSize()
+                .background(theme.palette.surfaceRaised)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                    .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+                }
+                .shadow(color: .black.opacity(0.28), radius: 9, y: 4)
+                .offset(x: 43)
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
+            }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+        }
+        .help("\(title): \(detail)")
+        .accessibilityLabel(title)
+        .accessibilityHint(detail)
+        .accessibilityIdentifier(identifier)
+        .zIndex(isHovered ? 100 : 0)
     }
 }
 
@@ -932,10 +1099,17 @@ struct EditorInspector: View {
                     )
                     Divider().overlay(theme.palette.line)
                 }
-                SectionLabel("Selected clip")
-                Text(editor.assetNames[item.assetID] ?? "Video clip")
+                SectionLabel(
+                    editor.selectedTrackKind == .audio ? "Selected audio" : "Selected video"
+                )
+                Text(editor.assetNames[item.assetID] ?? "Media clip")
                     .font(theme.type.body.font)
                     .lineLimit(2)
+
+                LabeledContent("Track") {
+                    Text(editor.selectedTrackName ?? "—")
+                        .font(theme.type.numeric.font)
+                }
 
                 LabeledContent("Source") {
                     Text(
@@ -944,26 +1118,59 @@ struct EditorInspector: View {
                     .font(theme.type.numeric.font)
                 }
 
-                LabeledContent("Clicks") {
-                    Text("\(editor.selectedClickCount)")
-                        .font(theme.type.numeric.font)
+                SectionLabel("Timeline actions")
+                HStack(spacing: 6) {
+                    EffectButton("Delete") { editor.deleteSelected() }
+                        .accessibilityIdentifier("inspector-delete-selected")
+                    if editor.selectedTrackKind == .video {
+                        EffectButton("Separate audio") { editor.separateSelectedAudio() }
+                            .disabled(!editor.canSeparateSelectedAudio)
+                            .accessibilityIdentifier("inspector-separate-audio")
+                        EffectButton("Ripple delete") { editor.rippleDeleteSelected() }
+                            .disabled(!editor.canRippleDeleteSelected)
+                            .accessibilityIdentifier("inspector-ripple-delete")
+                    }
                 }
-                LabeledContent("Alignment") {
-                    Text(editor.selectedAlignmentDescription)
-                        .font(theme.type.caption.font)
+                HStack(spacing: 6) {
+                    if editor.selectedNestID == nil {
+                        EffectButton("Nest selection") { editor.nestSelection() }
+                            .disabled(!editor.canNestSelection)
+                    } else {
+                        EffectButton("Unnest selection") { editor.unnestSelection() }
+                    }
+                    Text(
+                        editor.selectedNestID == nil
+                            ? "Shift-click clips to select more than one."
+                            : "This media edits as one group."
+                    )
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
                 }
 
-                Button("Zoom on clicks") {
-                    editor.autoZoomSelectedClip()
-                }
-                .buttonStyle(ReelBorderedButtonStyle())
-                .disabled(editor.autoZoomUnavailableReason != nil)
+                Divider().overlay(theme.palette.line)
 
-                if let reason = editor.autoZoomUnavailableReason {
-                    Text(reason)
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if editor.selectedTrackKind == .video {
+                    LabeledContent("Clicks") {
+                        Text("\(editor.selectedClickCount)")
+                            .font(theme.type.numeric.font)
+                    }
+                    LabeledContent("Alignment") {
+                        Text(editor.selectedAlignmentDescription)
+                            .font(theme.type.caption.font)
+                    }
+
+                    Button("Zoom on clicks") {
+                        editor.autoZoomSelectedClip()
+                    }
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(editor.autoZoomUnavailableReason != nil)
+
+                    if let reason = editor.autoZoomUnavailableReason {
+                        Text(reason)
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 Picker(
@@ -981,28 +1188,30 @@ struct EditorInspector: View {
                     Text("4×").tag(4.0)
                 }
 
-                KeyframeSlider(
-                    title: "Opacity",
-                    value: Binding(
-                        get: { editor.selectedOpacity },
-                        set: { value in editor.setSelectedOpacity(value) }
-                    ),
-                    range: 0...1,
-                    suffix: "",
-                    hasKeyframe: editor.hasOpacityKeyframeAtPlayhead,
-                    addKeyframe: { editor.setOpacityKeyframe() }
-                )
-                KeyframeSlider(
-                    title: "Scale",
-                    value: Binding(
-                        get: { editor.selectedTransform.scaleX },
-                        set: { value in editor.setSelectedScale(value) }
-                    ),
-                    range: 0.1...3,
-                    suffix: "×",
-                    hasKeyframe: editor.hasTransformKeyframeAtPlayhead,
-                    addKeyframe: { editor.setTransformKeyframe() }
-                )
+                if editor.selectedTrackKind == .video {
+                    KeyframeSlider(
+                        title: "Opacity",
+                        value: Binding(
+                            get: { editor.selectedOpacity },
+                            set: { value in editor.setSelectedOpacity(value) }
+                        ),
+                        range: 0...1,
+                        suffix: "",
+                        hasKeyframe: editor.hasOpacityKeyframeAtPlayhead,
+                        addKeyframe: { editor.setOpacityKeyframe() }
+                    )
+                    KeyframeSlider(
+                        title: "Scale",
+                        value: Binding(
+                            get: { editor.selectedTransform.scaleX },
+                            set: { value in editor.setSelectedScale(value) }
+                        ),
+                        range: 0.1...3,
+                        suffix: "×",
+                        hasKeyframe: editor.hasTransformKeyframeAtPlayhead,
+                        addKeyframe: { editor.setTransformKeyframe() }
+                    )
+                }
 
                 Divider().overlay(theme.palette.line)
                 SectionLabel("Precision edit")
@@ -1012,7 +1221,9 @@ struct EditorInspector: View {
                     EffectButton("Slide +1f") { editor.slideSelected() }
                 }
                 HStack(spacing: 6) {
-                    EffectButton("Dissolve") { editor.addCrossDissolve() }
+                    if editor.selectedTrackKind == .video {
+                        EffectButton("Dissolve") { editor.addCrossDissolve() }
+                    }
                     EffectButton("Audio fade") { editor.addAudioFade() }
                 }
                 HStack(spacing: 6) {
@@ -1024,41 +1235,43 @@ struct EditorInspector: View {
                     EffectButton("Overwrite") { editor.insertSelectedSource(overwrite: true) }
                 }
 
-                Divider().overlay(theme.palette.line)
-                SectionLabel("Effects")
-                HStack(spacing: 6) {
-                    EffectButton("Zoom") { editor.addZoom(to: item.id) }
-                    EffectButton("Frame") { editor.addBackground(to: item.id) }
-                    EffectButton("Crop") { editor.addCrop(to: item.id) }
-                    EffectButton("Blur") { editor.addBlur(to: item.id) }
-                }
-                if item.effects.isEmpty {
-                    Text("No clip effects")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textTertiary)
-                } else {
-                    ForEach(item.effects) { effect in
-                        HStack {
-                            Text(effectName(effect.kind))
-                                .font(theme.type.caption.font)
-                            Spacer()
-                            if effect.kind == .blur || effect.kind == .zoom {
+                if editor.selectedTrackKind == .video {
+                    Divider().overlay(theme.palette.line)
+                    SectionLabel("Effects")
+                    HStack(spacing: 6) {
+                        EffectButton("Zoom") { editor.addZoom(to: item.id) }
+                        EffectButton("Frame") { editor.addBackground(to: item.id) }
+                        EffectButton("Crop") { editor.addCrop(to: item.id) }
+                        EffectButton("Blur") { editor.addBlur(to: item.id) }
+                    }
+                    if item.effects.isEmpty {
+                        Text("No clip effects")
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textTertiary)
+                    } else {
+                        ForEach(item.effects) { effect in
+                            HStack {
+                                Text(effectName(effect.kind))
+                                    .font(theme.type.caption.font)
+                                Spacer()
+                                if effect.kind == .blur || effect.kind == .zoom {
+                                    Button {
+                                        editor.setEffectKeyframe(effect)
+                                    } label: {
+                                        Image(systemName: "diamond")
+                                    }
+                                    .buttonStyle(ReelPlainButtonStyle())
+                                    .foregroundStyle(theme.palette.accent)
+                                    .help("Add keyframe at playhead")
+                                }
                                 Button {
-                                    editor.setEffectKeyframe(effect)
+                                    editor.removeEffect(effect.id, from: item.id)
                                 } label: {
-                                    Image(systemName: "diamond")
+                                    Image(systemName: "trash")
                                 }
                                 .buttonStyle(ReelPlainButtonStyle())
-                                .foregroundStyle(theme.palette.accent)
-                                .help("Add keyframe at playhead")
+                                .foregroundStyle(theme.palette.textTertiary)
                             }
-                            Button {
-                                editor.removeEffect(effect.id, from: item.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(ReelPlainButtonStyle())
-                            .foregroundStyle(theme.palette.textTertiary)
                         }
                     }
                 }

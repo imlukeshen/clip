@@ -173,6 +173,16 @@ extension ProjectDocument {
             }
             throw ModelError.trackNotFound(track.id)
 
+        case .setVideoTracks(let tracks):
+            let previous = timeline.videoTracks
+            timeline.videoTracks = tracks
+            return .setVideoTracks(previous)
+
+        case .setAudioTracks(let tracks):
+            let previous = timeline.audioTracks
+            timeline.audioTracks = tracks
+            return .setAudioTracks(previous)
+
         case .setMarkers(let markers):
             let previous = timeline.markers
             timeline.markers = markers

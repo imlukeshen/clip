@@ -15,6 +15,9 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var blendMode: BlendMode
     public var videoFade: FadeEnvelope
     public var audioFade: FadeEnvelope
+    /// Clips with the same value are treated as one nested editing group while
+    /// remaining independent media items for deterministic playback/export.
+    public var nestID: String?
 
     public init(
         id: ItemID,
@@ -30,7 +33,8 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         opacityAnimation: Animatable<Double>? = nil,
         blendMode: BlendMode = .normal,
         videoFade: FadeEnvelope = .none,
-        audioFade: FadeEnvelope = .none
+        audioFade: FadeEnvelope = .none,
+        nestID: String? = nil
     ) {
         self.id = id
         self.assetID = assetID
@@ -44,6 +48,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         self.blendMode = blendMode
         self.videoFade = videoFade
         self.audioFade = audioFade
+        self.nestID = nestID
     }
 
     /// The duration occupied by this item in timeline time.
@@ -69,6 +74,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         case blendMode
         case videoFade
         case audioFade
+        case nestID
     }
 
     public init(from decoder: Decoder) throws {
@@ -90,5 +96,6 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         blendMode = try container.decodeIfPresent(BlendMode.self, forKey: .blendMode) ?? .normal
         videoFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .videoFade) ?? .none
         audioFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .audioFade) ?? .none
+        nestID = try container.decodeIfPresent(String.self, forKey: .nestID)
     }
 }

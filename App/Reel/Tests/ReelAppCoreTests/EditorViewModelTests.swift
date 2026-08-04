@@ -206,22 +206,74 @@ struct EditorViewModelTests {
         #expect(editor.document.timeline.video.count == 2)
     }
 
+    @Test("Overlay and detached audio tracks are independently editable")
+    func overlaysAndDetachedAudio() throws {
+        let editor = makeEditor(document: try document())
+        let overlay = record(
+            id: "overlay",
+            displayName: "Overlay.mov",
+            duration: RationalTime(seconds: 2),
+            hasAudio: true
+        )
+
+        editor.addOverlayTrack()
+        editor.seek(to: RationalTime(seconds: 1))
+        #expect(editor.insert(overlay))
+
+        #expect(editor.document.timeline.videoTracks.count == 2)
+        #expect(
+            editor.document.timeline.videoTracks[1].items[0].timelineStart
+                == RationalTime(seconds: 1))
+        #expect(editor.targetedVideoTrack?.name == "V2")
+
+        editor.separateSelectedAudio()
+
+        #expect(editor.document.timeline.audioTracks.count == 2)
+        #expect(editor.selectedTrackKind == .audio)
+        let detachedID = try #require(editor.selectedItem?.id)
+        editor.deleteSelected()
+        #expect(editor.document.item(detachedID) == nil)
+        #expect(editor.document.timeline.videoTracks[1].items.count == 1)
+        editor.undo()
+        #expect(editor.document.item(detachedID) != nil)
+    }
+
+    @Test("Nested media selects and deletes as one undoable group")
+    func nestedMedia() throws {
+        let editor = makeEditor(document: try document())
+        let second = record(
+            id: "second",
+            displayName: "Second.mov",
+            duration: RationalTime(seconds: 2),
+            hasAudio: false
+        )
+        #expect(editor.insert(second))
+        let ids = editor.document.timeline.video.map(\.id)
+        editor.select(ids[0])
+        editor.select(ids[1], extending: true)
+
+        editor.nestSelection()
+
+        let nestIDs = Set(editor.document.timeline.video.compactMap(\.nestID))
+        #expect(nestIDs.count == 1)
+        editor.select(ids[0])
+        #expect(editor.selection == Set(ids))
+        editor.deleteSelected()
+        #expect(editor.document.timeline.video.isEmpty)
+        editor.undo()
+        #expect(Set(editor.document.timeline.video.map(\.id)) == Set(ids))
+    }
+
     private func makeEditor(
         document: ProjectDocument,
         eventTracks: [AssetID: EventTrack] = [:],
         clickTrackingState: ClickTrackingState = .disabled(reason: "off")
     ) -> EditorViewModel {
-        let record = AssetRecord(
-            id: AssetID(rawValue: "asset"),
-            relativePath: "Assets/asset.mov",
+        let record = record(
+            id: "asset",
             displayName: "asset.mov",
-            kind: .video,
-            createdAt: Date(timeIntervalSince1970: 1),
-            importedAt: Date(timeIntervalSince1970: 1),
-            byteSize: 1,
-            contentHash: "hash",
             duration: RationalTime(seconds: 6),
-            ingestState: .ready
+            hasAudio: true
         )
         return EditorViewModel(
             document: document,
@@ -231,6 +283,27 @@ struct EditorViewModelTests {
             buildsPlayback: false,
             resolving: { _ in URL(fileURLWithPath: "/tmp/asset.mov") },
             persisting: { _, _ in }
+        )
+    }
+
+    private func record(
+        id: String,
+        displayName: String,
+        duration: RationalTime,
+        hasAudio: Bool
+    ) -> AssetRecord {
+        AssetRecord(
+            id: AssetID(rawValue: id),
+            relativePath: "Assets/\(displayName)",
+            displayName: displayName,
+            kind: .video,
+            createdAt: Date(timeIntervalSince1970: 1),
+            importedAt: Date(timeIntervalSince1970: 1),
+            byteSize: 1,
+            contentHash: "hash-\(id)",
+            duration: duration,
+            hasAudio: hasAudio,
+            ingestState: .ready
         )
     }
 

@@ -495,7 +495,7 @@ public final class AppModel {
     }
 
     /// Reads the richest media representation from the system pasteboard and
-    /// appends it to the open timeline. Finder file copies stay file-backed;
+    /// adds it to the open timeline. Finder file copies stay file-backed;
     /// raw screenshot pixels are accepted as a still clip as well.
     public func pasteMediaIntoTimeline() {
         guard editor != nil else {
@@ -518,7 +518,7 @@ public final class AppModel {
             addImageDataToOpenTimeline(data, pathExtension: "tiff")
             return
         }
-        lastMessage = "Copy a video or photo, then paste it into the timeline."
+        lastMessage = "Copy a video, photo, or audio file, then paste it into the timeline."
     }
 
     public func addMediaToOpenTimeline(_ urls: [URL], source: IngestSource) {
@@ -541,7 +541,7 @@ public final class AppModel {
                     let record: AssetRecord
                     if Self.isImageURL(url) {
                         record = try await runtime.ingestTimelineImage(url, source: source)
-                    } else if Self.isVideoURL(url) {
+                    } else if Self.isVideoURL(url) || Self.isAudioURL(url) {
                         record = try await runtime.ingest(url, source: source)
                     } else {
                         continue
@@ -561,7 +561,7 @@ public final class AppModel {
             } else if let failedFileName {
                 lastMessage = "Couldn't add \(failedFileName) to the timeline."
             } else {
-                lastMessage = "Paste or drop a video or photo into the timeline."
+                lastMessage = "Paste or drop video, photos, or audio into the timeline."
             }
         }
     }
@@ -597,6 +597,12 @@ public final class AppModel {
         let pathExtension = url.pathExtension.lowercased()
         return UTType(filenameExtension: pathExtension)?.conforms(to: .movie) == true
             || ["mov", "mp4", "m4v", "webm", "mkv"].contains(pathExtension)
+    }
+
+    private static func isAudioURL(_ url: URL) -> Bool {
+        let pathExtension = url.pathExtension.lowercased()
+        return UTType(filenameExtension: pathExtension)?.conforms(to: .audio) == true
+            || ["wav", "aif", "aiff", "m4a", "mp3", "aac", "flac"].contains(pathExtension)
     }
 
     /// Puts an entry on the system pasteboard so it can be pasted in any app.

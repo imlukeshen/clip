@@ -128,7 +128,7 @@ private struct ThemedMainWindow: View {
             // spans only what is to its right. That leaves one hairline in the
             // shell instead of a horizontal rule crossing a vertical one.
             HStack(spacing: 0) {
-                if model.imageEditor == nil {
+                if !isEditing {
                     LibrarySidebar(model: model)
                     shellDivider
                 }
@@ -155,6 +155,11 @@ private struct ThemedMainWindow: View {
         }
         .background(theme.palette.surfaceBase)
         .foregroundStyle(theme.palette.textPrimary)
+    }
+
+    private var isEditing: Bool {
+        model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
+            || model.textEditor != nil
     }
 
     /// Carries on past the title bar and behind the traffic lights so the

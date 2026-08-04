@@ -92,7 +92,8 @@ import Testing
     let item = TimelineItem(
         id: ItemID(rawValue: "item"),
         assetID: AssetID(rawValue: "asset"),
-        sourceRange: range
+        sourceRange: range,
+        nestID: "nest-1"
     )
     let effect = Effect.cursor(
         CursorEffect(
@@ -115,6 +116,10 @@ import Testing
             .setTrack(
                 Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
             ),
+            .setVideoTracks([
+                Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
+            ]),
+            .setAudioTracks([]),
             .setMarkers([]),
             .setCaptions([]),
             .setCanvas(.fullHD),

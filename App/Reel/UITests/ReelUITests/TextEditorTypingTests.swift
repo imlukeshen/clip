@@ -144,6 +144,28 @@ final class TextEditorTypingTests: XCTestCase {
             app.descendants(matching: .any)["video-empty-timeline"]
                 .waitForExistence(timeout: 5)
         )
+        XCTAssertTrue(
+            app.buttons["sidebar-route-all-media"].waitForNonExistence(timeout: 5),
+            "The library sidebar should retract while the video editor is open"
+        )
+        for identifier in [
+            "video-tool-select",
+            "video-tool-razor",
+            "video-tool-snapping",
+            "video-tool-split",
+            "video-tool-delete",
+            "video-tool-ripple-delete",
+            "video-tool-separate-audio",
+            "video-tool-nest",
+            "video-tool-marker",
+            "video-tool-zoom",
+            "video-tool-auto-zoom",
+        ] {
+            XCTAssertTrue(
+                app.descendants(matching: .any)[identifier].waitForExistence(timeout: 5),
+                "Missing accessible editor tool: \(identifier)"
+            )
+        }
         XCTAssertTrue(app.staticTexts["0 clips"].waitForExistence(timeout: 5))
 
         NSPasteboard.general.clearContents()

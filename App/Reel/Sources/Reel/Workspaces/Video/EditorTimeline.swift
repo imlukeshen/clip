@@ -117,7 +117,7 @@ final class TimelineCanvas: NSView {
     private let labelWidth: CGFloat = 46
     private let rulerHeight: CGFloat = 24
     private let videoHeight: CGFloat = 34
-    private let audioHeight: CGFloat = 16
+    private let audioHeight: CGFloat = 26
     private let eventHeight: CGFloat = 11
     private let laneGap: CGFloat = 6
     private var gesture: Gesture?
@@ -133,7 +133,7 @@ final class TimelineCanvas: NSView {
 
     private enum Gesture {
         case scrub
-        case move(itemID: ItemID, originalIndex: Int)
+        case move(itemID: ItemID, kind: TrackKind, originalIndex: Int)
         case trim(
             itemID: ItemID,
             edge: Edge,
@@ -141,6 +141,15 @@ final class TimelineCanvas: NSView {
             speed: Double,
             originX: CGFloat
         )
+    }
+
+    private struct ItemRect {
+        var item: TimelineItem
+        var index: Int
+        var trackIndex: Int
+        var kind: TrackKind
+        var trackName: String
+        var rect: NSRect
     }
 
     private enum Edge: Equatable { case leading, trailing }
@@ -181,7 +190,7 @@ final class TimelineCanvas: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
-        if let hit = clip(at: point) {
+        if let hit = mediaItem(at: point) {
             onSelect?(hit.item.id, event.modifierFlags.contains(.shift))
             onSeek?(time(at: point.x), true)
             if activeTool == .razor {
@@ -205,7 +214,11 @@ final class TimelineCanvas: NSView {
                     originX: point.x
                 )
             } else if hit.trackIndex == 0 {
-                gesture = .move(itemID: hit.item.id, originalIndex: hit.index)
+                gesture = .move(
+                    itemID: hit.item.id,
+                    kind: hit.kind,
+                    originalIndex: hit.index
+                )
                 dropIndex = hit.index
                 NSCursor.closedHand.set()
             }
@@ -223,9 +236,9 @@ final class TimelineCanvas: NSView {
         switch gesture {
         case .scrub:
             scheduleSeek(to: time(at: point.x))
-        case .move:
+        case .move(_, let kind, _):
             autoscroll(with: event)
-            dropIndex = insertionIndex(at: point.x)
+            dropIndex = insertionIndex(at: point.x, kind: kind)
             needsDisplay = true
         case .trim(let itemID, let edge, let original, let speed, let originX):
             var sourceDelta = RationalTime(
@@ -233,9 +246,10 @@ final class TimelineCanvas: NSView {
             )
             let minimum = RationalTime(seconds: 0.1)
             guard
-                let item = timeline.videoTracks.lazy.flatMap(\.items).first(where: {
-                    $0.id == itemID
-                }),
+                let item = (timeline.videoTracks + timeline.audioTracks).lazy
+                    .flatMap(\.items).first(where: {
+                        $0.id == itemID
+                    }),
                 let assetDuration = assetDurations[item.assetID]
             else { return }
             if isSnappingEnabled {
@@ -304,7 +318,7 @@ final class TimelineCanvas: NSView {
             pendingSeek = nil
             onSeek?(time(at: point.x), true)
             onScrubbing?(false)
-        case .move(let itemID, let originalIndex):
+        case .move(let itemID, _, let originalIndex):
             if let dropIndex, dropIndex != originalIndex {
                 onReorder?(itemID, dropIndex)
             }
@@ -318,7 +332,7 @@ final class TimelineCanvas: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard case nil = gesture else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let hit = clip(at: point)
+        let hit = mediaItem(at: point)
         hoveredTime = time(at: point.x)
         hoveredItemID = hit?.item.id
         if let hit, abs(point.x - hit.rect.minX) <= 10 {
@@ -383,14 +397,18 @@ final class TimelineCanvas: NSView {
     }
 
     private var videoTrackCount: Int { max(timeline.videoTracks.count, 1) }
+    private var audioTrackCount: Int { max(timeline.audioTracks.count, 1) }
     private func videoY(for trackIndex: Int) -> CGFloat {
         let displayRow = videoTrackCount - 1 - trackIndex
         return rulerHeight + 4 + CGFloat(displayRow) * (videoHeight + laneGap)
     }
-    private var audioY: CGFloat {
+    private func audioY(for trackIndex: Int) -> CGFloat {
         rulerHeight + 4 + CGFloat(videoTrackCount) * (videoHeight + laneGap)
+            + CGFloat(trackIndex) * (audioHeight + laneGap)
     }
-    private var clickY: CGFloat { audioY + audioHeight + laneGap }
+    private var clickY: CGFloat {
+        audioY(for: 0) + CGFloat(audioTrackCount) * (audioHeight + laneGap)
+    }
     private var captionY: CGFloat { clickY + eventHeight + laneGap }
 
     private func displayItems(in track: Track, trackIndex: Int) -> [TimelineItem] {
@@ -414,18 +432,18 @@ final class TimelineCanvas: NSView {
         return items
     }
 
-    private func clipRects() -> [(
-        item: TimelineItem, index: Int, trackIndex: Int, rect: NSRect
-    )] {
+    private func videoItemRects() -> [ItemRect] {
         timeline.videoTracks.enumerated().flatMap { trackIndex, track in
             displayItems(in: track, trackIndex: trackIndex).enumerated().map { index, item in
                 let width = max(CGFloat(item.timelineDuration.seconds) * pointsPerSecond, 2)
                 let x = labelWidth + CGFloat(item.timelineStart.seconds) * pointsPerSecond
-                return (
-                    item,
-                    index,
-                    trackIndex,
-                    NSRect(
+                return ItemRect(
+                    item: item,
+                    index: index,
+                    trackIndex: trackIndex,
+                    kind: .video,
+                    trackName: track.name,
+                    rect: NSRect(
                         x: x,
                         y: videoY(for: trackIndex),
                         width: width,
@@ -436,17 +454,41 @@ final class TimelineCanvas: NSView {
         }
     }
 
-    private func clip(at point: NSPoint) -> (
-        item: TimelineItem, index: Int, trackIndex: Int, rect: NSRect
-    )? {
-        clipRects().first { $0.rect.insetBy(dx: 0, dy: -2).contains(point) }
+    private func audioItemRects() -> [ItemRect] {
+        timeline.audioTracks.enumerated().flatMap { trackIndex, track in
+            displayItems(in: track, trackIndex: trackIndex).enumerated().map { index, item in
+                let width = max(CGFloat(item.timelineDuration.seconds) * pointsPerSecond, 2)
+                let x = labelWidth + CGFloat(item.timelineStart.seconds) * pointsPerSecond
+                return ItemRect(
+                    item: item,
+                    index: index,
+                    trackIndex: trackIndex,
+                    kind: .audio,
+                    trackName: track.name,
+                    rect: NSRect(
+                        x: x,
+                        y: audioY(for: trackIndex),
+                        width: width,
+                        height: audioHeight
+                    )
+                )
+            }
+        }
     }
 
-    private func insertionIndex(at x: CGFloat) -> Int {
-        for clip in clipRects().filter({ $0.trackIndex == 0 }) where x < clip.rect.midX {
-            return clip.index
+    private func mediaItem(at point: NSPoint) -> ItemRect? {
+        (videoItemRects() + audioItemRects()).first {
+            $0.rect.insetBy(dx: 0, dy: -2).contains(point)
         }
-        return max(timeline.video.count - 1, 0)
+    }
+
+    private func insertionIndex(at x: CGFloat, kind: TrackKind) -> Int {
+        let items = (kind == .video ? videoItemRects() : audioItemRects())
+            .filter { $0.trackIndex == 0 }
+        for item in items where x < item.rect.midX {
+            return item.index
+        }
+        return max(items.count - 1, 0)
     }
 
     private func time(at x: CGFloat) -> RationalTime {
@@ -486,13 +528,24 @@ final class TimelineCanvas: NSView {
                 color: textTertiary
             )
         }
-        drawText("A", at: NSPoint(x: 18, y: audioY + 1), color: textTertiary)
+        if timeline.audioTracks.isEmpty {
+            drawText("A1↔", at: NSPoint(x: 8, y: audioY(for: 0) + 7), color: textTertiary)
+        } else {
+            for (index, track) in timeline.audioTracks.enumerated() {
+                let state = track.isLocked ? "🔒" : track.isMuted ? "M" : ""
+                drawText(
+                    "\(track.name)\(state)",
+                    at: NSPoint(x: 7, y: audioY(for: index) + 7),
+                    color: textTertiary
+                )
+            }
+        }
         drawText("●", at: NSPoint(x: 17, y: clickY - 2), color: clickColor)
         drawText("CC", at: NSPoint(x: 13, y: captionY - 2), color: textTertiary)
     }
 
     private func drawVideo() {
-        for clip in clipRects() {
+        for clip in videoItemRects() {
             let selected = selection.contains(clip.item.id)
             let hovered = hoveredItemID == clip.item.id
             let fillColor: NSColor
@@ -527,6 +580,14 @@ final class TimelineCanvas: NSView {
                 color: textPrimary
             )
             NSGraphicsContext.restoreGraphicsState()
+
+            if clip.item.nestID != nil, clip.rect.width > 58 {
+                drawText(
+                    "NEST",
+                    at: NSPoint(x: clip.rect.maxX - 34, y: clip.rect.minY + 8),
+                    color: textTertiary
+                )
+            }
 
             for (effectIndex, effect) in clip.item.effects.enumerated() {
                 let x =
@@ -585,15 +646,40 @@ final class TimelineCanvas: NSView {
     }
 
     private func drawAudio() {
-        for clip in clipRects() {
-            let rect = NSRect(
-                x: clip.rect.minX + 1,
-                y: audioY,
-                width: max(clip.rect.width - 2, 1),
-                height: audioHeight
+        let explicitAudio = !timeline.audioTracks.isEmpty
+        let items: [ItemRect]
+        if explicitAudio {
+            items = audioItemRects()
+        } else {
+            items = videoItemRects().map { video in
+                var linked = video
+                linked.kind = .audio
+                linked.trackIndex = 0
+                linked.trackName = "A1 linked"
+                linked.rect = NSRect(
+                    x: video.rect.minX,
+                    y: audioY(for: 0),
+                    width: video.rect.width,
+                    height: audioHeight
+                )
+                return linked
+            }
+        }
+        for media in items {
+            let rect = media.rect.insetBy(dx: 1, dy: 0)
+            let selected = explicitAudio && selection.contains(media.item.id)
+            let hovered = explicitAudio && hoveredItemID == media.item.id
+            (selected ? accentDim : audioColor.withAlphaComponent(0.13)).setFill()
+            let path = NSBezierPath(
+                roundedRect: rect,
+                xRadius: clipCornerRadius,
+                yRadius: clipCornerRadius
             )
-            audioColor.withAlphaComponent(0.13).setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2).fill()
+            path.fill()
+            (selected || hovered ? accent : audioColor.withAlphaComponent(0.42)).setStroke()
+            path.lineWidth = selected ? 1.5 : 0.7
+            path.stroke()
+
             audioColor.withAlphaComponent(0.42).setStroke()
             let wave = NSBezierPath()
             var x = rect.minX + 2
@@ -604,6 +690,24 @@ final class TimelineCanvas: NSView {
                 x += 4
             }
             wave.stroke()
+
+            if explicitAudio {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(rect: rect.insetBy(dx: 7, dy: 2)).addClip()
+                drawText(
+                    names[media.item.assetID] ?? "Audio",
+                    at: NSPoint(x: rect.minX + 8, y: rect.minY + 6),
+                    color: textPrimary
+                )
+                NSGraphicsContext.restoreGraphicsState()
+                if selected {
+                    accent.setFill()
+                    NSRect(x: rect.minX, y: rect.minY + 3, width: 3, height: rect.height - 6)
+                        .fill()
+                    NSRect(x: rect.maxX - 3, y: rect.minY + 3, width: 3, height: rect.height - 6)
+                        .fill()
+                }
+            }
         }
     }
 
@@ -613,11 +717,31 @@ final class TimelineCanvas: NSView {
             let x = labelWidth + CGFloat(marker.timelineTime.seconds) * pointsPerSecond
             NSRect(x: x - 1, y: clickY, width: 2, height: eventHeight).fill()
         }
-        refreshClickAccessibility()
+        refreshAccessibilityChildren()
     }
 
-    private func refreshClickAccessibility() {
-        let children = clickMarkers.map { marker -> NSAccessibilityElement in
+    private func refreshAccessibilityChildren() {
+        let mediaChildren = (videoItemRects() + audioItemRects()).map {
+            media -> NSAccessibilityElement in
+            let element = NSAccessibilityElement()
+            element.setAccessibilityParent(self)
+            element.setAccessibilityRole(.button)
+            let kind = media.kind == .video ? "video" : "audio"
+            element.setAccessibilityLabel(
+                "\(media.trackName) \(kind): \(names[media.item.assetID] ?? "Media")"
+            )
+            element.setAccessibilityValue(
+                "\(formatClickTime(media.item.timelineStart.seconds)), \(formatClickTime(media.item.timelineDuration.seconds)) long"
+            )
+            element.setAccessibilityIdentifier("timeline-item-\(media.item.id.rawValue)")
+            if let window {
+                element.setAccessibilityFrame(
+                    window.convertToScreen(convert(media.rect, to: nil))
+                )
+            }
+            return element
+        }
+        let clickChildren = clickMarkers.map { marker -> NSAccessibilityElement in
             let element = NSAccessibilityElement()
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(.staticText)
@@ -626,7 +750,7 @@ final class TimelineCanvas: NSView {
             element.setAccessibilityIdentifier(marker.id)
             return element
         }
-        setAccessibilityChildren(children)
+        setAccessibilityChildren(mediaChildren + clickChildren)
     }
 
     private func formatClickTime(_ seconds: Double) -> String {
@@ -714,19 +838,20 @@ final class TimelineCanvas: NSView {
     }
 
     private func drawDropMarker() {
-        guard case .move(_, let originalIndex) = gesture,
+        guard case .move(_, let kind, let originalIndex) = gesture,
             let dropIndex,
-            !clipRects().isEmpty
+            !(kind == .video ? videoItemRects() : audioItemRects()).isEmpty
         else { return }
-        let clips = clipRects().filter { $0.trackIndex == 0 }
-        let target = clips[min(dropIndex, clips.count - 1)].rect
+        let items = (kind == .video ? videoItemRects() : audioItemRects())
+            .filter { $0.trackIndex == 0 }
+        let target = items[min(dropIndex, items.count - 1)].rect
         let x = dropIndex > originalIndex ? target.maxX : target.minX
         accent.setFill()
         NSRect(
             x: x - 1,
-            y: videoY(for: 0) - 3,
+            y: target.minY - 3,
             width: 2,
-            height: videoHeight + 6
+            height: target.height + 6
         ).fill()
     }
 
