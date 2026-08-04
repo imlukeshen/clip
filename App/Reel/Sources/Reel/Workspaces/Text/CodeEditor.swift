@@ -49,6 +49,9 @@ struct CodeEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
 
         let scrollView = NSScrollView()
+        textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
+        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
+        textView.autoresizingMask = [.width]
         scrollView.documentView = textView
         scrollView.drawsBackground = true
         scrollView.hasVerticalScroller = true

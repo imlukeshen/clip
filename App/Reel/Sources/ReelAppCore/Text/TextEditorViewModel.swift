@@ -87,7 +87,6 @@ public final class TextEditorViewModel {
         self.hashData = hashData
         self.persistStructure = persistingStructure
         self.persistContents = persistingContents
-        undoManager.groupsByEvent = false
     }
 
     /// The file record currently being edited.
