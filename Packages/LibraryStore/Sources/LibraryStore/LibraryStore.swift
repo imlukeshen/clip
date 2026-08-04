@@ -5,7 +5,7 @@ import GRDB
 /// Owns Clip's durable file library and its disposable SQLite index.
 public actor LibraryStore {
     private let root: URL
-    private let database: DatabaseQueue
+    let database: DatabaseQueue
     private let bookmarks: BookmarkStore
     private let trashManager: any FileTrashManaging
     private let changeContinuation: AsyncStream<LibraryChange>.Continuation

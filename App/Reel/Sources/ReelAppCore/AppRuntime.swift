@@ -3,6 +3,7 @@ import ConvertKit
 import CoreModel
 import Foundation
 import LibraryStore
+import SearchEngine
 import TextEngine
 
 public struct CaptureDirectoryStatus: Sendable, Equatable {
@@ -25,6 +26,7 @@ public actor AppRuntime {
     private let bookmarks: BookmarkStore
     private let folders: LibraryFolders
     private let pipeline: IngestPipeline
+    private let indexPipeline: IndexPipeline
     private let coordinator: IngestCoordinator
     private let converter = Converter()
     private let clickTracking: EventTrackAssociator
@@ -66,6 +68,7 @@ public actor AppRuntime {
         let captureDirectory = preferredCaptureDirectory.url
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
+        let indexPipeline = IndexPipeline(store: library)
         let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
         let captureInboxes =
             Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
@@ -89,6 +92,7 @@ public actor AppRuntime {
         self.bookmarks = bookmarks
         self.folders = LibraryFolders(root: root, library: library)
         self.pipeline = pipeline
+        self.indexPipeline = indexPipeline
         self.clickTracking = clickTracking
         self.captureDirectory = captureDirectory
         self.libraryWatcher = LibraryRootWatcher(url: LibraryLayout.media(in: root)) {
@@ -103,6 +107,7 @@ public actor AppRuntime {
             history: history,
             didIngest: { record, sourceURL in
                 let associated = await clickTracking.associate(record, sourceURL: sourceURL)
+                await indexPipeline.enqueue(associated.id, stages: [.metadata])
                 await didAutomaticallyIngest(associated)
             },
             didCapture: didCaptureSystemFile
@@ -150,6 +155,11 @@ public actor AppRuntime {
 
     public func start() async throws -> CaptureDirectoryStatus {
         await library.refreshLocations()
+        let existingAssets = try await library.assets(kind: nil, limit: Int.max, offset: 0)
+        for asset in existingAssets {
+            await indexPipeline.enqueue(asset.id, stages: [.metadata])
+        }
+        await indexPipeline.resumePending()
         libraryWatcher.start()
         _ = await clickTracking.start()
         beginClipboardCapture()
@@ -256,11 +266,22 @@ public actor AppRuntime {
         await clipboardWatcher.stop()
         await coordinator.stop()
         await clickTracking.stop()
+        await indexPipeline.stop()
     }
 
     public func ingest(_ url: URL, source: IngestSource) async throws -> AssetRecord {
         let record = try await pipeline.ingest(url, source: source)
-        return await clickTracking.associate(record, sourceURL: url)
+        let associated = await clickTracking.associate(record, sourceURL: url)
+        await indexPipeline.enqueue(associated.id, stages: [.metadata])
+        return associated
+    }
+
+    public func indexProgress() -> AsyncStream<IndexProgress> {
+        indexPipeline.progress
+    }
+
+    public func setIndexPauseReasons(_ reasons: Set<IndexPauseReason>) async {
+        await indexPipeline.setPauseReasons(reasons)
     }
 
     public func assets() async throws -> [AssetRecord] {
@@ -321,6 +342,9 @@ public actor AppRuntime {
 
     public func restore(_ receipt: TrashReceipt) async throws {
         try await library.restore(receipt)
+        for item in receipt.items {
+            await indexPipeline.enqueue(item.asset.id, stages: [.metadata])
+        }
     }
 
     public func locate(assetID: AssetID, at url: URL) async throws {

@@ -29,6 +29,8 @@ packages:
     path: Packages/PDFEngine
   AIKit:
     path: Packages/AIKit
+  SearchEngine:
+    path: Packages/SearchEngine
 
 targets:
   Clip:
@@ -55,6 +57,7 @@ targets:
       - package: MediaEngine
       - package: PDFEngine
       - package: AIKit
+      - package: SearchEngine
     configFiles:
       Debug: App/Reel/Config/xcconfig/Debug.xcconfig
       Release: App/Reel/Config/xcconfig/Release.xcconfig

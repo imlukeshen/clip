@@ -7,6 +7,7 @@ import Foundation
 import LibraryStore
 import Observation
 import PDFEngine
+import SearchEngine
 import TextEngine
 
 @MainActor
@@ -35,6 +36,7 @@ public final class AppModel {
     public private(set) var libraryRoot: URL
     public private(set) var isWatching = false
     public private(set) var ingestCount = 0
+    public private(set) var indexProgress = IndexProgress()
     public private(set) var conversionQueue: [ConversionQueueItem] = []
     public private(set) var editor: EditorViewModel?
     public private(set) var imageEditor: ImageEditorViewModel?
@@ -64,6 +66,8 @@ public final class AppModel {
     private let shortcutReader: ShortcutReader
     private var runtime: AppRuntime?
     private var libraryChangesTask: Task<Void, Never>?
+    private var indexProgressTask: Task<Void, Never>?
+    private var indexActivityTask: Task<Void, Never>?
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
     private var folderForwardHistory: [String?] = []
@@ -195,6 +199,7 @@ public final class AppModel {
                 }
             )
             self.runtime = runtime
+            beginIndexMonitoring(runtime)
             let changes = await runtime.changes()
             libraryChangesTask = Task { [weak self] in
                 for await _ in changes {
@@ -216,6 +221,33 @@ public final class AppModel {
         } catch {
             isWatching = false
             lastMessage = "The library could not be opened. Check the folder and try again."
+        }
+    }
+
+    private func beginIndexMonitoring(_ runtime: AppRuntime) {
+        indexProgressTask?.cancel()
+        indexActivityTask?.cancel()
+        indexProgressTask = Task { [weak self] in
+            let updates = await runtime.indexProgress()
+            for await progress in updates {
+                guard !Task.isCancelled else { return }
+                self?.indexProgress = progress
+            }
+        }
+        indexActivityTask = Task { [weak self] in
+            var previous: Set<IndexPauseReason>?
+            while !Task.isCancelled {
+                guard let self else { return }
+                var reasons: Set<IndexPauseReason> = []
+                if editor?.isPlaying == true { reasons.insert(.playback) }
+                if editor?.isExporting == true { reasons.insert(.export) }
+                if isConverting { reasons.insert(.conversion) }
+                if reasons != previous {
+                    await runtime.setIndexPauseReasons(reasons)
+                    previous = reasons
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
     }
 

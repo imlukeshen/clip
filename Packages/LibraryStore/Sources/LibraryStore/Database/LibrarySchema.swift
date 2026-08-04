@@ -80,6 +80,25 @@ enum LibrarySchema {
                 table.add(column: "missing_since", .double)
             }
         }
+        migrator.registerMigration("v4-search-index-jobs") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE index_job (
+                      asset_id   TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      stage      TEXT NOT NULL,
+                      state      TEXT NOT NULL CHECK (
+                        state IN ('pending', 'running', 'done', 'failed', 'skipped')
+                      ),
+                      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                      error      TEXT,
+                      updated_at REAL NOT NULL,
+                      PRIMARY KEY (asset_id, stage)
+                    );
+                    CREATE INDEX idx_index_job_schedule
+                      ON index_job(state, updated_at, stage);
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }

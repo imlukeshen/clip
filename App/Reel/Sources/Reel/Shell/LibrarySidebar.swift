@@ -89,6 +89,11 @@ struct LibrarySidebar: View {
             }
 
             Spacer(minLength: 0)
+            if model.indexProgress.total > 0, !model.indexProgress.isComplete {
+                indexProgressFooter
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
             smartRow(
                 "Convert",
                 icon: "arrow.left.arrow.right",
@@ -118,6 +123,43 @@ struct LibrarySidebar: View {
             }
             .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+    }
+
+    private var indexProgressFooter: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(
+                    systemName: model.indexProgress.isPaused
+                        ? "pause.fill" : "sparkle.magnifyingglass"
+                )
+                .font(.system(size: 10, weight: .medium))
+                Text(indexProgressTitle)
+                    .font(theme.type.micro.font)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(model.indexProgress.completed)/\(model.indexProgress.total)")
+                    .font(theme.type.numeric.font)
+            }
+            .foregroundStyle(theme.palette.textTertiary)
+            ProgressView(value: model.indexProgress.fraction)
+                .progressViewStyle(.linear)
+                .controlSize(.mini)
+                .tint(theme.palette.accent)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(indexProgressTitle)
+        .accessibilityValue(
+            "\(model.indexProgress.completed) of \(model.indexProgress.total) complete"
+        )
+    }
+
+    private var indexProgressTitle: String {
+        if let reason = model.indexProgress.pauseReasons.sorted(by: { $0.rawValue < $1.rawValue })
+            .first
+        {
+            return "Paused for \(reason.displayName)"
+        }
+        return "Indexing library"
     }
 
     /// Where the library lives. This used to be the absolute path and the words
