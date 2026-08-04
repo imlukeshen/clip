@@ -797,6 +797,19 @@ public final class AppModel {
         }
     }
 
+    public func indexedText(at time: RationalTime, in assetID: AssetID) async -> [OCRSpan] {
+        guard let runtime else { return [] }
+        return (try? await runtime.indexedText(at: time, in: assetID)) ?? []
+    }
+
+    public func searchLibrary(for text: String) {
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        closeOpenEditors()
+        searchQuery = query
+        focusSearch()
+    }
+
     public func clearSearch() {
         searchQuery = ""
     }

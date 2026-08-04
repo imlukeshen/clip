@@ -56,6 +56,33 @@ struct EditorViewModelTests {
         #expect(editor.document == original)
     }
 
+    @Test("Live Text maps project time to source time and redacts in one undo")
+    func liveTextRedaction() throws {
+        var original = try document()
+        original.timeline.video[0].sourceRange.start = RationalTime(seconds: 10)
+        original.timeline.video[0].speed = 2
+        let editor = makeEditor(document: original)
+        editor.seek(to: RationalTime(seconds: 1))
+
+        #expect(
+            editor.sourceMomentAtPlayhead
+                == EditorSourceMoment(
+                    assetID: AssetID(rawValue: "asset"),
+                    time: RationalTime(seconds: 12)
+                )
+        )
+
+        editor.redactCurrentRegions([
+            NormalizedRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1),
+            NormalizedRect(x: 0.5, y: 0.6, width: 0.2, height: 0.1),
+        ])
+
+        #expect(editor.document.timeline.video[0].effects.count == 2)
+        #expect(editor.document.timeline.video[0].effects.allSatisfy { $0.kind == .blur })
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
     @Test("Preview dragging positions the visible clip and remains exactly undoable")
     func previewDraggingPositionsClip() throws {
         let original = try document()

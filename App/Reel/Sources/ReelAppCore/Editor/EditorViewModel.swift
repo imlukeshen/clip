@@ -11,6 +11,16 @@ public enum TimelineTool: String, Sendable, CaseIterable {
     case razor
 }
 
+public struct EditorSourceMoment: Sendable, Equatable, Hashable {
+    public var assetID: AssetID
+    public var time: RationalTime
+
+    public init(assetID: AssetID, time: RationalTime) {
+        self.assetID = assetID
+        self.time = time
+    }
+}
+
 @MainActor
 @Observable
 public final class EditorViewModel {
@@ -84,6 +94,15 @@ public final class EditorViewModel {
     public var selectedLocalTime: RationalTime {
         guard let selectedItem else { return .zero }
         return min(max(playhead - selectedItem.timelineStart, .zero), selectedItem.timelineDuration)
+    }
+
+    /// The immutable source asset and source-local time visible at the playhead.
+    public var sourceMomentAtPlayhead: EditorSourceMoment? {
+        guard let location = document.item(at: playhead) else { return nil }
+        return EditorSourceMoment(
+            assetID: location.item.assetID,
+            time: location.item.sourceRange.start + location.local.scaled(by: location.item.speed)
+        )
     }
 
     public var selectedOpacity: Double {
@@ -895,6 +914,42 @@ public final class EditorViewModel {
             ),
             to: itemID
         )
+    }
+
+    /// Hands one or more OCR regions to the existing destructive video effect path.
+    /// Regions use Clip's top-left normalized canvas coordinates.
+    public func redactCurrentRegions(_ regions: [NormalizedRect]) {
+        guard let item = document.item(at: playhead)?.item else {
+            notice = "Move the playhead over a clip before adding a redaction."
+            return
+        }
+        let valid = regions.filter {
+            $0.width > 0 && $0.height > 0 && $0.x < 1 && $0.y < 1
+                && $0.x + $0.width > 0 && $0.y + $0.height > 0
+        }
+        guard !valid.isEmpty else { return }
+        let operations = valid.map { region in
+            GraphOp.addEffect(
+                item.id,
+                .blur(
+                    BlurEffect(
+                        id: .generate(),
+                        range: item.effectRange,
+                        regions: [TimedRegion(time: .zero, rect: region)],
+                        mode: .pixelate(size: 14),
+                        isDestructiveOnExport: true
+                    )
+                )
+            )
+        }
+        do {
+            try perform(
+                GraphPatch(ops: operations, label: "Redact Live Text", origin: .user)
+            )
+            notice = valid.count == 1 ? "Redaction added." : "Redactions added."
+        } catch {
+            notice = "The redaction could not be added."
+        }
     }
 
     public func removeEffect(_ effectID: EffectID, from itemID: ItemID) {

@@ -148,6 +148,32 @@ public final class ImageEditorViewModel {
     public func undo() { undoManager.undo() }
     public func redo() { undoManager.redo() }
 
+    /// Adds OCR-derived regions through the same undoable layer path as a manual redaction.
+    /// Regions use Clip's top-left normalized canvas coordinates.
+    public func addRedaction(regions: [NormalizedRect]) {
+        let rects = regions.compactMap { region -> CGRect? in
+            let rect = CGRect(
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height
+            ).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            return isUsable(rect) ? rect : nil
+        }
+        guard !rects.isEmpty else { return }
+        let layer = Layer.redaction(RedactionLayer(regions: rects, style: redactionStyle))
+        do {
+            try perform(
+                .addLayer(layer, atIndex: document.layers.count),
+                actionName: "Redact Live Text"
+            )
+            selectedLayerID = layer.id
+            notice = rects.count == 1 ? "Redaction added." : "Redactions added."
+        } catch {
+            notice = "The redaction could not be added."
+        }
+    }
+
     public func commitGesture(from start: CGPoint, to end: CGPoint) {
         commitGesture(points: [start, end])
     }

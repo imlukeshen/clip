@@ -5,6 +5,36 @@ import ReelAppCore
 import Testing
 
 @MainActor
+@Test func liveTextRegionsBecomeOneUndoableRedactionLayer() throws {
+    let source = try temporaryImageSource()
+    defer { try? FileManager.default.removeItem(at: source) }
+    let original = try ImageDocument(
+        id: DocumentID(rawValue: "live-text-redaction-test"),
+        sourceAssetID: AssetID(rawValue: "image-source"),
+        canvas: ImageCanvas(width: 1_200, height: 800)
+    )
+    let editor = ImageEditorViewModel(
+        document: original,
+        sourceURL: source,
+        persisting: { _ in }
+    )
+
+    editor.addRedaction(regions: [
+        NormalizedRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1),
+        NormalizedRect(x: 0.55, y: 0.6, width: 0.2, height: 0.1),
+    ])
+
+    guard case .redaction(let redaction) = editor.document.layers.first else {
+        Issue.record("Expected one redaction layer")
+        return
+    }
+    #expect(redaction.regions.count == 2)
+    editor.undo()
+    #expect(editor.document == original)
+    editor.stop()
+}
+
+@MainActor
 @Test func cropAnnotationAndPaddingEachUndoExactly() throws {
     let source = try temporaryImageSource()
     defer { try? FileManager.default.removeItem(at: source) }

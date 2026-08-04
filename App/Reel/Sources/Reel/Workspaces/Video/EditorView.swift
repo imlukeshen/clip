@@ -5,6 +5,7 @@ import DesignSystem
 import LibraryStore
 import MediaEngine
 import ReelAppCore
+import SearchEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,6 +17,7 @@ struct EditorView: View {
     @State private var exportCompletionAction = CompletionAction.reveal
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
+    @State private var liveTextSpans: [OCRSpan] = []
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -60,6 +62,9 @@ struct EditorView: View {
                 NSPasteboard.general.setString(url.path, forType: .string)
             case .nothing: break
             }
+        }
+        .task(id: liveTextRequestID) {
+            await refreshLiveText()
         }
     }
 
@@ -209,6 +214,21 @@ struct EditorView: View {
                         .scaleEffect(previewScale)
                         .offset(previewDragOffset)
 
+                    if !editor.isPlaying, !liveTextSpans.isEmpty {
+                        LiveTextOverlay(
+                            spans: liveTextSpans,
+                            onSearch: model.searchLibrary,
+                            onRedact: { regions in
+                                editor.redactCurrentRegions(
+                                    regions.map(LiveTextFrame.canvasRect(for:))
+                                )
+                            }
+                        )
+                        .frame(width: contentSize.width, height: contentSize.height)
+                        .scaleEffect(previewScale)
+                        .offset(previewDragOffset)
+                    }
+
                     if editor.isBuilding {
                         ProgressView()
                             .controlSize(.small)
@@ -243,6 +263,19 @@ struct EditorView: View {
                         }
                         .buttonStyle(ReelBorderedButtonStyle())
                         .padding(10)
+                    }
+                }
+                .overlay(alignment: .bottomLeading) {
+                    if !editor.isPlaying, !liveTextSpans.isEmpty {
+                        Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+                            .font(theme.type.caption.font)
+                            .foregroundStyle(theme.palette.textPrimary)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 9)
+                            .background(theme.palette.surfacePanel.opacity(0.9))
+                            .clipShape(Capsule())
+                            .padding(10)
+                            .allowsHitTesting(false)
                     }
                 }
                 .accessibilityLabel("Video preview")
@@ -301,6 +334,21 @@ struct EditorView: View {
             .frame(height: 38)
             .background(theme.palette.surfacePanel)
         }
+    }
+
+    private var liveTextRequestID: String {
+        guard !editor.isPlaying, let moment = editor.sourceMomentAtPlayhead else {
+            return "playing-or-empty"
+        }
+        return "\(moment.assetID.rawValue):\(moment.time.value)"
+    }
+
+    private func refreshLiveText() async {
+        guard !editor.isPlaying, let moment = editor.sourceMomentAtPlayhead else {
+            liveTextSpans = []
+            return
+        }
+        liveTextSpans = await model.indexedText(at: moment.time, in: moment.assetID)
     }
 
     private func fittedPreviewSize(in available: CGSize) -> CGSize {

@@ -3,6 +3,7 @@ import CoreModel
 import DesignSystem
 import MediaEngine
 import ReelAppCore
+import SearchEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,7 @@ struct ImageEditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: ImageEditorViewModel
     @State private var zoomLevel = 1.0
+    @State private var liveTextSpans: [OCRSpan] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,7 +23,17 @@ struct ImageEditorView: View {
             HStack(spacing: 0) {
                 toolRail
                 Divider().overlay(theme.palette.line)
-                ImageCanvasView(editor: editor, zoomLevel: $zoomLevel)
+                ImageCanvasView(
+                    editor: editor,
+                    zoomLevel: $zoomLevel,
+                    liveTextSpans: liveTextSpans,
+                    onSearch: model.searchLibrary,
+                    onRedact: { regions in
+                        editor.addRedaction(
+                            regions: regions.map(LiveTextFrame.canvasRect(for:))
+                        )
+                    }
+                )
             }
         }
         .background(theme.palette.surfaceBase)
@@ -34,6 +46,12 @@ struct ImageEditorView: View {
                         editor.clearNotice()
                     }
             }
+        }
+        .task(id: editor.document.sourceAssetID) {
+            liveTextSpans = await model.indexedText(
+                at: .zero,
+                in: editor.document.sourceAssetID
+            )
         }
     }
 
@@ -312,6 +330,9 @@ private struct ImageCanvasView: View {
     @Environment(\.theme) private var theme
     @Bindable var editor: ImageEditorViewModel
     @Binding var zoomLevel: Double
+    let liveTextSpans: [OCRSpan]
+    let onSearch: (String) -> Void
+    let onRedact: ([NormalizedRect]) -> Void
     @State private var draftPoints: [CGPoint] = []
     @State private var movingLayerID: LayerID?
     @State private var selectionTranslation = CGPoint.zero
@@ -395,6 +416,14 @@ private struct ImageCanvasView: View {
                 .resizable()
                 .interpolation(.high)
 
+            if editor.activeTool == .select, !liveTextSpans.isEmpty {
+                LiveTextOverlay(
+                    spans: liveTextSpans,
+                    onSearch: onSearch,
+                    onRedact: onRedact
+                )
+            }
+
             if editor.activeTool == .crop, let crop = editor.pendingCrop {
                 CropOverlay(crop: crop)
             } else {
@@ -420,6 +449,19 @@ private struct ImageCanvasView: View {
                 .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.38), radius: 26, y: 12)
+        .overlay(alignment: .bottomLeading) {
+            if editor.activeTool == .select, !liveTextSpans.isEmpty {
+                Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 9)
+                    .background(theme.palette.surfacePanel.opacity(0.9))
+                    .clipShape(Capsule())
+                    .padding(10)
+                    .allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .gesture(interactionGesture(in: size))
     }
