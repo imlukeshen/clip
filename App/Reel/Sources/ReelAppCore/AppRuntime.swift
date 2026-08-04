@@ -29,7 +29,7 @@ public actor AppRuntime {
     private let indexPipeline: IndexPipeline
     private let searchEngine: SearchEngine
     private let coordinator: IngestCoordinator
-    private let converter = Converter()
+    private let converter: Converter
     private let clickTracking: EventTrackAssociator
     private let libraryWatcher: LibraryRootWatcher
     private let history: CaptureHistory
@@ -48,6 +48,7 @@ public actor AppRuntime {
     ///     records something the user copied, so the app can refresh the history.
     public init(
         libraryRoot: URL,
+        conversionCapabilities: ConversionCapabilities = .appStore,
         didAutomaticallyIngest: @escaping @Sendable (AssetRecord) async -> Void = { _ in },
         didCaptureSystemFile: @escaping @Sendable (URL) async -> Void = { _ in },
         didCaptureClipboard: @escaping @Sendable () async -> Void = {}
@@ -99,6 +100,7 @@ public actor AppRuntime {
         let clickTracking = EventTrackAssociator(library: library)
 
         self.didCaptureClipboard = didCaptureClipboard
+        self.converter = Converter(capabilities: conversionCapabilities)
         self.libraryRoot = root
         self.library = library
         self.bookmarks = bookmarks

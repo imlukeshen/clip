@@ -8,7 +8,11 @@ public struct ConversionPlanner: Sendable {
 
     private let edges: [ConversionEdge]
 
-    public init(edges: [ConversionEdge] = BuiltInConversionGraph.edges) {
+    public init(capabilities: ConversionCapabilities = .appStore) {
+        self.edges = BuiltInConversionGraph.edges(capabilities: capabilities)
+    }
+
+    public init(edges: [ConversionEdge]) {
         self.edges = edges
     }
 
@@ -86,12 +90,17 @@ public struct ConversionPlanner: Sendable {
 public func plan(
     from source: AssetRecord,
     to target: TargetFormat,
-    options: ConversionOptions = ConversionOptions()
+    options: ConversionOptions = ConversionOptions(),
+    capabilities: ConversionCapabilities = .appStore
 ) -> ConversionPlan {
     guard let sourceFormat = FormatID(asset: source) else {
         return unsupported("The input format could not be identified")
     }
-    return ConversionPlanner().plan(from: sourceFormat, to: target.formatID, options: options)
+    return ConversionPlanner(capabilities: capabilities).plan(
+        from: sourceFormat,
+        to: target.formatID,
+        options: options
+    )
         ?? unsupported("That target is not reachable from this source")
 }
 
@@ -122,6 +131,10 @@ extension FormatID {
 
 public enum BuiltInConversionGraph {
     public static var edges: [ConversionEdge] {
+        edges(capabilities: .appStore)
+    }
+
+    public static func edges(capabilities: ConversionCapabilities) -> [ConversionEdge] {
         RemuxTranscoder().edges()
             + VideoToolboxTranscoder().edges()
             + ImageIOTranscoder().edges()
@@ -130,6 +143,7 @@ public enum BuiltInConversionGraph {
             + WebKitBackend().edges()
             + MarkdownBackend().edges()
             + FFmpegTranscoder().edges()
+            + LibreOfficeBackend(capabilities: capabilities).edges()
     }
 }
 

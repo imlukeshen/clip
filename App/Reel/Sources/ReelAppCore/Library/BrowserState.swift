@@ -14,6 +14,7 @@ public enum AssetActivationRoute: Sendable, Equatable {
     case photoEditor
     case pdfEditor
     case textEditor
+    case conversion
     case none
 
     public init(kind: AssetKind) {
@@ -23,6 +24,16 @@ public enum AssetActivationRoute: Sendable, Equatable {
         case .document: self = .pdfEditor
         case .text: self = .textEditor
         case .audio: self = .none
+        }
+    }
+
+    public init(asset: AssetRecord) {
+        if asset.kind == .document, asset.container?.lowercased() != "pdf" {
+            self = .conversion
+        } else if asset.kind == .audio {
+            self = .conversion
+        } else {
+            self.init(kind: asset.kind)
         }
     }
 }

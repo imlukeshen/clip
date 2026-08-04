@@ -1,5 +1,6 @@
 import AIKit
 import CaptureKit
+import ConvertKit
 import Foundation
 import ReelAppCore
 import SwiftUI
@@ -13,9 +14,11 @@ struct ClipApp: App {
         #if APPSTORE_BUILD
             let shortcutReader = ShortcutReader(sandboxed: true)
             let defaultLibraryRoot = AppModel.sandboxLibraryRoot
+            let conversionCapabilities = ConversionCapabilities.appStore
         #else
             let shortcutReader = ShortcutReader(sandboxed: false)
             let defaultLibraryRoot = AppModel.defaultLibraryRoot
+            let conversionCapabilities = ConversionCapabilities.direct()
         #endif
         #if DEBUG
             let libraryRoot =
@@ -26,7 +29,11 @@ struct ClipApp: App {
             let libraryRoot = defaultLibraryRoot
         #endif
         _model = State(
-            initialValue: AppModel(libraryRoot: libraryRoot, shortcutReader: shortcutReader)
+            initialValue: AppModel(
+                libraryRoot: libraryRoot,
+                shortcutReader: shortcutReader,
+                conversionCapabilities: conversionCapabilities
+            )
         )
     }
 

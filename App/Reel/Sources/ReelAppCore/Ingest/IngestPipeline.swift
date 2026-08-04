@@ -202,7 +202,10 @@ public actor IngestPipeline {
         ]
         // Text and code files ingest as `AssetKind.text`; the recognized set is
         // owned by the language detector so ingest and highlighting agree.
-        let supported = media.union(LanguageDetector.recognizedExtensions)
+        let supported =
+            media
+            .union(IngestFileTypes.officeDocuments)
+            .union(LanguageDetector.recognizedExtensions)
         let fileExtension = url.pathExtension.lowercased()
         guard supported.contains(fileExtension) else {
             throw IngestError.unsupportedType(fileExtension)

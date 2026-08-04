@@ -79,6 +79,7 @@ public final class AppModel {
     public private(set) var pendingAssistantActions: [PendingAssistantAction] = []
     public private(set) var isAssistantWorking = false
     public let aiSettings: AISettingsModel
+    public let conversionCapabilities: ConversionCapabilities
 
     private let shortcutReader: ShortcutReader
     private var runtime: AppRuntime?
@@ -93,11 +94,13 @@ public final class AppModel {
 
     public init(
         libraryRoot: URL = AppModel.defaultLibraryRoot,
-        shortcutReader: ShortcutReader = ShortcutReader()
+        shortcutReader: ShortcutReader = ShortcutReader(),
+        conversionCapabilities: ConversionCapabilities = .appStore
     ) {
         let normalizedLibraryRoot = libraryRoot.standardizedFileURL
         self.libraryRoot = normalizedLibraryRoot
         self.shortcutReader = shortcutReader
+        self.conversionCapabilities = conversionCapabilities
         self.shortcutRow = ShortcutRowModel(result: shortcutReader.read())
         self.aiSettings = AISettingsModel(libraryRoot: normalizedLibraryRoot)
         self.conversionConcurrency = min(
@@ -236,6 +239,7 @@ public final class AppModel {
         do {
             let runtime = try await AppRuntime(
                 libraryRoot: libraryRoot,
+                conversionCapabilities: conversionCapabilities,
                 didAutomaticallyIngest: { [weak self] record in
                     await self?.handleAutomaticIngest(record)
                 },
@@ -810,14 +814,36 @@ public final class AppModel {
             lastMessage = "Locate this missing file before opening it."
             return
         }
-        switch AssetActivationRoute(kind: asset.kind) {
+        switch AssetActivationRoute(asset: asset) {
         case .videoEditor: openEditor(for: id)
         case .photoEditor: openImageEditor(for: id)
         case .pdfEditor: openPDFEditor(for: id)
         case .textEditor: openTextEditor(for: id)
+        case .conversion: openConverter(for: asset)
         case .none:
             showWorkspace(.convert)
-            lastMessage = "Audio files are available in Convert."
+            lastMessage = "This file is available in Convert."
+        }
+    }
+
+    private func openConverter(for asset: AssetRecord) {
+        showWorkspace(.convert)
+        guard !conversionQueue.contains(where: { $0.asset.id == asset.id }),
+            let runtime
+        else { return }
+        Task {
+            do {
+                let inputURL = try await runtime.url(for: asset.id)
+                var item = ConversionQueueItem(
+                    asset: asset,
+                    inputURL: inputURL,
+                    capabilities: conversionCapabilities
+                )
+                item.setConflictPolicy(conversionConflictPolicy)
+                conversionQueue.append(item)
+            } catch {
+                lastMessage = "Couldn't add \(asset.displayName) to Convert."
+            }
         }
     }
 
@@ -920,6 +946,11 @@ public final class AppModel {
         }
     }
 
+    public var shouldSuggestLibreOffice: Bool {
+        conversionCapabilities.allowsExternalProcesses
+            && !conversionCapabilities.isLibreOfficeAvailable
+    }
+
     public var hasConvertibleItems: Bool {
         conversionQueue.contains { item in
             switch item.status {
@@ -955,7 +986,11 @@ public final class AppModel {
                     let asset = try await runtime.ingest(url, source: source)
                     let inputURL = try await runtime.url(for: asset.id)
                     if !conversionQueue.contains(where: { $0.asset.id == asset.id }) {
-                        var item = ConversionQueueItem(asset: asset, inputURL: inputURL)
+                        var item = ConversionQueueItem(
+                            asset: asset,
+                            inputURL: inputURL,
+                            capabilities: conversionCapabilities
+                        )
                         item.setConflictPolicy(conversionConflictPolicy)
                         conversionQueue.append(item)
                     }
@@ -1302,6 +1337,7 @@ public final class AppModel {
             try await runtime.similarAssets(to: assetID, limit: limit)
         }
         context.conversionDestination = conversionDestinationFolder
+        context.conversionCapabilities = conversionCapabilities
         context.converting = { jobs in
             let stream = await runtime.convert(jobs)
             var outcomes: [UUID: BatchItemOutcome] = [:]

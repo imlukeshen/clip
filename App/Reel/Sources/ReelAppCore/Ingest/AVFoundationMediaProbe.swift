@@ -19,6 +19,9 @@ public struct AVFoundationMediaProbe: MediaProbing {
         if fileExtension == "pdf" {
             return try probeDocument(url)
         }
+        if IngestFileTypes.officeDocuments.contains(fileExtension) {
+            return try probeOfficeDocument(url, fileExtension: fileExtension)
+        }
         if LanguageDetector.recognizedExtensions.contains(fileExtension) {
             return try probeText(url, fileExtension: fileExtension)
         }
@@ -66,6 +69,28 @@ public struct AVFoundationMediaProbe: MediaProbing {
             codec: nil,
             width: Int(mediaBox.width.rounded()),
             height: Int(mediaBox.height.rounded()),
+            duration: nil,
+            nominalFPS: nil,
+            isVariableFPS: false,
+            hasAudio: false,
+            preferredTransform: nil
+        )
+    }
+
+    private func probeOfficeDocument(
+        _ url: URL,
+        fileExtension: String
+    ) throws -> MediaProbeResult {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true, (values.fileSize ?? 0) > 0 else {
+            throw IngestError.unreadable(url, underlying: "Office document is empty")
+        }
+        return MediaProbeResult(
+            kind: .document,
+            container: fileExtension,
+            codec: nil,
+            width: nil,
+            height: nil,
             duration: nil,
             nominalFPS: nil,
             isVariableFPS: false,

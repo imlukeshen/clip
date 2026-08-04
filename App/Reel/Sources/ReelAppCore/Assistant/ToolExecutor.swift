@@ -26,6 +26,7 @@ public struct ToolExecutionContext: Sendable {
     public var readingText: TextReader
     public var searchingSimilar: SimilarSearcher
     public var conversionDestination: URL?
+    public var conversionCapabilities: ConversionCapabilities
     public var converting: BatchConverter
 
     public init(
@@ -48,6 +49,7 @@ public struct ToolExecutionContext: Sendable {
             throw ToolExecutorError.searchUnavailable
         },
         conversionDestination: URL? = nil,
+        conversionCapabilities: ConversionCapabilities = .appStore,
         converting: @escaping BatchConverter = { _ in
             throw ToolExecutorError.conversionUnavailable
         }
@@ -63,6 +65,7 @@ public struct ToolExecutionContext: Sendable {
         self.readingText = readingText
         self.searchingSimilar = searchingSimilar
         self.conversionDestination = conversionDestination
+        self.conversionCapabilities = conversionCapabilities
         self.converting = converting
     }
 }
@@ -158,7 +161,7 @@ public struct ToolExecutor: Sendable {
         case "convert.listTargets":
             let arguments = try invocation.arguments.decode(ConvertAssetArguments.self)
             let records = try conversionAssets(arguments.assetIDs, context: context)
-            let planner = ConversionPlanner()
+            let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
             let sets = try records.map { asset -> Set<TargetFormat> in
                 guard let source = FormatID(asset: asset) else {
                     throw ToolExecutorError.invalidArguments(
@@ -990,7 +993,7 @@ private func conversionPlanDescription(
     let target = try conversionTarget(arguments.target)
     let options = try conversionOptions(arguments, target: target)
     let assets = try conversionAssets(arguments.assetIDs, context: context)
-    let planner = ConversionPlanner()
+    let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
     let rows = try assets.map { asset in
         let plan = try conversionPlan(
             asset: asset,
@@ -1078,7 +1081,7 @@ private func prepareConversionJobs(
     } else {
         throw ToolExecutorError.invalidArguments("No conversion destination is configured")
     }
-    let planner = ConversionPlanner()
+    let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
     var jobs: [BatchConversionJob] = []
     var reserved: Set<URL> = []
     var skipped = 0

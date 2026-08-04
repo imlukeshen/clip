@@ -9,17 +9,22 @@ public actor Converter {
     private let attributedString = AttributedStringBackend()
     private let webKit = WebKitBackend()
     private let markdown = MarkdownBackend()
+    private let libreOffice: LibreOfficeBackend
     private nonisolated let cancellationRegistry = BatchCancellationRegistry()
 
     public nonisolated static var defaultConcurrency: Int {
         min(4, max(1, ProcessInfo.processInfo.activeProcessorCount / 2))
     }
 
-    public init(ffmpeg: any FFmpegTranscoding = FFmpegTranscoder()) {
+    public init(
+        ffmpeg: any FFmpegTranscoding = FFmpegTranscoder(),
+        capabilities: ConversionCapabilities = .appStore
+    ) {
         self.remuxer = RemuxTranscoder()
         self.videoToolbox = VideoToolboxTranscoder()
         self.imageIO = ImageIOTranscoder()
         self.ffmpeg = ffmpeg
+        self.libreOffice = LibreOfficeBackend(capabilities: capabilities)
     }
 
     public func convert(
@@ -125,7 +130,14 @@ public actor Converter {
                 options: step.options
             )
         case .libreOffice:
-            return failedStream(ConversionError.backendUnavailable("LibreOffice is not available"))
+            guard libreOffice.isAvailable else {
+                return failedStream(
+                    ConversionError.backendUnavailable(
+                        "LibreOffice is no longer available. Reinstall it or choose another format."
+                    )
+                )
+            }
+            return await libreOffice.run(step, input: input, output: output)
         }
     }
 

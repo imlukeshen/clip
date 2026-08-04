@@ -54,8 +54,19 @@ if [[ "$found_binary" -eq 0 ]]; then
     exit 1
 fi
 
-if grep -R --line-number --fixed-strings 'Process(' "$ROOT_DIR/Packages/ConvertKit/Sources"; then
+unexpected_processes="$(
+    rg --line-number --fixed-strings 'Process(' "$ROOT_DIR/Packages/ConvertKit/Sources" \
+        --glob '!**/LibreOfficeBackend.swift' || true
+)"
+if [[ -n "$unexpected_processes" ]]; then
+    echo "$unexpected_processes" >&2
     echo "ConvertKit must never spawn an FFmpeg executable" >&2
+    exit 1
+fi
+
+if rg --line-number --ignore-case 'ffmpeg.*executable|executable.*ffmpeg' \
+    "$ROOT_DIR/Packages/ConvertKit/Sources"; then
+    echo "ConvertKit must link FFmpeg in-process rather than spawn it" >&2
     exit 1
 fi
 

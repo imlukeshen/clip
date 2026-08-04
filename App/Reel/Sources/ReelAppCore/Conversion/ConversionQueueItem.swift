@@ -19,6 +19,7 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
     public private(set) var plan: ConversionPlan
     public private(set) var options: ConversionOptions
     public private(set) var selectedPresetID: String?
+    public let capabilities: ConversionCapabilities
     public var progress: Double
     public var status: ConversionQueueStatus
 
@@ -29,6 +30,7 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         target: TargetFormat? = nil,
         options: ConversionOptions = ConversionOptions(),
         selectedPresetID: String? = nil,
+        capabilities: ConversionCapabilities = .appStore,
         progress: Double = 0,
         status: ConversionQueueStatus = .waiting
     ) {
@@ -39,21 +41,32 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         self.target = selectedTarget
         self.options = options
         self.selectedPresetID = selectedPresetID
-        self.plan = ConvertKit.plan(from: asset, to: selectedTarget, options: options)
+        self.capabilities = capabilities
+        self.plan = ConvertKit.plan(
+            from: asset,
+            to: selectedTarget,
+            options: options,
+            capabilities: capabilities
+        )
         self.progress = progress
         self.status = status
     }
 
     public var availableTargets: [TargetFormat] {
         guard let source = FormatID(asset: asset) else { return [] }
-        let reachable = Set(ConversionPlanner().reachableTargets(from: source, options: options))
+        let reachable = Set(
+            ConversionPlanner(capabilities: capabilities).reachableTargets(
+                from: source,
+                options: options
+            )
+        )
         return TargetFormat.allCases.filter { reachable.contains($0.formatID) }
     }
 
     public var compatiblePresets: [ConversionPreset] {
         guard let source = FormatID(asset: asset) else { return [] }
         return ConversionPreset.builtIns.filter { preset in
-            ConversionPlanner().plan(
+            ConversionPlanner(capabilities: capabilities).plan(
                 from: source,
                 to: preset.target.formatID,
                 options: preset.options
@@ -99,7 +112,12 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         guard availableTargets.contains(target) else { return }
         self.target = target
         selectedPresetID = nil
-        self.plan = ConvertKit.plan(from: asset, to: target, options: options)
+        self.plan = ConvertKit.plan(
+            from: asset,
+            to: target,
+            options: options,
+            capabilities: capabilities
+        )
         progress = 0
         status = .waiting
     }
@@ -107,7 +125,7 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
     public mutating func applyPreset(_ preset: ConversionPreset) {
         if case .converting = status { return }
         guard let source = FormatID(asset: asset),
-            let plan = ConversionPlanner().plan(
+            let plan = ConversionPlanner(capabilities: capabilities).plan(
                 from: source,
                 to: preset.target.formatID,
                 options: preset.options
@@ -125,7 +143,12 @@ public struct ConversionQueueItem: Identifiable, Sendable, Equatable {
         if case .converting = status { return }
         options.stripAllMetadata = shouldStrip
         selectedPresetID = nil
-        plan = ConvertKit.plan(from: asset, to: target, options: options)
+        plan = ConvertKit.plan(
+            from: asset,
+            to: target,
+            options: options,
+            capabilities: capabilities
+        )
         progress = 0
         status = .waiting
     }

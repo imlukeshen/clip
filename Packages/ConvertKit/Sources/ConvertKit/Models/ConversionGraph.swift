@@ -43,6 +43,13 @@ public enum ConversionFormats {
     public static let rtf = FormatID(type: .rtf)
     public static let doc = FormatID(type: type("doc"))
     public static let docx = FormatID(type: type("docx"))
+    public static let xlsx = FormatID(type: type("xlsx"))
+    public static let pptx = FormatID(type: type("pptx"))
+    public static let xls = FormatID(type: type("xls"))
+    public static let ods = FormatID(type: type("ods"))
+    public static let csv = FormatID(type: type("csv"))
+    public static let ppt = FormatID(type: type("ppt"))
+    public static let odp = FormatID(type: type("odp"))
     public static let svg = FormatID(type: .svg)
 
     public static let imageInputs: [FormatID] = [
@@ -56,6 +63,9 @@ public enum ConversionFormats {
         "cr2", "cr3", "nef", "arw", "dng", "raf", "orf",
     ].map { FormatID(type: type($0)) }
     public static let richTextInputs: [FormatID] = [docx, doc, rtf, html, plainText]
+    public static let writerInputs: [FormatID] = richTextInputs + [markdown]
+    public static let spreadsheetInputs: [FormatID] = [xlsx, xls, ods, csv]
+    public static let presentationInputs: [FormatID] = [pptx, ppt, odp]
     public static let videoInputs: [FormatID] = [
         movH264, movHEVC, movProRes422, mp4H264, mp4HEVC, webMVP9, webMAV1, matroska,
     ]

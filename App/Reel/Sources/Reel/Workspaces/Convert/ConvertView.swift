@@ -17,6 +17,29 @@ struct ConvertView: View {
                 .padding(.top, 28)
                 .padding(.bottom, 12)
 
+            if model.shouldSuggestLibreOffice {
+                Label(
+                    "Install LibreOffice to enable Office format output.",
+                    systemImage: "doc.badge.gearshape"
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .padding(.horizontal, theme.metrics.spacing.lg)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(theme.palette.surfaceRaised.opacity(0.56))
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                )
+                .padding(.bottom, theme.metrics.spacing.lg)
+                .accessibilityLabel(
+                    "LibreOffice is not installed. Install it to enable Office format output."
+                )
+            }
+
             if model.conversionQueue.isEmpty {
                 EmptyState(headline: "Queue is empty")
             } else {

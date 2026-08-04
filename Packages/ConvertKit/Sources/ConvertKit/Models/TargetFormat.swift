@@ -43,6 +43,9 @@ public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Id
     case markdown
     case rtf
     case plainText
+    case docx
+    case xlsx
+    case pptx
 
     public var id: Self { self }
 
@@ -67,6 +70,9 @@ public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Id
         case .markdown: "Markdown"
         case .rtf: "Rich Text"
         case .plainText: "Plain Text"
+        case .docx: "Word Document"
+        case .xlsx: "Excel Workbook"
+        case .pptx: "PowerPoint Presentation"
         }
     }
 
@@ -88,6 +94,9 @@ public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Id
         case .markdown: "md"
         case .rtf: "rtf"
         case .plainText: "txt"
+        case .docx: "docx"
+        case .xlsx: "xlsx"
+        case .pptx: "pptx"
         }
     }
 
@@ -112,6 +121,9 @@ public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Id
         case .markdown: ConversionFormats.markdown
         case .rtf: ConversionFormats.rtf
         case .plainText: ConversionFormats.plainText
+        case .docx: ConversionFormats.docx
+        case .xlsx: ConversionFormats.xlsx
+        case .pptx: ConversionFormats.pptx
         }
     }
 }

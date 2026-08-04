@@ -85,6 +85,25 @@ struct ConversionQueueItemTests {
         #expect(item.status == .waiting)
     }
 
+    @Test("Office targets are present only for direct builds with LibreOffice")
+    func officeTargetsFollowDistributionCapabilities() {
+        let asset = record(kind: .document, container: "pdf", codec: nil)
+        let input = URL(fileURLWithPath: "/tmp/Notes.pdf")
+        let appStore = ConversionQueueItem(asset: asset, inputURL: input)
+        let direct = ConversionQueueItem(
+            asset: asset,
+            inputURL: input,
+            capabilities: .direct(
+                libreOfficeExecutable: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+
+        #expect(!appStore.availableTargets.contains(.docx))
+        #expect(!appStore.availableTargets.contains(.pptx))
+        #expect(direct.availableTargets.contains(.docx))
+        #expect(direct.availableTargets.contains(.pptx))
+    }
+
     private func record(
         kind: AssetKind,
         container: String,
