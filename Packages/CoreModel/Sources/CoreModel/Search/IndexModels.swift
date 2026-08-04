@@ -62,3 +62,45 @@ public enum IndexScope: Sendable, Equatable {
     case all
     case assets(Set<AssetID>)
 }
+
+/// Dominant writing system used to select the appropriate FTS5 tokenizer.
+public enum OCRScript: String, Codable, Sendable, Equatable {
+    case alphabetic
+    case cjk
+    case mixed
+}
+
+/// One searchable text region visible in an image or over a video time range.
+public struct OCRSpan: Codable, Sendable, Equatable, Identifiable {
+    public var id: Int64?
+    public var assetID: AssetID
+    public var start: RationalTime?
+    public var end: RationalTime?
+    public var text: String
+    public var boundingBox: NormalizedRect
+    public var confidence: Double
+    public var revision: Int
+    public var script: OCRScript
+
+    public init(
+        id: Int64? = nil,
+        assetID: AssetID,
+        start: RationalTime? = nil,
+        end: RationalTime? = nil,
+        text: String,
+        boundingBox: NormalizedRect,
+        confidence: Double,
+        revision: Int,
+        script: OCRScript
+    ) {
+        self.id = id
+        self.assetID = assetID
+        self.start = start
+        self.end = end
+        self.text = text
+        self.boundingBox = boundingBox
+        self.confidence = confidence
+        self.revision = revision
+        self.script = script
+    }
+}

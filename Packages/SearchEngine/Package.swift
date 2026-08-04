@@ -13,7 +13,14 @@ let package = Package(
         .package(path: "../LibraryStore"),
     ],
     targets: [
-        .target(name: "SearchEngine", dependencies: ["CoreModel", "LibraryStore"]),
+        .target(
+            name: "SearchEngine",
+            dependencies: ["CoreModel", "LibraryStore"],
+            linkerSettings: [
+                .linkedFramework("AVFoundation"),
+                .linkedFramework("Vision"),
+            ]
+        ),
         .testTarget(
             name: "SearchEngineTests",
             dependencies: ["SearchEngine", "CoreModel", "LibraryStore"]

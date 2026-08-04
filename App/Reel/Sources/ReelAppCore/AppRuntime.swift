@@ -68,7 +68,10 @@ public actor AppRuntime {
         let captureDirectory = preferredCaptureDirectory.url
         let library = try await LibraryStore(root: root, bookmarks: bookmarks)
         let pipeline = IngestPipeline(library: library, libraryRoot: root)
-        let indexPipeline = IndexPipeline(store: library)
+        let indexPipeline = IndexPipeline(
+            store: library,
+            processor: LocalIndexStageProcessor(store: library)
+        )
         let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
         let captureInboxes =
             Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
@@ -107,7 +110,10 @@ public actor AppRuntime {
             history: history,
             didIngest: { record, sourceURL in
                 let associated = await clickTracking.associate(record, sourceURL: sourceURL)
-                await indexPipeline.enqueue(associated.id, stages: [.metadata])
+                await indexPipeline.enqueue(
+                    associated.id,
+                    stages: Self.indexStages(for: associated)
+                )
                 await didAutomaticallyIngest(associated)
             },
             didCapture: didCaptureSystemFile
@@ -155,9 +161,12 @@ public actor AppRuntime {
 
     public func start() async throws -> CaptureDirectoryStatus {
         await library.refreshLocations()
+        try await library.requeueStaleOCRJobs(
+            currentRevision: VisionTextRecognizer.revision
+        )
         let existingAssets = try await library.assets(kind: nil, limit: Int.max, offset: 0)
         for asset in existingAssets {
-            await indexPipeline.enqueue(asset.id, stages: [.metadata])
+            await indexPipeline.enqueue(asset.id, stages: Self.indexStages(for: asset))
         }
         await indexPipeline.resumePending()
         libraryWatcher.start()
@@ -272,7 +281,7 @@ public actor AppRuntime {
     public func ingest(_ url: URL, source: IngestSource) async throws -> AssetRecord {
         let record = try await pipeline.ingest(url, source: source)
         let associated = await clickTracking.associate(record, sourceURL: url)
-        await indexPipeline.enqueue(associated.id, stages: [.metadata])
+        await indexPipeline.enqueue(associated.id, stages: Self.indexStages(for: associated))
         return associated
     }
 
@@ -343,7 +352,10 @@ public actor AppRuntime {
     public func restore(_ receipt: TrashReceipt) async throws {
         try await library.restore(receipt)
         for item in receipt.items {
-            await indexPipeline.enqueue(item.asset.id, stages: [.metadata])
+            await indexPipeline.enqueue(
+                item.asset.id,
+                stages: Self.indexStages(for: item.asset)
+            )
         }
     }
 
@@ -498,6 +510,13 @@ public actor AppRuntime {
     private func textDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.textDocuments(in: libraryRoot)
             .appendingPathComponent("\(assetID.rawValue).reeltext")
+    }
+
+    private static func indexStages(for asset: AssetRecord) -> Set<IndexStage> {
+        switch asset.kind {
+        case .image, .video: [.metadata, .ocr]
+        case .audio, .document, .text: [.metadata]
+        }
     }
 }
 

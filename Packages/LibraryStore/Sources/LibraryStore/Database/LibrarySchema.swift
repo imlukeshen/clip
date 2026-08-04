@@ -99,6 +99,59 @@ enum LibrarySchema {
                     """
             )
         }
+        migrator.registerMigration("v5-search-ocr") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE ocr_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      bbox        TEXT NOT NULL,
+                      confidence  REAL NOT NULL,
+                      revision    INTEGER NOT NULL,
+                      script      TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_ocr_asset ON ocr_span(asset_id);
+                    CREATE INDEX idx_ocr_revision ON ocr_span(revision);
+
+                    CREATE VIRTUAL TABLE ocr_fts USING fts5(
+                      text,
+                      content='ocr_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE ocr_fts_cjk USING fts5(
+                      text,
+                      content='ocr_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+
+                    CREATE TRIGGER ocr_fts_insert AFTER INSERT ON ocr_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO ocr_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_delete AFTER DELETE ON ocr_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO ocr_fts(ocr_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_cjk_insert AFTER INSERT ON ocr_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO ocr_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_cjk_delete AFTER DELETE ON ocr_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO ocr_fts_cjk(ocr_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }
