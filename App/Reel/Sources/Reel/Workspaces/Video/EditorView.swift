@@ -201,7 +201,7 @@ struct EditorView: View {
             .accessibilityIdentifier("video-redo-button")
         }
         .padding(.horizontal, 14)
-        .frame(height: 52)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 
@@ -991,7 +991,7 @@ struct EditorInspector: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 12)
-            .frame(height: 52)
+            .frame(height: EditorChromeMetrics.headerHeight)
 
             Divider().overlay(theme.palette.line)
 

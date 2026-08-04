@@ -131,7 +131,7 @@ private struct PDFEditorView: View {
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 

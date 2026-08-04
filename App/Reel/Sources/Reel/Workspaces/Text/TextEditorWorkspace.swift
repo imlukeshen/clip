@@ -300,7 +300,7 @@ struct TextEditorWorkspace: View {
             .help("Redo")
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
-        .frame(height: 52)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 

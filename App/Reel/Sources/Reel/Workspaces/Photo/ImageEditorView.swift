@@ -123,7 +123,7 @@ struct ImageEditorView: View {
             .buttonStyle(ReelProminentButtonStyle())
         }
         .padding(.horizontal, 14)
-        .frame(height: 54)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 

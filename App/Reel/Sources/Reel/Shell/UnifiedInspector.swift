@@ -140,7 +140,7 @@ private struct PDFLayerInspector: View {
                     .clipShape(Capsule())
             }
             .padding(.horizontal, 14)
-            .frame(height: 48)
+            .frame(height: EditorChromeMetrics.headerHeight)
 
             Divider().overlay(theme.palette.line)
 
@@ -385,7 +385,7 @@ private struct ImageLayerInspector: View {
                     .clipShape(Capsule())
             }
             .padding(.horizontal, 14)
-            .frame(height: 48)
+            .frame(height: EditorChromeMetrics.headerHeight)
 
             Divider().overlay(theme.palette.line)
 

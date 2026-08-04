@@ -25,7 +25,7 @@ struct TextInspector: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .padding(.horizontal, 12)
-            .frame(height: 52)
+            .frame(height: EditorChromeMetrics.headerHeight)
             Divider().overlay(theme.palette.line)
 
             if panel == .inspector {
