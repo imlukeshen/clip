@@ -229,6 +229,13 @@ final class TextEditorTypingTests: XCTestCase {
             )
         }
         XCTAssertTrue(app.staticTexts["0 clips"].waitForExistence(timeout: 5))
+        let timeline = app.descendants(matching: .any)["video-timeline"]
+        XCTAssertTrue(timeline.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(
+            timeline.frame.maxY,
+            app.windows.firstMatch.frame.maxY + 1,
+            "The video timeline must stay inside the dynamically sized window"
+        )
 
         NSPasteboard.general.clearContents()
         XCTAssertTrue(NSPasteboard.general.writeObjects([videoURL as NSURL]))

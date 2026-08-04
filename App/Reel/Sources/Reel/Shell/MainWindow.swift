@@ -124,16 +124,25 @@ private struct ThemedMainWindow: View {
 
     var body: some View {
         GeometryReader { proxy in
-            windowContent(availableWidth: proxy.size.width)
+            windowContent(availableSize: proxy.size)
+                // Several editor inspectors are taller than a typical window.
+                // Pin the shell to the GeometryReader's proposal so their ideal
+                // content height cannot make the workspace grow below the window.
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .topLeading
+                )
+                .clipped()
         }
         .background(theme.palette.surfaceBase)
         .foregroundStyle(theme.palette.textPrimary)
     }
 
-    private func windowContent(availableWidth: CGFloat) -> some View {
+    private func windowContent(availableSize: CGSize) -> some View {
         let displayedInspectorWidth = InspectorLayout.displayedWidth(
             requestedWidth: model.inspectorWidth,
-            availableWindowWidth: availableWidth
+            availableWindowWidth: availableSize.width
         )
 
         return
@@ -150,6 +159,7 @@ private struct ThemedMainWindow: View {
                         Titlebar(model: model)
                         HStack(spacing: 0) {
                             workspace
+                                .layoutPriority(1)
                             if model.showsEditorInspector && model.isInspectorVisible {
                                 InspectorResizeDivider(
                                     model: model,
@@ -158,8 +168,12 @@ private struct ThemedMainWindow: View {
                                 UnifiedInspector(model: model, width: displayedInspectorWidth)
                             }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if let message = model.lastMessage {
                     Toast(message)
                         .padding(.bottom, 38)
@@ -170,6 +184,11 @@ private struct ThemedMainWindow: View {
                         }
                 }
             }
+            .frame(
+                width: availableSize.width,
+                height: availableSize.height,
+                alignment: .topLeading
+            )
     }
 
     private var isEditing: Bool {

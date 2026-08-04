@@ -29,6 +29,8 @@ struct UnifiedInspector: View {
             }
         }
         .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipped()
         .background(theme.palette.surfacePanel)
     }
 }

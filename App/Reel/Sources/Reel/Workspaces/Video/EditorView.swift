@@ -718,12 +718,12 @@ struct EditorView: View {
     }
 
     private func timelineHeight(for availableHeight: CGFloat) -> CGFloat {
-        let minimumTimelineHeight: CGFloat = 180
-        let minimumPreviewHeight: CGFloat = 300
-        let availableForTimeline = max(
-            minimumTimelineHeight,
-            availableHeight - EditorChromeMetrics.headerHeight - minimumPreviewHeight
-        )
+        let bodyHeight = max(availableHeight - EditorChromeMetrics.headerHeight, 0)
+        // Preserve a useful preview at normal sizes, then let both regions
+        // contract when the window is short. The timeline must never claim more
+        // than the editor actually has or its tracks will extend below the window.
+        let previewHeight = min(300, max(180, bodyHeight * 0.55))
+        let availableForTimeline = max(bodyHeight - previewHeight, 0)
         return min(preferredTimelineHeight, availableForTimeline)
     }
 
