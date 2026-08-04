@@ -28,20 +28,20 @@ struct ClipApp: App {
         #else
             let libraryRoot = defaultLibraryRoot
         #endif
-        _model = State(
-            initialValue: AppModel(
-                libraryRoot: libraryRoot,
-                shortcutReader: shortcutReader,
-                conversionCapabilities: conversionCapabilities
-            )
+        let model = AppModel(
+            libraryRoot: libraryRoot,
+            shortcutReader: shortcutReader,
+            conversionCapabilities: conversionCapabilities
         )
+        _model = State(initialValue: model)
+        ClipAppDelegate.prepare(model: model)
     }
 
     var body: some Scene {
         WindowGroup {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
-                .onAppear { appDelegate.model = model }
+                .onAppear { appDelegate.install(model: model) }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)

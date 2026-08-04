@@ -1,4 +1,5 @@
 import AIKit
+import AppKit
 import ReelAppCore
 import SwiftUI
 
@@ -13,7 +14,11 @@ struct CaptureCommands: Commands {
     var body: some Commands {
         CommandMenu("Capture") {
             Button(title("capture.history")) {
-                AppCommandRouter.run("capture.history", in: model)
+                if let delegate = NSApp.delegate as? ClipAppDelegate {
+                    delegate.handleHotKey()
+                } else {
+                    AppCommandRouter.run("capture.history", in: model)
+                }
             }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             Button(title("capture.clearHistory"), role: .destructive) {

@@ -11,7 +11,8 @@ import os
 ///
 /// The handler is delivered on the main thread, because Carbon dispatches hot
 /// key events through the application's run loop.
-public actor GlobalHotKey {
+@MainActor
+public final class GlobalHotKey {
     private let context: HotKeyContext
     private var isRegistered = false
 
@@ -54,12 +55,11 @@ public actor GlobalHotKey {
 /// reads the stored handler from the C callback.
 ///
 /// The `EventHotKeyRef`/`EventHandlerRef` are `OpaquePointer`s; they are touched
-/// only by `register`/`unregister`, which the owning `GlobalHotKey` actor
-/// serializes and the callback never enters, so the actor's isolation is their
-/// synchronization. The handler alone is read from the callback thread while the
-/// actor may be writing it, so it sits behind an `OSAllocatedUnfairLock`. Those
-/// two guarantees together are what back this narrowly scoped unchecked
-/// conformance.
+/// only by `register`/`unregister` on the main actor and the callback never
+/// enters those methods, so main-thread isolation is their synchronization. The
+/// handler alone is read from the callback while the main actor may be writing
+/// it, so it sits behind an `OSAllocatedUnfairLock`. Those two guarantees are
+/// what back this narrowly scoped unchecked conformance.
 private final class HotKeyContext: @unchecked Sendable {
     private let keyCode: UInt32
     private let modifiers: UInt32
@@ -81,7 +81,7 @@ private final class HotKeyContext: @unchecked Sendable {
         )
         var handlerRef: EventHandlerRef?
         let installed = InstallEventHandler(
-            GetEventDispatcherTarget(),
+            GetApplicationEventTarget(),
             hotKeyEventHandler,
             1,
             &eventType,
@@ -99,7 +99,7 @@ private final class HotKeyContext: @unchecked Sendable {
             keyCode,
             modifiers,
             hotKeyID,
-            GetEventDispatcherTarget(),
+            GetApplicationEventTarget(),
             0,
             &hotKey
         )

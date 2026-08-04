@@ -3,6 +3,28 @@ import XCTest
 
 final class TextEditorTypingTests: XCTestCase {
     @MainActor
+    func testClipboardShortcutOpensAndClosesTheGlobalPanel() throws {
+        let app = XCUIApplication()
+        let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-clipboard-shortcut-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+        app.launchEnvironment["CLIP_UI_TESTING"] = "1"
+        app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launch()
+
+        XCTAssertEqual(app.state, .runningForeground)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+
+        let clipboardTitle = app.staticTexts["Clip Clipboard"]
+        XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
+
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(clipboardTitle.waitForNonExistence(timeout: 5))
+    }
+
+    @MainActor
     func testScratchEditorAcceptsTypingAndUndo() throws {
         let app = XCUIApplication()
         let libraryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
