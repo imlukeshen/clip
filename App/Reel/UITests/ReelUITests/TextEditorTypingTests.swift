@@ -466,6 +466,38 @@ final class TextEditorTypingTests: XCTestCase {
     }
 
     @MainActor
+    func testLaTeXEditorAcceptsTypingAfterEnteringTheSplitWorkspace() throws {
+        let (app, libraryRoot) = launchClip(named: "latex-typing")
+        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+
+        XCTAssertTrue(app.buttons["sidebar-route-text"].waitForExistence(timeout: 10))
+        app.buttons["sidebar-route-text"].click()
+        XCTAssertTrue(app.buttons["text-new-scratch"].waitForExistence(timeout: 5))
+        app.buttons["text-new-scratch"].click()
+
+        let editor = app.textViews["text-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.click()
+        editor.typeText("\\documentclass{article}")
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["latex-split-editor"].waitForExistence(timeout: 5)
+        )
+
+        // The same native editor must retain the prefix and remain the typing
+        // target after the PDF preview is inserted beside it.
+        let latexEditor = app.textViews["text-editor"]
+        XCTAssertTrue(latexEditor.waitForExistence(timeout: 5))
+        latexEditor.typeKey(.end, modifierFlags: .command)
+        latexEditor.typeText("\n\\begin{document}\nClip typing works\n\\end{document}")
+
+        XCTAssertEqual(
+            latexEditor.value as? String,
+            "\\documentclass{article}\n\\begin{document}\nClip typing works\n\\end{document}"
+        )
+    }
+
+    @MainActor
     func testLaTeXSourceBuildsAndDisplaysAPDF() throws {
         let (app, libraryRoot) = launchClip(
             named: "latex-pdf",

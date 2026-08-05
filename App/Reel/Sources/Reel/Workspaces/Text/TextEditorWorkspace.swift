@@ -120,15 +120,20 @@ struct TextEditorWorkspace: View {
         }
     }
 
-    @ViewBuilder private var editorSurface: some View {
-        if editor.language == .latex {
-            HSplitView {
-                if editor.document.files.count > 1 {
-                    TeXProjectSidebar(editor: editor)
-                        .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
-                }
-                codeEditor
-                    .frame(minWidth: 340)
+    private var editorSurface: some View {
+        // Keep the native text editor under one stable split-view hierarchy.
+        // Automatic language detection can promote a scratch buffer to LaTeX
+        // while AppKit is still delivering a key sequence. Replacing a lone
+        // CodeEditor with a new HSplitView at that moment destroys the first
+        // responder and drops the remaining characters.
+        HSplitView {
+            if editor.language == .latex, editor.document.files.count > 1 {
+                TeXProjectSidebar(editor: editor)
+                    .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
+            }
+            codeEditor
+                .frame(minWidth: editor.language == .latex ? 340 : 0)
+            if editor.language == .latex {
                 TeXPDFPreview(
                     editor: editor,
                     forwardSearch: texForwardSearch,
@@ -136,14 +141,16 @@ struct TextEditorWorkspace: View {
                 )
                 .frame(minWidth: 340)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("latex-split-editor")
-        } else {
-            codeEditor
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier(
-                    editor.language == .markdown ? "markdown-inline-editor" : "text-source-editor"
-                )
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+    }
+
+    private var editorSurfaceAccessibilityIdentifier: String {
+        switch editor.language {
+        case .latex: "latex-split-editor"
+        case .markdown: "markdown-inline-editor"
+        default: "text-source-editor"
         }
     }
 
