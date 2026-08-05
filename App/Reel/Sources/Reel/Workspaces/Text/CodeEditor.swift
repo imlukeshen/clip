@@ -381,7 +381,7 @@ struct CodeEditor: NSViewRepresentable {
             )
         }
 
-        fileprivate func updateAppearance(
+        func updateAppearance(
             textView: CodeTextView,
             scrollView: NSScrollView,
             theme: Theme,
@@ -446,8 +446,6 @@ struct CodeEditor: NSViewRepresentable {
             markdownMarkerColor = markerColor
             markdownCodeBackground = codeBackground
             markdownQuoteColor = quoteColor
-            textView.font = font
-            textView.textColor = foreground
             textView.insertionPointColor = foreground
             textView.backgroundColor = background
             textView.currentLineColor =
@@ -485,9 +483,36 @@ struct CodeEditor: NSViewRepresentable {
                 fontSize: theme.type.numeric.size
             )
             if syntaxAppearanceChanged {
+                // On a non-rich NSTextView these two convenience setters are
+                // whole-document formatting commands. Reassigning them during
+                // an unrelated SwiftUI update flattens heading fonts and makes
+                // transparent Markdown delimiters visible. They are defaults
+                // for an empty buffer only; populated storage is restyled by
+                // the explicit attributed-string pipeline below.
+                if textView.textStorage?.length == 0 {
+                    textView.font = font
+                    textView.textColor = foreground
+                }
                 applyVisibleBaseStyle(in: nil, to: textView)
+                reapplyCachedMarkdownPresentation(to: textView)
                 scheduleHighlight(for: textView.string)
             }
+        }
+
+        private func reapplyCachedMarkdownPresentation(to textView: NSTextView) {
+            guard parent.language == .markdown, let document = markdownDocument,
+                document.source == textView.string, let storage = textView.textStorage,
+                storage.length > 0
+            else { return }
+            isApplyingSyntax = true
+            storage.beginEditing()
+            applyMarkdownPresentation(
+                document: document,
+                range: NSRange(location: 0, length: storage.length),
+                storage: storage
+            )
+            storage.endEditing()
+            isApplyingSyntax = false
         }
 
         func observeScrolling(in scrollView: NSScrollView) {

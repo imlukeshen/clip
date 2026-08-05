@@ -67,6 +67,10 @@ let package = Package(
                 "SearchEngine",
             ]
         ),
+        .testTarget(
+            name: "ReelTests",
+            dependencies: ["Reel", "CoreModel", "DesignSystem", "TextEngine"]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
