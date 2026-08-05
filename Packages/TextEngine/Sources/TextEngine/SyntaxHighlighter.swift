@@ -98,7 +98,11 @@ public actor SyntaxHighlighter {
             return nil
         }
         let parser = Parser()
-        parser.timeout = 0.75
+        // Keep the native parser inside the editor's two-second interactive
+        // budget while allowing large documents to finish on slower or busy
+        // machines. A shorter deadline caused valid 2 MB buffers to fall back
+        // to regex highlighting under CI contention.
+        parser.timeout = 1.5
         guard (try? parser.setLanguage(treeSitterLanguage)) != nil else {
             reset(for: requestedLanguage, source: "")
             return nil
