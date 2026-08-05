@@ -12,5 +12,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - run: brew install ripgrep
       - run: make licence-audit

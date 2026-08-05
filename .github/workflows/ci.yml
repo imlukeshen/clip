@@ -20,12 +20,16 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - run: make test-packages
 
   app:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - run: brew install xcodegen
       - run: swift test --package-path App/Reel
       - run: make build
