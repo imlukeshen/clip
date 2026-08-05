@@ -100,7 +100,8 @@ Plus two structural rules CI enforces:
 
 ```bash
 make bootstrap      # toolchain deps — run once
-make generate       # Project.yml → Reel.xcodeproj (the project file is gitignored)
+make generate       # project.yml → Clip.xcodeproj (and removes the stale Reel project)
+make xcode          # generate and open the one supported Xcode project
 make test-packages  # fast: packages only, no Xcode, ~90s — use this while iterating
 make test           # packages + app targets
 make lint           # swift-format lint --strict
