@@ -20,9 +20,21 @@ final class CodeTextView: NSTextView {
     var snippetLanguage: LanguageID = .plainText
     var snippetFileName = "Untitled.txt"
     var onSnippetNotice: (String) -> Void = { _ in }
+    var onCompositionCommit: () -> Void = {}
     private var findPanelController: CodeFindPanelController?
 
     override var undoManager: UndoManager? { providedUndoManager ?? super.undoManager }
+
+    override func unmarkText() {
+        let wasComposing = hasMarkedText()
+        super.unmarkText()
+        guard wasComposing else { return }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !hasMarkedText() else { return }
+            onCompositionCommit()
+        }
+    }
 
     override func paste(_ sender: Any?) {
         guard let value = NSPasteboard.general.string(forType: .string) else {
@@ -111,12 +123,82 @@ final class CodeTextView: NSTextView {
         if !indentation.isEmpty { super.insertText(indentation, replacementRange: selectedRange()) }
     }
 
+    override func deleteBackward(_ sender: Any?) {
+        let selection = selectedRange()
+        if snippetLanguage == .markdown, !hasMarkedText(), selection.length == 0 {
+            let document = MarkdownBlockDocumentEngine.reconcile(source: string)
+            if let block = document.block(containingUTF16: selection.location),
+                block.kind.removesMarkdownMarkerOnBackspace,
+                selection.location == block.contentRange.location,
+                let marker = block.syntaxRanges.last,
+                marker.length > 0
+            {
+                let source = string as NSString
+                let updated = source.replacingCharacters(in: marker, with: "")
+                apply(
+                    TextEditResult(
+                        text: updated,
+                        selectedRange: NSRange(location: marker.location, length: 0)
+                    )
+                )
+                return
+            }
+        }
+        super.deleteBackward(sender)
+    }
+
+    override func insertTab(_ sender: Any?) {
+        guard snippetLanguage == .markdown, !hasMarkedText() else {
+            super.insertTab(sender)
+            return
+        }
+        apply(
+            TextEditingOperations.indent(
+                in: string,
+                selectedRange: selectedRange(),
+                width: tabWidth
+            )
+        )
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        guard snippetLanguage == .markdown, !hasMarkedText() else {
+            super.insertBacktab(sender)
+            return
+        }
+        apply(
+            TextEditingOperations.outdent(
+                in: string,
+                selectedRange: selectedRange(),
+                width: tabWidth
+            )
+        )
+    }
+
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        guard let inserted = insertString as? String, inserted.utf16.count == 1 else {
+        guard let inserted = insertString as? String else {
             super.insertText(insertString, replacementRange: replacementRange)
             return
         }
-        let selection = selectedRange()
+        guard !hasMarkedText() else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+        guard inserted.utf16.count == 1 else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+        let sourceLength = (string as NSString).length
+        let selection =
+            replacementRange.location == NSNotFound
+            ? selectedRange()
+            : NSRange(
+                location: min(max(replacementRange.location, 0), sourceLength),
+                length: min(
+                    max(replacementRange.length, 0),
+                    max(sourceLength - min(max(replacementRange.location, 0), sourceLength), 0)
+                )
+            )
         if snippetLanguage == .markdown,
             !MarkdownEditingIntelligence.isInsideFencedCode(
                 location: selection.location,
@@ -725,6 +807,17 @@ final class CodeTextView: NSTextView {
         var actual = NSRange()
         let screenRect = firstRect(forCharacterRange: range, actualRange: &actual)
         return convert(window.convertFromScreen(screenRect), from: nil)
+    }
+}
+
+extension MarkdownBlockKind {
+    fileprivate var removesMarkdownMarkerOnBackspace: Bool {
+        switch self {
+        case .heading, .bulletedListItem, .numberedListItem, .taskItem, .quote, .paragraph:
+            true
+        case .fencedCode, .math, .divider, .table, .empty, .raw:
+            false
+        }
     }
 }
 

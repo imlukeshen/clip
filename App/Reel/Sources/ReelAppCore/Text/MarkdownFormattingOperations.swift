@@ -3,7 +3,7 @@ import Foundation
 import TextEngine
 
 /// Selection-aware Markdown commands used by Clip's inline writing canvas.
-public enum MarkdownFormattingAction: Sendable, Equatable {
+public enum MarkdownFormattingAction: Sendable, Equatable, Hashable {
     case body
     case heading1
     case heading2
@@ -102,11 +102,27 @@ public enum MarkdownFormattingOperations {
         in text: String,
         selectedRange requestedRange: NSRange
     ) -> MarkdownBlockStyle {
-        let source = text as NSString
+        let document = MarkdownBlockDocumentEngine.reconcile(source: text)
+        return blockStyle(in: document, selectedRange: requestedRange)
+    }
+
+    public static func blockStyle(
+        in document: MarkdownDocumentSnapshot,
+        selectedRange requestedRange: NSRange
+    ) -> MarkdownBlockStyle {
+        let source = document.source as NSString
         let range = clamped(requestedRange, in: source)
-        let lineRange = source.lineRange(for: NSRange(location: range.location, length: 0))
-        let line = parsedLines(in: source.substring(with: lineRange)).first?.body ?? ""
-        return parsedBlockLine(line).style
+        guard let block = document.block(containingUTF16: range.location) else {
+            return .body
+        }
+        return switch block.kind {
+        case .heading(let level): .heading(level)
+        case .bulletedListItem: .bulletedList
+        case .numberedListItem: .numberedList
+        case .taskItem: .checklist
+        case .quote: .quote
+        case .paragraph, .fencedCode, .math, .divider, .table, .empty, .raw: .body
+        }
     }
 
     /// Reports active inline formatting so toolbar state follows the caret or
@@ -116,34 +132,33 @@ public enum MarkdownFormattingOperations {
         in text: String,
         selectedRange requestedRange: NSRange
     ) -> Bool {
-        let pattern: String
-        switch action {
-        case .bold: pattern = "\\*\\*[^\\n*]+\\*\\*|__[^\\n_]+__"
-        case .italic: pattern = "(?<!\\*)\\*[^*\\n]+\\*(?!\\*)|(?<!_)_[^_\\n]+_(?!_)"
-        case .strikethrough: pattern = "~~[^\\n~]+~~"
-        case .inlineCode: pattern = "(?<!`)`[^`\\n]+`(?!`)"
-        case .link: pattern = "\\[[^\\]\\n]+\\]\\([^)\\n]+\\)"
-        case .inlineMath: pattern = "(?<!\\$)\\$[^\\n$]+\\$(?!\\$)"
-        default: return false
-        }
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return false }
-        let source = text as NSString
+        let document = MarkdownBlockDocumentEngine.reconcile(source: text)
+        return isInlineStyleActive(action, in: document, selectedRange: requestedRange)
+    }
+
+    public static func isInlineStyleActive(
+        _ action: MarkdownFormattingAction,
+        in document: MarkdownDocumentSnapshot,
+        selectedRange requestedRange: NSRange
+    ) -> Bool {
+        let source = document.source as NSString
         let selection = clamped(requestedRange, in: source)
-        let lineRange = source.lineRange(
-            for: NSRange(location: selection.location, length: 0)
-        )
-        guard selection.length == 0 || NSMaxRange(selection) <= NSMaxRange(lineRange) else {
-            return false
-        }
-        return expression.matches(
-            in: text,
-            range: lineRange
-        ).contains { match in
+        return document.blocks.lazy.flatMap(\.inlineSpans).contains { span in
+            let matchesAction: Bool =
+                switch (action, span.kind) {
+                case (.bold, .strong), (.italic, .emphasis),
+                    (.strikethrough, .strikethrough), (.inlineCode, .code),
+                    (.link, .link), (.inlineMath, .math):
+                    true
+                default:
+                    false
+                }
+            guard matchesAction else { return false }
             if selection.length == 0 {
-                return selection.location > match.range.location
-                    && selection.location < NSMaxRange(match.range)
+                return selection.location >= span.contentRange.location
+                    && selection.location <= NSMaxRange(span.contentRange)
             }
-            return NSIntersectionRange(selection, match.range).length == selection.length
+            return NSIntersectionRange(selection, span.contentRange).length == selection.length
         }
     }
 

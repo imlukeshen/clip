@@ -5,12 +5,18 @@ import ReelAppCore
 import SwiftUI
 import TextEngine
 
+struct CodeEditorDocumentIdentity: Equatable, Sendable {
+    let documentID: DocumentID
+    let fileID: FileID
+}
+
 /// TextKit 2 editor surface with native undo, find/replace, and a line-number ruler.
 struct CodeEditor: NSViewRepresentable {
     @Environment(\.theme) private var theme
     @Binding var text: String
     let language: LanguageID
     let settings: EditorSettings
+    let documentIdentity: CodeEditorDocumentIdentity
     let fileName: String
     let isReadOnly: Bool
     let undoManager: UndoManager
@@ -25,6 +31,7 @@ struct CodeEditor: NSViewRepresentable {
     let navigation: TextEditorNavigation?
     let onVisibleLineChange: (Int) -> Void
     let onSelectionChange: (NSRange) -> Void
+    let onMarkdownDocumentChange: (CodeEditorDocumentIdentity, MarkdownDocumentSnapshot) -> Void
     let onCursorChange: (Int, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -54,6 +61,9 @@ struct CodeEditor: NSViewRepresentable {
         textView.onLargePaste = context.coordinator.largePaste
         textView.onPasteRefused = context.coordinator.refusePaste
         textView.onPasteIntoEmptyBuffer = onPasteIntoEmptyBuffer
+        textView.onCompositionCommit = { [weak coordinator = context.coordinator] in
+            coordinator?.compositionDidCommit()
+        }
         textView.snippetLanguage = language
         textView.snippetFileName = fileName
         textView.onSnippetNotice = onSnippetNotice
@@ -117,16 +127,34 @@ struct CodeEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ container: CodeEditorContainerView, context: Context) {
-        context.coordinator.parent = self
         let scrollView = container.scrollView
         guard let textView = scrollView.documentView as? CodeTextView else { return }
+        let documentChanged = context.coordinator.documentIdentity != documentIdentity
+        if documentChanged, textView.hasMarkedText() {
+            // Commit the old file's composition while the coordinator still
+            // owns its binding. The new file must never inherit marked text.
+            textView.unmarkText()
+            context.coordinator.compositionDidCommit()
+        }
+        context.coordinator.parent = self
+        _ = context.coordinator.transition(to: documentIdentity)
         textView.isEditable = !isReadOnly
         textView.snippetLanguage = language
         textView.snippetFileName = fileName
         textView.onSnippetNotice = onSnippetNotice
         textView.onPasteIntoEmptyBuffer = onPasteIntoEmptyBuffer
-        if !context.coordinator.isApplyingText, textView.string != text {
+        if textView.hasMarkedText() {
+            context.coordinator.observeExternalTextDuringComposition(text)
+        }
+        let shouldApplyText =
+            !context.coordinator.isApplyingText && !textView.hasMarkedText()
+            && textView.string != text
+        if shouldApplyText {
             context.coordinator.apply(text, to: textView)
+        } else if documentChanged, !textView.hasMarkedText(), textView.string == text {
+            // Identical source still represents a different document. Force a
+            // fresh parse so stable block IDs remain scoped to their file.
+            context.coordinator.refreshDocumentSnapshot(in: textView)
         }
         context.coordinator.updateAppearance(
             textView: textView,
@@ -144,6 +172,13 @@ struct CodeEditor: NSViewRepresentable {
         _ container: CodeEditorContainerView,
         coordinator: Coordinator
     ) {
+        if let textView = container.scrollView.documentView as? CodeTextView {
+            if textView.hasMarkedText() { textView.unmarkText() }
+            // `unmarkText()` may deliver textDidChange synchronously or invoke
+            // CodeTextView's deferred callback. Whichever path commits first
+            // clears the composition session, so the other is a safe no-op.
+            coordinator.compositionDidCommit()
+        }
         coordinator.stopObserving()
     }
 
@@ -160,9 +195,11 @@ struct CodeEditor: NSViewRepresentable {
         private var suppressesSoftWrap = false
         private let syntaxHighlighter = SyntaxHighlighter()
         private let markdownFencedCodeHighlighter = MarkdownFencedCodeHighlighter()
+        private var markdownDocument: MarkdownDocumentSnapshot?
         private var syntaxTask: Task<Void, Never>?
         private var syntaxRevision = 0
         private var pendingSyntaxEdit: SyntaxEdit?
+        private var needsPresentationRefreshAfterComposition = false
         private var isApplyingSyntax = false
         private var syntaxLanguage: LanguageID?
         private var syntaxBaseFont: NSFont?
@@ -177,36 +214,119 @@ struct CodeEditor: NSViewRepresentable {
         private var lastRequestedScrollLine: Int?
         private var lastNavigationID: UUID?
         private var lastReportedVisibleLine: Int?
+        private var markdownPublishTask: Task<Void, Never>?
+        private var pendingMarkdownPublishRevision: UInt64?
+        private var lastPublishedMarkdownRevision: UInt64?
+        private var lastSynchronizedText: String
+        private var compositionSession: TextCompositionSession?
+        private var compositionBinding: Binding<String>?
+        private var pendingSaveAfterComposition: (() -> Void)?
+        fileprivate var documentIdentity: CodeEditorDocumentIdentity
 
         init(_ parent: CodeEditor) {
             self.parent = parent
+            lastSynchronizedText = parent.text
+            documentIdentity = parent.documentIdentity
         }
 
         func textDidChange(_ notification: Notification) {
-            guard !isApplyingText, let textView = notification.object as? NSTextView else { return }
+            guard !isApplyingText, let textView = notification.object as? CodeTextView else {
+                return
+            }
             let value = textView.string
-            parent.text = value
             rebuildLineIndex(for: value)
+            if textView.hasMarkedText() {
+                beginCompositionIfNeeded()
+                needsPresentationRefreshAfterComposition = true
+                pendingSyntaxEdit = nil
+                ruler?.needsDisplay = true
+                reportSelection(textView.selectedRange())
+                return
+            }
+            if needsPresentationRefreshAfterComposition || compositionSession != nil {
+                commitComposition(in: textView)
+                return
+            }
+            parent.text = value
+            lastSynchronizedText = value
             let edit = pendingSyntaxEdit
             pendingSyntaxEdit = nil
             applyVisibleBaseStyle(in: edit?.currentRange, to: textView)
             // Markdown presentation includes line-level hierarchy outside the exact edit.
             // Repaint the visible writing canvas after a formatting command so headings
             // and inline styles cannot be flattened by NSTextView's attributed replacement.
-            scheduleHighlight(for: value, edit: parent.language == .markdown ? nil : edit)
-            if parent.language == .markdown {
-                refreshMarkdownPresentation(in: textView)
-            }
+            scheduleHighlight(
+                for: value,
+                edit: parent.language == .markdown ? nil : edit,
+                markdownEdit: edit
+            )
             ruler?.needsDisplay = true
             reportSelection(textView.selectedRange())
+        }
+
+        fileprivate func compositionDidCommit() {
+            guard needsPresentationRefreshAfterComposition || compositionSession != nil,
+                let textView,
+                !textView.hasMarkedText()
+            else { return }
+            commitComposition(in: textView)
+        }
+
+        private func beginCompositionIfNeeded() {
+            guard compositionSession == nil else { return }
+            compositionSession = TextCompositionSession(baseline: lastSynchronizedText)
+            compositionBinding = parent.$text
+        }
+
+        fileprivate func observeExternalTextDuringComposition(_ value: String) {
+            beginCompositionIfNeeded()
+            compositionSession?.observeExternalText(value)
+        }
+
+        private func commitComposition(in textView: CodeTextView) {
+            beginCompositionIfNeeded()
+            if let currentModelValue = compositionBinding?.wrappedValue {
+                compositionSession?.observeExternalText(currentModelValue)
+            }
+            let localValue = textView.string
+            let resolvedValue =
+                compositionSession?.resolve(committedLocalText: localValue) ?? localValue
+            let binding = compositionBinding ?? parent.$text
+            let deferredSave = pendingSaveAfterComposition
+            compositionSession = nil
+            compositionBinding = nil
+            pendingSaveAfterComposition = nil
+            needsPresentationRefreshAfterComposition = false
+            pendingSyntaxEdit = nil
+
+            if resolvedValue != localValue {
+                apply(resolvedValue, to: textView)
+            } else {
+                lastSynchronizedText = resolvedValue
+                rebuildLineIndex(for: resolvedValue)
+            }
+            if binding.wrappedValue != resolvedValue {
+                binding.wrappedValue = resolvedValue
+            }
+            if let scrollView = textView.enclosingScrollView {
+                updateAppearance(
+                    textView: textView,
+                    scrollView: scrollView,
+                    theme: parent.theme,
+                    language: parent.language,
+                    settings: parent.settings
+                )
+            }
+            applyVisibleBaseStyle(in: nil, to: textView)
+            scheduleHighlight(for: resolvedValue)
+            ruler?.needsDisplay = true
+            reportSelection(textView.selectedRange())
+            deferredSave?()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             reportSelection(textView.selectedRange())
-            if parent.language == .markdown {
-                refreshMarkdownPresentation(in: textView)
-            }
             textView.needsDisplay = true
             ruler?.needsDisplay = true
         }
@@ -226,10 +346,16 @@ struct CodeEditor: NSViewRepresentable {
             )
             _ = textView.performValidatedReplacement(in: fullRange, with: replacement)
             manager?.enableUndoRegistration()
+            let replacementLength = (value as NSString).length
+            let selectionLocation = min(selection.location, replacementLength)
             textView.setSelectedRange(
-                NSRange(location: min(selection.location, (value as NSString).length), length: 0)
+                NSRange(
+                    location: selectionLocation,
+                    length: min(selection.length, replacementLength - selectionLocation)
+                )
             )
             isApplyingText = false
+            lastSynchronizedText = value
             rebuildLineIndex(for: value)
             pendingSyntaxEdit = nil
             scheduleHighlight(for: value)
@@ -262,6 +388,10 @@ struct CodeEditor: NSViewRepresentable {
             language: LanguageID,
             settings: EditorSettings
         ) {
+            guard !textView.hasMarkedText() else {
+                needsPresentationRefreshAfterComposition = true
+                return
+            }
             let usesProseLayout = language == .plainText || language == .markdown
             let font =
                 usesProseLayout
@@ -382,14 +512,50 @@ struct CodeEditor: NSViewRepresentable {
             lineIndexTask = nil
             syntaxTask?.cancel()
             syntaxTask = nil
+            markdownPublishTask?.cancel()
+            markdownPublishTask = nil
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
             }
             scrollObserver = nil
         }
 
+        @discardableResult
+        fileprivate func transition(to identity: CodeEditorDocumentIdentity) -> Bool {
+            guard documentIdentity != identity else { return false }
+            documentIdentity = identity
+            syntaxRevision += 1
+            syntaxTask?.cancel()
+            syntaxTask = nil
+            markdownDocument = nil
+            markdownPublishTask?.cancel()
+            markdownPublishTask = nil
+            pendingMarkdownPublishRevision = nil
+            lastPublishedMarkdownRevision = nil
+            pendingSyntaxEdit = nil
+            needsPresentationRefreshAfterComposition = false
+            compositionSession = nil
+            compositionBinding = nil
+            pendingSaveAfterComposition = nil
+            lastSynchronizedText = parent.text
+            return true
+        }
+
+        fileprivate func refreshDocumentSnapshot(in textView: NSTextView) {
+            guard parent.language == .markdown else { return }
+            scheduleHighlight(for: textView.string)
+        }
+
         func save(_ currentText: String) {
+            if let textView, textView.hasMarkedText() || compositionSession != nil {
+                beginCompositionIfNeeded()
+                pendingSaveAfterComposition = parent.onSave
+                if textView.hasMarkedText() { textView.unmarkText() }
+                compositionDidCommit()
+                return
+            }
             parent.text = currentText
+            lastSynchronizedText = currentText
             parent.onSave()
         }
 
@@ -476,13 +642,45 @@ struct CodeEditor: NSViewRepresentable {
         private func scheduleHighlight(
             for source: String,
             edit: SyntaxEdit? = nil,
+            markdownEdit: SyntaxEdit? = nil,
             debounce: Bool = false
         ) {
             guard let textView else { return }
+            _ = transition(to: parent.documentIdentity)
+            guard !textView.hasMarkedText() else {
+                needsPresentationRefreshAfterComposition = true
+                return
+            }
             syntaxRevision += 1
             let revision = syntaxRevision
             let language = parent.language
             let visibleRange = visibleCharacterRange(in: textView)
+            let markdownDocument: MarkdownDocumentSnapshot?
+            if language == .markdown {
+                let document: MarkdownDocumentSnapshot
+                if let previous = self.markdownDocument, let markdownEdit {
+                    document = MarkdownBlockDocumentEngine.reconcile(
+                        source: source,
+                        with: previous,
+                        edit: markdownEdit
+                    )
+                } else {
+                    document = MarkdownBlockDocumentEngine.reconcile(
+                        source: source,
+                        with: self.markdownDocument
+                    )
+                }
+                self.markdownDocument = document
+                markdownDocument = document
+                publishMarkdownDocument(document)
+            } else {
+                self.markdownDocument = nil
+                markdownPublishTask?.cancel()
+                markdownPublishTask = nil
+                pendingMarkdownPublishRevision = nil
+                lastPublishedMarkdownRevision = nil
+                markdownDocument = nil
+            }
             syntaxTask?.cancel()
             syntaxTask = Task { [weak self] in
                 if debounce {
@@ -508,7 +706,36 @@ struct CodeEditor: NSViewRepresentable {
                 guard !Task.isCancelled, revision == syntaxRevision,
                     textView.string == source
                 else { return }
-                applySyntax(result, fencedCodeTokens: fencedCodeTokens, to: textView)
+                guard !textView.hasMarkedText() else {
+                    needsPresentationRefreshAfterComposition = true
+                    return
+                }
+                applySyntax(
+                    result,
+                    fencedCodeTokens: fencedCodeTokens,
+                    markdownDocument: markdownDocument,
+                    to: textView
+                )
+            }
+        }
+
+        private func publishMarkdownDocument(_ document: MarkdownDocumentSnapshot) {
+            guard lastPublishedMarkdownRevision != document.revision,
+                pendingMarkdownPublishRevision != document.revision
+            else { return }
+            markdownPublishTask?.cancel()
+            pendingMarkdownPublishRevision = document.revision
+            let identity = documentIdentity
+            markdownPublishTask = Task { [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self,
+                    documentIdentity == identity,
+                    markdownDocument?.revision == document.revision,
+                    markdownDocument?.source == document.source
+                else { return }
+                pendingMarkdownPublishRevision = nil
+                lastPublishedMarkdownRevision = document.revision
+                parent.onMarkdownDocumentChange(identity, document)
             }
         }
 
@@ -531,8 +758,13 @@ struct CodeEditor: NSViewRepresentable {
         private func applySyntax(
             _ result: SyntaxHighlightResult,
             fencedCodeTokens: [SyntaxToken],
+            markdownDocument: MarkdownDocumentSnapshot?,
             to textView: NSTextView
         ) {
+            guard !textView.hasMarkedText() else {
+                needsPresentationRefreshAfterComposition = true
+                return
+            }
             guard let storage = textView.textStorage, let syntaxBaseFont,
                 let syntaxBaseColor
             else { return }
@@ -561,6 +793,7 @@ struct CodeEditor: NSViewRepresentable {
             storage.removeAttribute(.strikethroughStyle, range: styledRange)
             storage.removeAttribute(.underlineStyle, range: styledRange)
             storage.removeAttribute(.underlineColor, range: styledRange)
+            storage.removeAttribute(.kern, range: styledRange)
             storage.addAttributes(baseAttributes, range: styledRange)
             for token in result.tokens {
                 let range = NSIntersectionRange(token.range, styledRange)
@@ -571,9 +804,9 @@ struct CodeEditor: NSViewRepresentable {
                 }
                 storage.addAttributes(attributes, range: range)
             }
-            if parent.language == .markdown {
+            if parent.language == .markdown, let markdownDocument {
                 applyMarkdownPresentation(
-                    source: textView.string,
+                    document: markdownDocument,
                     range: styledRange,
                     storage: storage
                 )
@@ -610,6 +843,10 @@ struct CodeEditor: NSViewRepresentable {
             in requestedRange: NSRange?,
             to textView: NSTextView
         ) {
+            guard !textView.hasMarkedText() else {
+                needsPresentationRefreshAfterComposition = true
+                return
+            }
             guard let storage = textView.textStorage, let syntaxBaseFont,
                 let syntaxBaseColor, storage.length > 0
             else { return }
@@ -628,6 +865,7 @@ struct CodeEditor: NSViewRepresentable {
             storage.removeAttribute(.strikethroughStyle, range: range)
             storage.removeAttribute(.underlineStyle, range: range)
             storage.removeAttribute(.underlineColor, range: range)
+            storage.removeAttribute(.kern, range: range)
             storage.addAttributes(attributes, range: range)
             isApplyingSyntax = false
             if let textContainer = textView.textContainer {
@@ -636,447 +874,289 @@ struct CodeEditor: NSViewRepresentable {
             textView.needsDisplay = true
         }
 
-        /// Presents Markdown as one calm writing canvas while preserving its portable source.
-        /// Syntax markers remain in the file but collapse visually, matching a block editor.
+        /// Paints one immutable block-document revision. Parsing and semantic
+        /// decisions happen once in TextEngine; this bridge only maps typed
+        /// blocks and inline runs to AppKit attributes.
         private func applyMarkdownPresentation(
-            source: String,
+            document: MarkdownDocumentSnapshot,
             range: NSRange,
             storage: NSTextStorage
         ) {
-            guard let syntaxBaseFont, let syntaxBaseColor, let markdownMarkerColor,
+            guard document.source == storage.string,
+                let syntaxBaseFont, let syntaxBaseColor, let markdownMarkerColor,
                 let markdownCodeBackground, let markdownQuoteColor
             else { return }
-            let nsSource = source as NSString
-            let safeRange = NSIntersectionRange(
-                range, NSRange(location: 0, length: nsSource.length))
+            let fullRange = NSRange(location: 0, length: storage.length)
+            let safeRange = NSIntersectionRange(range, fullRange)
             guard safeRange.length > 0 else { return }
-            let syntaxColor: (NSRange) -> NSColor = { _ in .clear }
 
-            applyMarkdownMatches(
-                pattern: "(?m)^(#{1,6})(?:[ \\t]+(.*?)[ \\t]*#*[ \\t]*)?$",
-                source: source,
-                range: safeRange
-            ) { match in
-                let marker = match.range(at: 1)
-                guard marker.location != NSNotFound else { return }
-                let level = min(max(marker.length, 1), 6)
-                let scale: CGFloat = [1.78, 1.5, 1.28, 1.12, 1.04, 1.0][level - 1]
-                let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
-                let headingFont = NSFont.systemFont(
-                    ofSize: max(syntaxBaseFont.pointSize * scale, syntaxBaseFont.pointSize),
-                    weight: weight
-                )
-                let paragraph =
-                    (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
-                    ?? NSMutableParagraphStyle()
-                paragraph.paragraphSpacingBefore = level == 1 ? 18 : 12
-                paragraph.paragraphSpacing = level <= 2 ? 8 : 5
-                storage.addAttributes(
-                    [
-                        .font: headingFont, .foregroundColor: syntaxBaseColor,
-                        .paragraphStyle: paragraph,
-                    ],
-                    range: match.range
-                )
-                storage.addAttributes(
-                    self.markdownSyntaxAttributes(for: syntaxColor(match.range)),
-                    range: marker
-                )
+            func valid(_ requested: NSRange) -> NSRange? {
+                let value = NSIntersectionRange(requested, fullRange)
+                return value.length > 0 ? value : nil
             }
 
-            applyMarkdownMatches(
-                pattern: "(?m)^(\\s*)((?:[-+*]|[0-9]+\\.)[ \\t]+|[-+*][ \\t]+\\[[ xX]\\][ \\t]+)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let marker = match.range(at: 2)
-                guard marker.location != NSNotFound else { return }
-                storage.addAttributes(
-                    [
-                        .foregroundColor: markdownQuoteColor,
-                        .font: NSFont.systemFont(
-                            ofSize: syntaxBaseFont.pointSize, weight: .semibold),
-                    ],
-                    range: marker
-                )
-            }
+            for block in document.blocks
+            where NSIntersectionRange(block.sourceRange, safeRange).length > 0 {
+                let blockRange = valid(block.sourceRange)
+                let contentRange = valid(block.contentRange)
 
-            applyMarkdownMatches(
-                pattern: "(?m)^(\\s*>[ \\t]?)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let marker = match.range(at: 1)
-                guard marker.location != NSNotFound else { return }
-                storage.addAttribute(.foregroundColor, value: markdownQuoteColor, range: marker)
-                let line = nsSource.lineRange(for: marker)
-                let paragraph =
-                    (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
-                    ?? NSMutableParagraphStyle()
-                paragraph.headIndent = 12
-                paragraph.firstLineHeadIndent = 0
-                paragraph.paragraphSpacing = 3
-                storage.addAttribute(.paragraphStyle, value: paragraph, range: line)
-            }
-
-            applyMarkdownMatches(
-                pattern: "\\*\\*([^\\n*]+)\\*\\*|__([^\\n_]+)__",
-                source: source,
-                range: safeRange
-            ) { match in
-                self.styleDelimitedMatch(
-                    match,
-                    contentGroups: [1, 2],
-                    trait: .boldFontMask,
-                    markerColor: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
-
-            applyMarkdownMatches(
-                pattern: "(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)|(?<!_)_([^_\\n]+)_(?!_)",
-                source: source,
-                range: safeRange
-            ) { match in
-                self.styleDelimitedMatch(
-                    match,
-                    contentGroups: [1, 2],
-                    trait: .italicFontMask,
-                    markerColor: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
-
-            applyMarkdownMatches(
-                pattern: "~~([^\\n~]+)~~",
-                source: source,
-                range: safeRange
-            ) { match in
-                let content = match.range(at: 1)
-                guard content.location != NSNotFound else { return }
-                storage.addAttribute(
-                    .strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: content)
-                self.dimDelimiters(
-                    in: match.range,
-                    around: content,
-                    color: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
-
-            applyMarkdownMatches(
-                pattern: "(?<!`)`([^`\\n]+)`(?!`)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let content = match.range(at: 1)
-                guard content.location != NSNotFound else { return }
-                storage.addAttributes(
-                    [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
-                        .backgroundColor: markdownCodeBackground,
-                    ],
-                    range: content
-                )
-                self.dimDelimiters(
-                    in: match.range,
-                    around: content,
-                    color: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
-
-            applyMarkdownMatches(
-                pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]+)\\)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let label = match.range(at: 1)
-                let destination = match.range(at: 2)
-                guard label.location != NSNotFound, destination.location != NSNotFound else {
-                    return
-                }
-                storage.addAttributes(
-                    [
-                        .foregroundColor: markdownQuoteColor,
-                        .underlineStyle: NSUnderlineStyle.single.rawValue,
-                        .underlineColor: markdownQuoteColor,
-                    ],
-                    range: label
-                )
-                let linkSyntaxColor = syntaxColor(match.range)
-                storage.addAttributes(
-                    self.markdownSyntaxAttributes(for: linkSyntaxColor),
-                    range: destination
-                )
-                let prefixRange = NSRange(location: match.range.location, length: 1)
-                let betweenRange = NSRange(location: NSMaxRange(label), length: 2)
-                let suffixRange = NSRange(location: NSMaxRange(match.range) - 1, length: 1)
-                for marker in [prefixRange, betweenRange, suffixRange] {
+                for syntaxRange in block.syntaxRanges {
+                    guard let syntaxRange = valid(syntaxRange) else { continue }
                     storage.addAttributes(
-                        self.markdownSyntaxAttributes(for: linkSyntaxColor),
-                        range: marker
+                        markdownSyntaxAttributes(for: markdownMarkerColor),
+                        range: syntaxRange
                     )
                 }
-            }
 
-            applyMarkdownMatches(
-                pattern: "!\\[([^\\]\\n]*)\\]\\(([^)\\n]+)\\)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let label = match.range(at: 1)
-                guard label.location != NSNotFound else { return }
-                storage.addAttributes(
-                    [
-                        .foregroundColor: markdownQuoteColor,
-                        .font: NSFont.systemFont(
-                            ofSize: syntaxBaseFont.pointSize, weight: .semibold),
-                    ],
-                    range: label
-                )
-                let markerColor = syntaxColor(match.range)
-                self.dimDelimiters(
-                    in: match.range,
-                    around: label,
-                    color: markerColor,
-                    storage: storage
-                )
-            }
+                switch block.kind {
+                case .heading(let requestedLevel):
+                    for syntaxRange in block.syntaxRanges {
+                        guard let syntaxRange = valid(syntaxRange) else { continue }
+                        collapseMarkdownSyntax(in: syntaxRange, storage: storage)
+                    }
+                    guard let contentRange else { break }
+                    let level = min(max(requestedLevel, 1), 6)
+                    let scale: CGFloat = [1.78, 1.5, 1.28, 1.12, 1.04, 1.0][level - 1]
+                    let paragraph =
+                        (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
+                        ?? NSMutableParagraphStyle()
+                    paragraph.paragraphSpacingBefore = level == 1 ? 18 : 12
+                    paragraph.paragraphSpacing = level <= 2 ? 8 : 5
+                    if let blockRange {
+                        storage.addAttribute(
+                            .paragraphStyle,
+                            value: paragraph,
+                            range: blockRange
+                        )
+                    }
+                    storage.addAttributes(
+                        [
+                            .font: NSFont.systemFont(
+                                ofSize: max(
+                                    syntaxBaseFont.pointSize * scale,
+                                    syntaxBaseFont.pointSize
+                                ),
+                                weight: level <= 2 ? .bold : .semibold
+                            ),
+                            .foregroundColor: syntaxBaseColor,
+                        ],
+                        range: contentRange
+                    )
 
-            applyMarkdownMatches(
-                pattern: "(?m)^([ \\t]*\\|.*\\|[ \\t]*)$",
-                source: source,
-                range: safeRange
-            ) { match in
-                let paragraph =
-                    (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
-                    ?? NSMutableParagraphStyle()
-                paragraph.paragraphSpacing = 2
-                storage.addAttributes(
-                    [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
-                        .backgroundColor: markdownCodeBackground.withAlphaComponent(0.55),
-                        .paragraphStyle: paragraph,
-                    ],
-                    range: match.range
-                )
-            }
+                case .bulletedListItem, .numberedListItem, .taskItem:
+                    for syntaxRange in block.syntaxRanges {
+                        guard let syntaxRange = valid(syntaxRange) else { continue }
+                        storage.addAttributes(
+                            [
+                                .foregroundColor: markdownQuoteColor,
+                                .font: NSFont.systemFont(
+                                    ofSize: syntaxBaseFont.pointSize,
+                                    weight: .semibold
+                                ),
+                            ],
+                            range: syntaxRange
+                        )
+                    }
+                    if case .taskItem(isCompleted: true) = block.kind, let contentRange {
+                        storage.addAttributes(
+                            [
+                                .foregroundColor: markdownMarkerColor,
+                                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                            ],
+                            range: contentRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern:
-                    "(?m)^[ \\t]*\\|?[ \\t]*:?-{3,}:?[ \\t]*(?:\\|[ \\t]*:?-{3,}:?[ \\t]*)+\\|?[ \\t]*$",
-                source: source,
-                range: safeRange
-            ) { match in
-                storage.addAttribute(
-                    .foregroundColor, value: markdownMarkerColor, range: match.range)
-            }
+                case .quote:
+                    if let contentRange {
+                        storage.addAttribute(
+                            .foregroundColor,
+                            value: markdownQuoteColor,
+                            range: contentRange
+                        )
+                    }
+                    if let blockRange {
+                        let paragraph =
+                            (syntaxParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle)
+                            ?? NSMutableParagraphStyle()
+                        paragraph.headIndent = 12
+                        paragraph.firstLineHeadIndent = 0
+                        paragraph.paragraphSpacing = 3
+                        storage.addAttribute(
+                            .paragraphStyle,
+                            value: paragraph,
+                            range: blockRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern: "\\[\\^([^\\]\\n]+)\\](?::)?",
-                source: source,
-                range: safeRange
-            ) { match in
-                storage.addAttributes(
-                    [
-                        .foregroundColor: markdownQuoteColor,
-                        .font: NSFont.systemFont(
-                            ofSize: max(syntaxBaseFont.pointSize - 2, 9), weight: .semibold),
-                    ],
-                    range: match.range
-                )
-            }
+                case .fencedCode:
+                    if let blockRange {
+                        storage.addAttributes(
+                            [
+                                .font: NSFont.monospacedSystemFont(
+                                    ofSize: max(syntaxBaseFont.pointSize - 1, 10),
+                                    weight: .regular
+                                ),
+                                .backgroundColor: markdownCodeBackground,
+                            ],
+                            range: blockRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern: "(?<!\\$)\\$([^\\n$]+)\\$(?!\\$)",
-                source: source,
-                range: safeRange
-            ) { match in
-                let content = match.range(at: 1)
-                guard content.location != NSNotFound else { return }
-                storage.addAttributes(
-                    [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
-                        .foregroundColor: markdownQuoteColor,
-                    ],
-                    range: content
-                )
-                self.dimDelimiters(
-                    in: match.range,
-                    around: content,
-                    color: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
+                case .math:
+                    if let blockRange {
+                        storage.addAttributes(
+                            [
+                                .font: NSFont.monospacedSystemFont(
+                                    ofSize: syntaxBaseFont.pointSize,
+                                    weight: .regular
+                                ),
+                                .foregroundColor: markdownQuoteColor,
+                                .backgroundColor: markdownCodeBackground,
+                            ],
+                            range: blockRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern: "(?ms)^\\$\\$[ \\t]*\\n(.*?)^\\$\\$[ \\t]*$",
-                source: source,
-                range: safeRange
-            ) { match in
-                storage.addAttributes(
-                    [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: syntaxBaseFont.pointSize, weight: .regular),
-                        .foregroundColor: markdownQuoteColor,
-                        .backgroundColor: markdownCodeBackground,
-                    ],
-                    range: match.range
-                )
-                let content = match.range(at: 1)
-                guard content.location != NSNotFound else { return }
-                self.dimDelimiters(
-                    in: match.range,
-                    around: content,
-                    color: syntaxColor(match.range),
-                    storage: storage
-                )
-            }
+                case .table:
+                    if let blockRange {
+                        storage.addAttributes(
+                            [
+                                .font: NSFont.monospacedSystemFont(
+                                    ofSize: max(syntaxBaseFont.pointSize - 1, 10),
+                                    weight: .regular
+                                ),
+                                .backgroundColor: markdownCodeBackground.withAlphaComponent(0.55),
+                            ],
+                            range: blockRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern: "(?ms)^```[^\\n]*\\n.*?^```[ \\t]*$",
-                source: source,
-                range: safeRange
-            ) { match in
-                storage.addAttributes(
-                    [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: max(syntaxBaseFont.pointSize - 1, 10), weight: .regular),
-                        .backgroundColor: markdownCodeBackground,
-                    ],
-                    range: match.range
-                )
-                let firstLine = nsSource.lineRange(
-                    for: NSRange(location: match.range.location, length: 0))
-                let finalLocation = max(NSMaxRange(match.range) - 1, match.range.location)
-                let lastLine = nsSource.lineRange(for: NSRange(location: finalLocation, length: 0))
-                storage.addAttributes(
-                    self.markdownSyntaxAttributes(for: syntaxColor(firstLine)),
-                    range: firstLine
-                )
-                storage.addAttributes(
-                    self.markdownSyntaxAttributes(for: syntaxColor(lastLine)),
-                    range: lastLine
-                )
-            }
+                case .divider:
+                    if let contentRange {
+                        storage.addAttributes(
+                            [
+                                .foregroundColor: markdownMarkerColor,
+                                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                            ],
+                            range: contentRange
+                        )
+                    }
 
-            applyMarkdownMatches(
-                pattern: "(?m)^[ \\t]{0,3}(?:---+|___+|\\*\\*\\*+)[ \\t]*$",
-                source: source,
-                range: safeRange
-            ) { match in
-                storage.addAttributes(
-                    [
-                        .foregroundColor: markdownMarkerColor,
-                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    ],
-                    range: match.range
-                )
-            }
-        }
+                case .paragraph, .empty, .raw:
+                    break
+                }
 
-        private func refreshMarkdownPresentation(in textView: NSTextView) {
-            guard parent.language == .markdown, let storage = textView.textStorage,
-                let syntaxBaseFont, let syntaxBaseColor, storage.length > 0
-            else { return }
-            let visible = visibleCharacterRange(in: textView)
-            let range = (textView.string as NSString).lineRange(for: visible)
-            var baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: syntaxBaseFont,
-                .foregroundColor: syntaxBaseColor,
-            ]
-            if let syntaxParagraphStyle {
-                baseAttributes[.paragraphStyle] = syntaxParagraphStyle
-            }
-            isApplyingSyntax = true
-            storage.beginEditing()
-            // Always clear the whole visible line range before layering Markdown
-            // presentation. Resetting only the newly inserted character leaves
-            // stale heading fonts and paragraph spacing on lines that become body
-            // text, which can push the caret hundreds of points down the canvas.
-            storage.removeAttribute(.backgroundColor, range: range)
-            storage.removeAttribute(.strikethroughStyle, range: range)
-            storage.removeAttribute(.underlineStyle, range: range)
-            storage.removeAttribute(.underlineColor, range: range)
-            storage.addAttributes(baseAttributes, range: range)
-            applyMarkdownPresentation(
-                source: textView.string,
-                range: range,
-                storage: storage
-            )
-            storage.endEditing()
-            isApplyingSyntax = false
-            // A newline created at the end of a heading must start a normal body
-            // paragraph rather than inheriting the heading's temporary attributes.
-            textView.typingAttributes = baseAttributes
-            textView.needsDisplay = true
-        }
-
-        private func applyMarkdownMatches(
-            pattern: String,
-            source: String,
-            range: NSRange,
-            apply: (NSTextCheckingResult) -> Void
-        ) {
-            guard let expression = try? NSRegularExpression(pattern: pattern) else { return }
-            expression.enumerateMatches(in: source, range: range) { match, _, _ in
-                if let match { apply(match) }
-            }
-        }
-
-        private func styleDelimitedMatch(
-            _ match: NSTextCheckingResult,
-            contentGroups: [Int],
-            trait: NSFontTraitMask,
-            markerColor: NSColor,
-            storage: NSTextStorage
-        ) {
-            guard
-                let content = contentGroups.map({ match.range(at: $0) }).first(where: {
-                    $0.location != NSNotFound
-                })
-            else { return }
-            let currentFont =
-                storage.attribute(.font, at: content.location, effectiveRange: nil)
-                as? NSFont ?? NSFont.systemFont(ofSize: 13)
-            let font = NSFontManager.shared.convert(currentFont, toHaveTrait: trait)
-            storage.addAttribute(.font, value: font, range: content)
-            dimDelimiters(in: match.range, around: content, color: markerColor, storage: storage)
-        }
-
-        private func dimDelimiters(
-            in fullRange: NSRange,
-            around contentRange: NSRange,
-            color: NSColor,
-            storage: NSTextStorage
-        ) {
-            let leading = NSRange(
-                location: fullRange.location, length: contentRange.location - fullRange.location)
-            let trailing = NSRange(
-                location: NSMaxRange(contentRange),
-                length: NSMaxRange(fullRange) - NSMaxRange(contentRange))
-            if leading.length > 0 {
-                storage.addAttributes(markdownSyntaxAttributes(for: color), range: leading)
-            }
-            if trailing.length > 0 {
-                storage.addAttributes(markdownSyntaxAttributes(for: color), range: trailing)
+                for span in block.inlineSpans
+                where NSIntersectionRange(span.contentRange, safeRange).length > 0 {
+                    guard let contentRange = valid(span.contentRange) else { continue }
+                    for syntaxRange in span.syntaxRanges {
+                        guard let syntaxRange = valid(syntaxRange) else { continue }
+                        collapseMarkdownSyntax(in: syntaxRange, storage: storage)
+                    }
+                    switch span.kind {
+                    case .strong:
+                        let current =
+                            storage.attribute(.font, at: contentRange.location, effectiveRange: nil)
+                            as? NSFont ?? syntaxBaseFont
+                        storage.addAttribute(
+                            .font,
+                            value: NSFontManager.shared.convert(
+                                current,
+                                toHaveTrait: .boldFontMask
+                            ),
+                            range: contentRange
+                        )
+                    case .emphasis:
+                        let current =
+                            storage.attribute(.font, at: contentRange.location, effectiveRange: nil)
+                            as? NSFont ?? syntaxBaseFont
+                        storage.addAttribute(
+                            .font,
+                            value: NSFontManager.shared.convert(
+                                current,
+                                toHaveTrait: .italicFontMask
+                            ),
+                            range: contentRange
+                        )
+                    case .strikethrough:
+                        storage.addAttribute(
+                            .strikethroughStyle,
+                            value: NSUnderlineStyle.single.rawValue,
+                            range: contentRange
+                        )
+                    case .code:
+                        storage.addAttributes(
+                            [
+                                .font: NSFont.monospacedSystemFont(
+                                    ofSize: max(syntaxBaseFont.pointSize - 1, 10),
+                                    weight: .regular
+                                ),
+                                .backgroundColor: markdownCodeBackground,
+                            ],
+                            range: contentRange
+                        )
+                    case .link:
+                        storage.addAttributes(
+                            [
+                                .foregroundColor: markdownQuoteColor,
+                                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                                .underlineColor: markdownQuoteColor,
+                            ],
+                            range: contentRange
+                        )
+                    case .math:
+                        storage.addAttributes(
+                            [
+                                .font: NSFont.monospacedSystemFont(
+                                    ofSize: max(syntaxBaseFont.pointSize - 1, 10),
+                                    weight: .regular
+                                ),
+                                .foregroundColor: markdownQuoteColor,
+                            ],
+                            range: contentRange
+                        )
+                    }
+                }
             }
         }
 
         private func markdownSyntaxAttributes(
             for color: NSColor
         ) -> [NSAttributedString.Key: Any] {
-            let font: NSFont
-            if color.alphaComponent <= 0.001 {
-                font = NSFont.systemFont(ofSize: 1)
-            } else {
-                font = syntaxBaseFont ?? NSFont.systemFont(ofSize: 13)
+            // Syntax never changes glyph metrics. Stable metrics keep TextKit's
+            // caret, hit testing, IME ranges, and selections aligned with source.
+            return [
+                .foregroundColor: color,
+                .font: syntaxBaseFont ?? NSFont.systemFont(ofSize: 13),
+            ]
+        }
+
+        /// Hides a source delimiter without changing the line's font metrics.
+        /// Negative kerning cancels each glyph's advance while the normal font
+        /// keeps TextKit's baseline, hit testing, and IME geometry stable.
+        private func collapseMarkdownSyntax(
+            in range: NSRange,
+            storage: NSTextStorage
+        ) {
+            guard let font = syntaxBaseFont, range.length > 0,
+                NSMaxRange(range) <= storage.length
+            else { return }
+            storage.addAttributes(
+                [.foregroundColor: NSColor.clear, .font: font],
+                range: range
+            )
+            let source = storage.string as NSString
+            var location = range.location
+            while location < NSMaxRange(range) {
+                let characterRange = source.rangeOfComposedCharacterSequence(at: location)
+                let bounded = NSIntersectionRange(characterRange, range)
+                guard bounded.length > 0 else { break }
+                let value = source.substring(with: bounded)
+                let width = (value as NSString).size(withAttributes: [.font: font]).width
+                storage.addAttribute(.kern, value: -width, range: bounded)
+                location = NSMaxRange(bounded)
             }
-            return [.foregroundColor: color, .font: font]
         }
 
         private func tokenUsesEmphasisFont(_ kind: SyntaxTokenKind) -> Bool {

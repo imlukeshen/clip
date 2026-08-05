@@ -20,6 +20,8 @@ struct TextEditorWorkspace: View {
     @State private var showsTeXOutput = false
     @State private var texOutputTab: TeXOutputTab = .problems
     @State private var selectedRange = NSRange(location: 0, length: 0)
+    @State private var markdownDocument: MarkdownDocumentSnapshot?
+    @State private var markdownDocumentIdentity: CodeEditorDocumentIdentity?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -151,6 +153,7 @@ struct TextEditorWorkspace: View {
                 text: $editor.text,
                 language: editor.language,
                 settings: editor.settings,
+                documentIdentity: editorDocumentIdentity,
                 fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
                 isReadOnly: editor.isReadOnly,
                 undoManager: editor.undoManager,
@@ -164,7 +167,14 @@ struct TextEditorWorkspace: View {
                 scrollToLine: nil,
                 navigation: sourceNavigation,
                 onVisibleLineChange: { _ in },
-                onSelectionChange: { selectedRange = $0 }
+                onSelectionChange: { selectedRange = $0 },
+                onMarkdownDocumentChange: { identity, document in
+                    guard identity == editorDocumentIdentity,
+                        document.source == editor.text
+                    else { return }
+                    markdownDocumentIdentity = identity
+                    markdownDocument = document
+                }
             ) { line, column in
                 cursorLine = line
                 cursorColumn = column
@@ -320,6 +330,13 @@ struct TextEditorWorkspace: View {
         } ?? editor.activeFile?.relativePath ?? "Untitled.txt"
     }
 
+    private var editorDocumentIdentity: CodeEditorDocumentIdentity {
+        CodeEditorDocumentIdentity(
+            documentID: editor.document.id,
+            fileID: editor.activeFileID
+        )
+    }
+
     private var isRenamingOpenFile: Bool {
         editor.document.files.contains { file in
             file.assetID.map(model.renamingAssetIDs.contains) == true
@@ -421,33 +438,60 @@ struct TextEditorWorkspace: View {
     }
 
     private var markdownFormattingControls: some View {
-        HStack(spacing: 4) {
+        let document = markdownDocument.flatMap { snapshot in
+            markdownDocumentIdentity == editorDocumentIdentity
+                && snapshot.source == editor.text
+                ? snapshot : nil
+        }
+        let blockStyle =
+            document.map {
+                MarkdownFormattingOperations.blockStyle(
+                    in: $0,
+                    selectedRange: selectedRange
+                )
+            } ?? .body
+        let inlineActions: [MarkdownFormattingAction] = [
+            .bold, .italic, .strikethrough, .inlineCode, .link, .inlineMath,
+        ]
+        let activeInlineStyles = Set(
+            document.map { document in
+                inlineActions.filter {
+                    MarkdownFormattingOperations.isInlineStyleActive(
+                        $0,
+                        in: document,
+                        selectedRange: selectedRange
+                    )
+                }
+            } ?? []
+        )
+        return HStack(spacing: 4) {
             Menu {
                 markdownBlockMenuButton(
-                    "Body", style: .body, action: #selector(CodeTextView.markdownBody(_:)))
+                    "Body", style: .body, currentStyle: blockStyle,
+                    action: #selector(CodeTextView.markdownBody(_:)))
                 markdownBlockMenuButton(
-                    "Heading 1", style: .heading(1),
+                    "Heading 1", style: .heading(1), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading1(_:)))
                 markdownBlockMenuButton(
-                    "Heading 2", style: .heading(2),
+                    "Heading 2", style: .heading(2), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading2(_:)))
                 markdownBlockMenuButton(
-                    "Heading 3", style: .heading(3),
+                    "Heading 3", style: .heading(3), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading3(_:)))
                 Divider()
                 markdownBlockMenuButton(
-                    "Heading 4", style: .heading(4),
+                    "Heading 4", style: .heading(4), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading4(_:)))
                 markdownBlockMenuButton(
-                    "Heading 5", style: .heading(5),
+                    "Heading 5", style: .heading(5), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading5(_:)))
                 markdownBlockMenuButton(
-                    "Heading 6", style: .heading(6),
+                    "Heading 6", style: .heading(6), currentStyle: blockStyle,
                     action: #selector(CodeTextView.markdownHeading6(_:)))
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "textformat.size")
-                    Text(currentMarkdownBlockStyle.displayName)
+                    Text(blockStyle.displayName)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                 }
@@ -463,7 +507,7 @@ struct TextEditorWorkspace: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Turn the current line into body text or a heading")
-            .accessibilityLabel(currentMarkdownBlockStyle.displayName)
+            .accessibilityLabel(blockStyle.displayName)
             .accessibilityIdentifier("markdown-block-style")
 
             formattingDivider
@@ -473,42 +517,42 @@ struct TextEditorWorkspace: View {
                 systemImage: "bold",
                 action: #selector(CodeTextView.markdownBold(_:)),
                 identifier: "markdown-bold",
-                isActive: markdownInlineStyleIsActive(.bold)
+                isActive: activeInlineStyles.contains(.bold)
             )
             markdownFormatButton(
                 "Italic",
                 systemImage: "italic",
                 action: #selector(CodeTextView.markdownItalic(_:)),
                 identifier: "markdown-italic",
-                isActive: markdownInlineStyleIsActive(.italic)
+                isActive: activeInlineStyles.contains(.italic)
             )
             markdownFormatButton(
                 "Strikethrough",
                 systemImage: "strikethrough",
                 action: #selector(CodeTextView.markdownStrikethrough(_:)),
                 identifier: "markdown-strikethrough",
-                isActive: markdownInlineStyleIsActive(.strikethrough)
+                isActive: activeInlineStyles.contains(.strikethrough)
             )
             markdownFormatButton(
                 "Inline code",
                 systemImage: "chevron.left.forwardslash.chevron.right",
                 action: #selector(CodeTextView.markdownInlineCode(_:)),
                 identifier: "markdown-inline-code",
-                isActive: markdownInlineStyleIsActive(.inlineCode)
+                isActive: activeInlineStyles.contains(.inlineCode)
             )
             markdownFormatButton(
                 "Link",
                 systemImage: "link",
                 action: #selector(CodeTextView.markdownLink(_:)),
                 identifier: "markdown-link",
-                isActive: markdownInlineStyleIsActive(.link)
+                isActive: activeInlineStyles.contains(.link)
             )
             markdownFormatButton(
                 "Inline math",
                 systemImage: "function",
                 action: #selector(CodeTextView.markdownInlineMath(_:)),
                 identifier: "markdown-inline-math",
-                isActive: markdownInlineStyleIsActive(.inlineMath)
+                isActive: activeInlineStyles.contains(.inlineMath)
             )
 
             formattingDivider
@@ -518,28 +562,28 @@ struct TextEditorWorkspace: View {
                 systemImage: "list.bullet",
                 action: #selector(CodeTextView.markdownBulletedList(_:)),
                 identifier: "markdown-bulleted-list",
-                isActive: currentMarkdownBlockStyle == .bulletedList
+                isActive: blockStyle == .bulletedList
             )
             markdownFormatButton(
                 "Numbered list",
                 systemImage: "list.number",
                 action: #selector(CodeTextView.markdownNumberedList(_:)),
                 identifier: "markdown-numbered-list",
-                isActive: currentMarkdownBlockStyle == .numberedList
+                isActive: blockStyle == .numberedList
             )
             markdownFormatButton(
                 "Checklist",
                 systemImage: "checklist",
                 action: #selector(CodeTextView.markdownChecklist(_:)),
                 identifier: "markdown-checklist",
-                isActive: currentMarkdownBlockStyle == .checklist
+                isActive: blockStyle == .checklist
             )
             markdownFormatButton(
                 "Quote",
                 systemImage: "text.quote",
                 action: #selector(CodeTextView.markdownQuote(_:)),
                 identifier: "markdown-quote",
-                isActive: currentMarkdownBlockStyle == .quote
+                isActive: blockStyle == .quote
             )
 
             Menu {
@@ -601,35 +645,21 @@ struct TextEditorWorkspace: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private var currentMarkdownBlockStyle: MarkdownBlockStyle {
-        MarkdownFormattingOperations.blockStyle(
-            in: editor.text,
-            selectedRange: selectedRange
-        )
-    }
-
     private func markdownBlockMenuButton(
         _ title: String,
         style: MarkdownBlockStyle,
+        currentStyle: MarkdownBlockStyle,
         action: Selector
     ) -> some View {
         Button {
             sendMarkdownAction(action)
         } label: {
-            if currentMarkdownBlockStyle == style {
+            if currentStyle == style {
                 Label(title, systemImage: "checkmark")
             } else {
                 Text(title)
             }
         }
-    }
-
-    private func markdownInlineStyleIsActive(_ action: MarkdownFormattingAction) -> Bool {
-        MarkdownFormattingOperations.isInlineStyleActive(
-            action,
-            in: editor.text,
-            selectedRange: selectedRange
-        )
     }
 
     private func sendMarkdownAction(_ action: Selector) {

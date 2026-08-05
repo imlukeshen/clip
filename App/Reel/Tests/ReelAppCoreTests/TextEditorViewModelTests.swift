@@ -81,6 +81,23 @@ struct TextEditorViewModelTests {
         #expect(editor.activeFile?.languageIsExplicit == true)
     }
 
+    @Test("A populated Markdown document keeps one stable editor mode")
+    func populatedMarkdownDoesNotReclassifyWhileTyping() async throws {
+        let file = TextFile(
+            id: FileID(rawValue: "markdown-detected"),
+            relativePath: "Notes.md",
+            language: .markdown,
+            languageIsExplicit: false
+        )
+        let editor = try makeEditor(file: file, text: "# Notes")
+
+        editor.text = "```swift\nimport SwiftUI\nstruct Card: View {}\n```"
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(editor.language == .markdown)
+        #expect(editor.activeFile?.languageIsExplicit == false)
+    }
+
     @Test("Saving Markdown preserves empty block markers and rich formatting source")
     func markdownFormattingPersistsExactly() async throws {
         let fileID = FileID(rawValue: "markdown")
@@ -423,6 +440,201 @@ struct TextEditorViewModelTests {
         #expect(editor.texCompilationState == .idle)
     }
 
+    @Test("An engine-cancelled LaTeX build releases the compiler for the next request")
+    func engineCancelledLatexBuildCanRecompile() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = CancelThenSucceedRecorder()
+        let editor = try fixture.editor(engine: CancelThenSucceedTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil {
+            recorder.attemptCount == 1 && editor.texCompilationState == .idle
+        }
+
+        editor.requestTeXCompile()
+        await waitUntil(attempts: 100) {
+            recorder.attemptCount == 2 && editor.texCompilationState == .succeeded
+        }
+
+        #expect(recorder.attemptCount == 2)
+        #expect(editor.texCompilationState == .succeeded)
+        editor.stop()
+    }
+
+    @Test("Leaving automatic LaTeX mode cancels the pending debounce")
+    func leavingAutomaticLatexModeCancelsDebounce() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXJobRecorder()
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+
+        editor.setTeXCompileMode(.automatic)
+        editor.setTeXCompileMode(.manual)
+        try await Task.sleep(for: .milliseconds(2_700))
+
+        #expect(recorder.job == nil)
+        #expect(editor.texCompilationState == .idle)
+        editor.stop()
+    }
+
+    @Test("Leaving automatic mode drops its fired follow-up while a build is active")
+    func leavingAutomaticModeDropsQueuedAutomaticBuild() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = HeldCompileRecorder()
+        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.startedCount == 1 }
+        editor.setTeXCompileMode(.automatic)
+        try await Task.sleep(for: .milliseconds(2_700))
+        #expect(recorder.startedCount == 1)
+
+        editor.setTeXCompileMode(.manual)
+        recorder.releaseFirstBuild()
+        await waitUntil(attempts: 100) {
+            recorder.completedCount == 1 && editor.texCompilationState == .succeeded
+        }
+        try await Task.sleep(for: .milliseconds(250))
+
+        #expect(recorder.startedCount == 1)
+        #expect(recorder.completedCount == 1)
+        editor.stop()
+    }
+
+    @Test("Leaving automatic mode preserves an explicitly queued follow-up")
+    func leavingAutomaticModePreservesExplicitBuild() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = HeldCompileRecorder()
+        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.startedCount == 1 }
+        editor.setTeXCompileMode(.automatic)
+        editor.requestTeXCompile()
+        editor.setTeXCompileMode(.manual)
+        recorder.releaseFirstBuild()
+
+        await waitUntil(attempts: 100) {
+            recorder.completedCount == 2 && editor.texCompilationState == .succeeded
+        }
+
+        #expect(recorder.startedCount == 2)
+        #expect(recorder.completedCount == 2)
+        editor.stop()
+    }
+
+    @Test("Stopping a LaTeX editor discards queued work and late publications")
+    func stoppingLatexEditorInvalidatesCompileLifecycle() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = HeldCompileRecorder()
+        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.startedCount == 1 }
+        editor.requestTeXCompile()
+        editor.stop()
+        recorder.releaseFirstBuild()
+        try await Task.sleep(for: .milliseconds(250))
+
+        #expect(recorder.startedCount == 1)
+        #expect(editor.texCompilationState == .idle)
+        #expect(editor.texPDFURL == nil)
+        #expect(editor.texSyncTeXURL == nil)
+
+        editor.requestTeXCompile()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(recorder.startedCount == 1)
+    }
+
+    @Test("Changing the LaTeX root rejects the old build and clears PDF navigation")
+    func changingMainFileInvalidatesBuildIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-tex-main-identity-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstID = FileID(rawValue: "first-main")
+        let secondID = FileID(rawValue: "second-main")
+        let firstURL = root.appendingPathComponent("first.tex")
+        let secondURL = root.appendingPathComponent("second.tex")
+        let firstSource = "\\documentclass{article}\\begin{document}First\\end{document}"
+        let secondSource = "\\documentclass{article}\\begin{document}Second\\end{document}"
+        try Data(firstSource.utf8).write(to: firstURL)
+        try Data(secondSource.utf8).write(to: secondURL)
+        let document = try TextDocument(
+            files: [
+                TextFile(id: firstID, relativePath: "first.tex", language: .latex),
+                TextFile(id: secondID, relativePath: "second.tex", language: .latex),
+            ],
+            mainFileID: firstID
+        )
+        let recorder = HeldCompileRecorder()
+        let editor = TextEditorViewModel(
+            document: document,
+            contents: [firstID: firstSource, secondID: secondSource],
+            activeFileID: firstID,
+            sourceURLs: [firstID: firstURL, secondID: secondURL],
+            projectFileURLs: ["first.tex": firstURL, "second.tex": secondURL],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _, _ in },
+            texPreferences: try makeTeXPreferences(packageAccess: .cachedOnly)
+        )
+        editor.configureTeXEngine(HeldFirstCompileTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.startedCount == 1 }
+        editor.setMainFile(secondID)
+        recorder.releaseFirstBuild()
+        try await Task.sleep(for: .milliseconds(250))
+
+        #expect(recorder.mainFiles == ["first.tex"])
+        #expect(editor.texCompilationState == .idle)
+        #expect(editor.texPDFURL == nil)
+        #expect(editor.texSyncTeXURL == nil)
+
+        editor.requestTeXCompile()
+        await waitUntil(attempts: 100) { editor.texCompilationState == .succeeded }
+        #expect(recorder.mainFiles == ["first.tex", "second.tex"])
+        #expect(editor.texPDFURL != nil)
+        #expect(editor.texSyncTeXURL != nil)
+        #expect(editor.texSyncTeXIndex != nil)
+
+        editor.setMainFile(firstID)
+        #expect(editor.texCompilationState == .idle)
+        #expect(editor.texPDFURL == nil)
+        #expect(editor.texSyncTeXURL == nil)
+        #expect(editor.texSyncTeXIndex == nil)
+        editor.stop()
+    }
+
+    @Test("LaTeX builds serialize and coalesce edits into one follow-up snapshot")
+    func latexBuildsAreSerializedAndCoalesced() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = SerialCompileRecorder()
+        let editor = try fixture.editor(engine: DelayedRecordingTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .compiling }
+        editor.text += "% first queued edit\n"
+        editor.requestTeXCompile()
+        editor.text += "% second queued edit\n"
+        editor.requestTeXCompile()
+
+        await waitUntil(attempts: 100) {
+            recorder.completedCount == 2 && editor.texCompilationState == .succeeded
+        }
+        #expect(recorder.startedCount == 2)
+        #expect(recorder.maximumConcurrentCount == 1)
+        #expect(recorder.latestSource?.contains("second queued edit") == true)
+    }
+
     @Test("Editing an included file builds the main file with bibliography dependencies")
     func multiFileLatexBuildUsesMainDependencyGraph() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -438,6 +650,8 @@ struct TextEditorViewModelTests {
         let mainURL = root.appendingPathComponent("main.tex")
         let chapterURL = chapters.appendingPathComponent("intro.tex")
         let bibURL = root.appendingPathComponent("refs.bib")
+        let customStyleURL = root.appendingPathComponent("generated-theme.sty")
+        let dynamicImageURL = root.appendingPathComponent("dynamic-figure.png")
         let mainSource = "\\documentclass{article}\\input{chapters/intro}\\bibliography{refs}"
         let chapterSource = "Included chapter"
         let bibliography = "@book{clip,title={Clip}}"
@@ -446,9 +660,11 @@ struct TextEditorViewModelTests {
             (mainURL, mainSource),
             (chapterURL, chapterSource),
             (bibURL, bibliography),
+            (customStyleURL, "% loaded through a macro at compile time"),
         ] {
             try Data(value.utf8).write(to: url)
         }
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: dynamicImageURL)
         let document = try TextDocument(
             files: [
                 TextFile(id: mainID, relativePath: "main.tex", language: .latex),
@@ -472,6 +688,8 @@ struct TextEditorViewModelTests {
                 "main.tex": mainURL,
                 "chapters/intro.tex": chapterURL,
                 "refs.bib": bibURL,
+                "generated-theme.sty": customStyleURL,
+                "dynamic-figure.png": dynamicImageURL,
             ],
             hashingWith: { _ in "hash" },
             persistingStructure: { _ in },
@@ -485,7 +703,10 @@ struct TextEditorViewModelTests {
         let job = try #require(recorder.job)
 
         #expect(job.mainFile == mainURL)
-        #expect(Set(job.projectFiles) == Set([mainURL, chapterURL, bibURL]))
+        #expect(
+            Set(job.projectFiles)
+                == Set([mainURL, chapterURL, bibURL, customStyleURL, dynamicImageURL])
+        )
         #expect(Set(job.sourceOverrides.keys) == ["main.tex", "chapters/intro.tex", "refs.bib"])
         #expect(job.bibliography == .bibtex)
     }
@@ -526,6 +747,40 @@ struct TextEditorViewModelTests {
         }
         #expect(await writes.text(for: firstID) == "edited first")
         #expect(await writes.text(for: secondID) == "edited second")
+    }
+
+    @Test("A composition commit arriving after stop persists without restarting editor work")
+    func lateCompositionCommitAfterStopPersistsOnce() async throws {
+        let fileID = FileID(rawValue: "late-composition")
+        let file = TextFile(id: fileID, relativePath: "Untitled.txt")
+        let writes = TextWriteRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            contents: [fileID: "Draft"],
+            activeFileID: fileID,
+            sourceURLs: [:],
+            projectFileURLs: [:],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { id, data, _ in
+                await writes.record(id, data: data)
+            }
+        )
+
+        editor.stop()
+        editor.text = "import SwiftUI\n\n日本語"
+
+        for _ in 0..<50 where await writes.totalCount == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(await writes.text(for: fileID) == "import SwiftUI\n\n日本語")
+        #expect(await writes.totalCount == 1)
+
+        // Language detection normally fires after 320 ms. A stopped editor
+        // must stay quiescent even when its native view commits marked text.
+        try await Task.sleep(for: .milliseconds(450))
+        #expect(editor.language == .plainText)
+        #expect(await writes.totalCount == 1)
     }
 
     private func makeEditor(
@@ -582,10 +837,13 @@ private final class TeXJobRecorder: @unchecked Sendable {
 
 private actor TextWriteRecorder {
     private var writes: [FileID: String] = [:]
+    private var recordedWriteCount = 0
 
     var count: Int { writes.count }
+    var totalCount: Int { recordedWriteCount }
 
     func record(_ id: FileID, data: Data) {
+        recordedWriteCount += 1
         writes[id] = String(data: data, encoding: .utf8)
     }
 
@@ -627,6 +885,193 @@ private struct RecordingTeXEngine: TeXEngine {
             } catch {
                 continuation.finish(throwing: error)
             }
+        }
+    }
+}
+
+private final class CancelThenSucceedRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var attempts = 0
+
+    var attemptCount: Int { lock.withLock { attempts } }
+
+    func beginAttempt() -> Int {
+        lock.withLock {
+            attempts += 1
+            return attempts
+        }
+    }
+}
+
+private struct CancelThenSucceedTeXEngine: TeXEngine {
+    let id: EngineID = "cancel-then-succeed-test"
+    let displayName = "Cancel Then Succeed Test TeX"
+    let isAvailable = true
+    let recorder: CancelThenSucceedRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        let attempt = recorder.beginAttempt()
+        return AsyncThrowingStream { continuation in
+            guard attempt > 1 else {
+                continuation.finish(throwing: TeXEngineError.cancelled)
+                return
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "clip-cancelled-tex-result-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                let pdf = directory.appendingPathComponent("main.pdf")
+                try Data("%PDF-test".utf8).write(to: pdf)
+                continuation.yield(.finished(pdf: pdf, synctex: nil))
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+    }
+}
+
+private final class HeldCompileRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = 0
+    private var completed = 0
+    private var isFirstBuildReleased = false
+    private var storedMainFiles: [String] = []
+
+    var startedCount: Int { lock.withLock { started } }
+    var completedCount: Int { lock.withLock { completed } }
+    var firstBuildIsReleased: Bool { lock.withLock { isFirstBuildReleased } }
+    var mainFiles: [String] { lock.withLock { storedMainFiles } }
+
+    func beginBuild(_ job: TeXJob) -> Int {
+        lock.withLock {
+            started += 1
+            storedMainFiles.append(job.mainFile.lastPathComponent)
+            return started
+        }
+    }
+
+    func completeBuild() {
+        lock.withLock { completed += 1 }
+    }
+
+    func releaseFirstBuild() {
+        lock.withLock { isFirstBuildReleased = true }
+    }
+}
+
+private struct HeldFirstCompileTeXEngine: TeXEngine {
+    let id: EngineID = "held-first-test"
+    let displayName = "Held First Test TeX"
+    let isAvailable = true
+    let recorder: HeldCompileRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        let attempt = recorder.beginBuild(job)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    while attempt == 1 && !recorder.firstBuildIsReleased {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                        "clip-held-tex-result-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                    try FileManager.default.createDirectory(
+                        at: directory,
+                        withIntermediateDirectories: true
+                    )
+                    let pdf = directory.appendingPathComponent("main.pdf")
+                    try Data("%PDF-test".utf8).write(to: pdf)
+                    let synctex = directory.appendingPathComponent("main.synctex.gz")
+                    guard
+                        let compressedSyncTeX = Data(
+                            base64Encoded:
+                                "H4sIADnJcmoAA0XKPQ7CMAxA4d2n6AEi6rQJdbwyMSAGflTGqEpphroVNRIIcXcQC9vTp3d4SndMbXFOtyVPwha2Mt+VLZc6zuUYs6w0PeAk+Yuwi1fJfe6i/mZEhLbY9/2SlBEu/9xMokmU4WVhsKZmakLwNhiitUfvOVCNDo3zjio0TYUEbwsfue0uVY8AAAA="
+                        )
+                    else { throw CocoaError(.fileReadCorruptFile) }
+                    try compressedSyncTeX.write(to: synctex)
+                    recorder.completeBuild()
+                    continuation.yield(.finished(pdf: pdf, synctex: synctex))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+private final class SerialCompileRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = 0
+    private var maximumActive = 0
+    private var started = 0
+    private var completed = 0
+    private var source: String?
+
+    var startedCount: Int { lock.withLock { started } }
+    var completedCount: Int { lock.withLock { completed } }
+    var maximumConcurrentCount: Int { lock.withLock { maximumActive } }
+    var latestSource: String? { lock.withLock { source } }
+
+    func begin(_ job: TeXJob) {
+        lock.withLock {
+            active += 1
+            started += 1
+            maximumActive = max(maximumActive, active)
+            source = job.sourceOverrides["main.tex"].flatMap {
+                String(data: $0, encoding: .utf8)
+            }
+        }
+    }
+
+    func finish() {
+        lock.withLock {
+            active -= 1
+            completed += 1
+        }
+    }
+}
+
+private struct DelayedRecordingTeXEngine: TeXEngine {
+    let id: EngineID = "serialized-test"
+    let displayName = "Serialized Test TeX"
+    let isAvailable = true
+    let recorder: SerialCompileRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                recorder.begin(job)
+                do {
+                    try await Task.sleep(for: .milliseconds(120))
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                        "clip-serialized-tex-result-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                    try FileManager.default.createDirectory(
+                        at: directory,
+                        withIntermediateDirectories: true
+                    )
+                    let pdf = directory.appendingPathComponent("main.pdf")
+                    try Data("%PDF-test".utf8).write(to: pdf)
+                    recorder.finish()
+                    continuation.yield(.finished(pdf: pdf, synctex: nil))
+                    continuation.finish()
+                } catch {
+                    recorder.finish()
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }

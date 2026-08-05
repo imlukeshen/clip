@@ -35,6 +35,30 @@ public enum TextEditorCommandError: Error, Sendable, Equatable, LocalizedError {
     }
 }
 
+private enum TeXCompileRequestOrigin: Equatable {
+    case automatic
+    case requested
+}
+
+private struct TeXBuildFileIdentity: Equatable {
+    var id: FileID?
+    var relativePath: String
+    var sourceURL: URL?
+}
+
+/// Everything except editable source bytes that determines what a TeX build
+/// means. Source freshness is tracked separately so an edit can retain the last
+/// good PDF, while changing the root, project layout, engine, or package policy
+/// cannot accidentally make an unrelated PDF/SyncTeX map look current.
+private struct TeXBuildIdentity: Equatable {
+    var documentID: DocumentID
+    var mainFileID: FileID
+    var mainRelativePath: String
+    var files: [TeXBuildFileIdentity]
+    var engineID: EngineID
+    var packageAccess: TeXPackageAccess
+}
+
 /// Drives one open text or code document.
 ///
 /// This view model is deliberately split from the patch-graph editors. Its
@@ -64,9 +88,17 @@ public final class TextEditorViewModel {
             if isDetached { hasSavedDetachedCopy = false }
             guard !isApplyingExternalText else { return }
             textBuffers[activeFileID] = text
-            rebuildTeXProjectAnalysis()
             isDirty = true
             dirtyFileIDs.insert(activeFileID)
+            // AppModel stops editor-owned tasks before SwiftUI dismantles the
+            // native text view. An IME composition can therefore publish its
+            // final value just after stop(). Persist that late commit directly;
+            // never restart debounce, language detection, or TeX work.
+            if isStopped {
+                flushContentAutosave()
+                return
+            }
+            rebuildTeXProjectAnalysis()
             scheduleContentAutosave()
             scheduleTeXCompilation()
             scheduleLanguageDetection()
@@ -133,9 +165,13 @@ public final class TextEditorViewModel {
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
     @ObservationIgnored private var texEngine: (any TeXEngine)?
+    private var texCompileDebounceTask: Task<Void, Never>?
     private var texCompileTask: Task<Void, Never>?
     private var texCompileGeneration = UUID()
+    private var texCompilePendingOrigin: TeXCompileRequestOrigin?
     private var texSuccessfulSources: [FileID: String]?
+    private var texSuccessfulBuildIdentity: TeXBuildIdentity?
+    private var isStopped = false
     private let texPreferences: UserDefaults
 
     /// The debounce before an edited buffer autosaves, per design §2.2 (2 s).
@@ -240,18 +276,20 @@ public final class TextEditorViewModel {
 
     /// Starts editor-owned background work.
     public func start() {
+        isStopped = false
         startFileMonitor()
         scheduleTeXCompilation()
     }
 
     /// Stops background work and flushes any dirty content before closing.
     public func stop() {
+        isStopped = true
         structureTask?.cancel()
         contentTask?.cancel()
         cleanupTask?.cancel()
         languageDetectionTask?.cancel()
         externalReloadTask?.cancel()
-        texCompileTask?.cancel()
+        cancelTeXCompilation(resetState: true)
         fileMonitor?.cancel()
         fileMonitor = nil
         removeTeXResults()
@@ -268,6 +306,10 @@ public final class TextEditorViewModel {
             registerUndo(inverse, actionName: actionName)
             undoManager.setActionName(actionName)
             rebuildTeXProjectAnalysis()
+            if Self.changesTeXBuildIdentity(patch) {
+                invalidateTeXBuildIdentity()
+                if language == .latex { scheduleTeXCompilation() }
+            }
             persistStructureNow()
         } catch {
             notice = "That change could not be applied."
@@ -363,6 +405,7 @@ public final class TextEditorViewModel {
         for key in obsoleteKeys { projectFileURLs.removeValue(forKey: key) }
         projectFileURLs[newRelativePath] = standardizedURL
         document = candidate
+        invalidateTeXBuildIdentity()
 
         if isActiveFile {
             isDetached = false
@@ -542,8 +585,9 @@ public final class TextEditorViewModel {
         if needsTeXPackageConsent {
             return .paused("Choose cached-only or network package access in the editor first.")
         }
-        let task = texCompileTask
-        _ = await task?.value
+        while let task = texCompileTask {
+            _ = await task.value
+        }
         return texCompilationState
     }
 
@@ -582,7 +626,11 @@ public final class TextEditorViewModel {
 
     /// Supplies the engine selected by the app's distribution channel.
     public func configureTeXEngine(_ engine: any TeXEngine) {
+        let previousEngineID = texEngine?.id
         texEngine = engine
+        if previousEngineID != nil, previousEngineID != engine.id {
+            invalidateTeXBuildIdentity()
+        }
         if language == .latex { scheduleTeXCompilation() }
     }
 
@@ -593,16 +641,19 @@ public final class TextEditorViewModel {
             needsTeXPackageConsent = true
             return
         }
-        beginTeXCompilation()
+        beginTeXCompilation(origin: .requested)
     }
 
     /// Persists the package-network choice and resumes the requested build.
     public func resolveTeXPackageConsent(allowNetwork: Bool) {
         let access: TeXPackageAccess = allowNetwork ? .allowNetwork : .cachedOnly
+        if let previous = texPackageAccess, previous != access {
+            invalidateTeXBuildIdentity()
+        }
         texPackageAccess = access
         texPreferences.set(access.rawValue, forKey: "clip.tex.packageAccess")
         needsTeXPackageConsent = false
-        beginTeXCompilation()
+        beginTeXCompilation(origin: .requested)
     }
 
     public func cancelTeXPackageConsent() {
@@ -613,7 +664,15 @@ public final class TextEditorViewModel {
         guard texCompileMode != mode else { return }
         texCompileMode = mode
         texPreferences.set(mode.rawValue, forKey: "clip.tex.compileMode")
-        if mode == .automatic { scheduleTeXCompilation() }
+        if mode == .automatic {
+            scheduleTeXCompilation()
+        } else {
+            texCompileDebounceTask?.cancel()
+            texCompileDebounceTask = nil
+            if texCompilePendingOrigin == .automatic {
+                texCompilePendingOrigin = nil
+            }
+        }
     }
 
     public func cancelTeXCompilation() {
@@ -627,7 +686,9 @@ public final class TextEditorViewModel {
             notice = "No current SyncTeX mapping is available. Build the document first."
             return nil
         }
-        guard texSuccessfulSources == textBuffers else {
+        guard texSuccessfulSources == textBuffers,
+            texSuccessfulBuildIdentity == currentTeXBuildIdentity()
+        else {
             notice = "The SyncTeX map is stale. Build the changed source before navigating."
             return nil
         }
@@ -649,7 +710,9 @@ public final class TextEditorViewModel {
             notice = "No current SyncTeX mapping is available. Build the document first."
             return nil
         }
-        guard texSuccessfulSources == textBuffers else {
+        guard texSuccessfulSources == textBuffers,
+            texSuccessfulBuildIdentity == currentTeXBuildIdentity()
+        else {
             notice = "The SyncTeX map is stale. Build the changed source before navigating."
             return nil
         }
@@ -710,6 +773,14 @@ public final class TextEditorViewModel {
     private func scheduleLanguageDetection() {
         languageDetectionTask?.cancel()
         guard let activeFile, !activeFile.languageIsExplicit else { return }
+        // A populated Markdown document owns per-block language decisions.
+        // File-level detection must never tear down and recreate its live editor
+        // while the user is typing or composing text with an IME.
+        if activeFile.language == .markdown,
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return
+        }
         let fileID = activeFile.id
         let contents = text
         languageDetectionTask = Task { [weak self] in
@@ -879,30 +950,45 @@ public final class TextEditorViewModel {
     }
 
     private func scheduleTeXCompilation() {
-        guard language == .latex, texCompileMode == .automatic,
+        guard !isStopped, language == .latex, texCompileMode == .automatic,
             texPackageAccess != nil, texEngine != nil
         else { return }
-        texCompileTask?.cancel()
-        let generation = UUID()
-        texCompileGeneration = generation
-        texCompileTask = Task { [weak self] in
+        texCompileDebounceTask?.cancel()
+        texCompileDebounceTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(1_500))
+                // Match the calm, trailing compile cadence used by mature
+                // collaborative TeX editors instead of cancelling a build for
+                // every character typed.
+                try await Task.sleep(for: .milliseconds(2_500))
             } catch {
                 return
             }
-            guard !Task.isCancelled, let self, texCompileGeneration == generation else { return }
+            guard !Task.isCancelled, let self, !isStopped else { return }
+            texCompileDebounceTask = nil
             guard TeXCompileDiscipline.allowsAutomaticCompileNow else {
                 texCompilationState = .paused(
                     "Auto-compile is paused for battery or thermal conditions."
                 )
                 return
             }
-            beginTeXCompilation()
+            beginTeXCompilation(origin: .automatic)
         }
     }
 
-    private func beginTeXCompilation() {
+    private func beginTeXCompilation(origin: TeXCompileRequestOrigin) {
+        guard !isStopped else { return }
+        texCompileDebounceTask?.cancel()
+        texCompileDebounceTask = nil
+        if texCompileTask != nil {
+            // There is one compiler per document. Coalesce any number of edits
+            // during a build into exactly one immutable follow-up snapshot.
+            // A direct request takes precedence over an automatic one so a mode
+            // change can discard only work that automatic mode itself queued.
+            if texCompilePendingOrigin != .requested {
+                texCompilePendingOrigin = origin
+            }
+            return
+        }
         guard let texEngine, texEngine.isAvailable else {
             texCompilationState = .failed("The bundled TeX engine is unavailable.")
             return
@@ -918,16 +1004,28 @@ public final class TextEditorViewModel {
             )
             return
         }
-        texCompileTask?.cancel()
+        let buildIdentity = makeTeXBuildIdentity(
+            mainFile: mainFile,
+            engineID: texEngine.id,
+            packageAccess: packageAccess
+        )
         let generation = UUID()
         texCompileGeneration = generation
+        texCompilePendingOrigin = nil
         let sourceSnapshot = textBuffers
+        // Dependency analysis powers diagnostics and root hints, but TeX is a
+        // programmable build language. Compile every file already admitted by
+        // the bounded project loader so custom classes, imports, graphics paths,
+        // and macro-generated references cannot be pruned by a regex guess.
+        let projectPaths = Set(projectFileURLs.keys).union(
+            document.files.map(\.relativePath)
+        )
         let input: TeXInputSnapshot
         do {
             input = try makeTeXInputSnapshot(
                 mainFile: mainFile,
                 mainPath: mainPath,
-                reachablePaths: analysis.reachableFiles,
+                projectPaths: projectPaths,
                 sourceSnapshot: sourceSnapshot
             )
         } catch {
@@ -936,8 +1034,7 @@ public final class TextEditorViewModel {
         }
         let overrides: [String: Data] = Dictionary(
             uniqueKeysWithValues: document.files.compactMap { file in
-                guard analysis.reachableFiles.contains(file.relativePath),
-                    let source = sourceSnapshot[file.id]
+                guard let source = sourceSnapshot[file.id]
                 else { return nil }
                 return (file.relativePath, Data(source.utf8))
             }
@@ -959,10 +1056,13 @@ public final class TextEditorViewModel {
                 if let ephemeralRoot = input.ephemeralRoot {
                     try? FileManager.default.removeItem(at: ephemeralRoot)
                 }
+                self?.finishTeXCompilation(generation: generation)
             }
             do {
                 for try await event in texEngine.compile(job) {
-                    guard let self, texCompileGeneration == generation else { return }
+                    guard let self, !isStopped, texCompileGeneration == generation,
+                        currentTeXBuildIdentity() == buildIdentity
+                    else { return }
                     switch event {
                     case .pass:
                         break
@@ -975,17 +1075,22 @@ public final class TextEditorViewModel {
                             guard let synctex else { return Optional<SyncTeXIndex>.none }
                             return try? SyncTeXIndex(contentsOf: synctex)
                         }.value
-                        guard texCompileGeneration == generation else { return }
+                        guard !isStopped, texCompileGeneration == generation,
+                            currentTeXBuildIdentity() == buildIdentity
+                        else { return }
                         replaceTeXResults(pdf: pdf, synctex: synctex)
                         texSyncTeXIndex = index
                         texSuccessfulSources = sourceSnapshot
+                        texSuccessfulBuildIdentity = buildIdentity
                         texCompilationState = .succeeded
                     }
                 }
             } catch TeXEngineError.cancelled {
-                return
+                guard let self, texCompileGeneration == generation else { return }
+                texCompilationState = texPDFURL == nil ? .idle : .succeeded
             } catch is CancellationError {
-                return
+                guard let self, texCompileGeneration == generation else { return }
+                texCompilationState = texPDFURL == nil ? .idle : .succeeded
             } catch {
                 guard let self, texCompileGeneration == generation else { return }
                 texCompilationState = .failed(error.localizedDescription)
@@ -993,9 +1098,20 @@ public final class TextEditorViewModel {
         }
     }
 
+    private func finishTeXCompilation(generation: UUID) {
+        guard !isStopped, texCompileGeneration == generation else { return }
+        texCompileTask = nil
+        guard let pendingOrigin = texCompilePendingOrigin else { return }
+        texCompilePendingOrigin = nil
+        beginTeXCompilation(origin: pendingOrigin)
+    }
+
     private func cancelTeXCompilation(resetState: Bool) {
+        texCompileDebounceTask?.cancel()
+        texCompileDebounceTask = nil
         texCompileTask?.cancel()
         texCompileTask = nil
+        texCompilePendingOrigin = nil
         texCompileGeneration = UUID()
         if resetState { texCompilationState = .idle }
     }
@@ -1016,6 +1132,7 @@ public final class TextEditorViewModel {
         texSyncTeXURL = nil
         texSyncTeXIndex = nil
         texSuccessfulSources = nil
+        texSuccessfulBuildIdentity = nil
     }
 
     private func scheduleContentAutosave() {
@@ -1211,6 +1328,10 @@ public final class TextEditorViewModel {
                 target.registerUndo(redo, actionName: actionName)
                 target.undoManager.setActionName(actionName)
                 target.rebuildTeXProjectAnalysis()
+                if Self.changesTeXBuildIdentity(patch) {
+                    target.invalidateTeXBuildIdentity()
+                    if target.language == .latex { target.scheduleTeXCompilation() }
+                }
                 target.persistStructureNow()
                 if case .renameFile(let fileID, _) = patch,
                     fileID == target.activeFileID
@@ -1296,6 +1417,65 @@ public final class TextEditorViewModel {
         )
     }
 
+    private static func changesTeXBuildIdentity(_ patch: TextPatch) -> Bool {
+        switch patch {
+        case .addFile, .removeFile, .setMainFile, .renameFile:
+            return true
+        case .setLanguage, .setSettings, .setLineEnding, .setEncoding:
+            return false
+        }
+    }
+
+    private func currentTeXBuildIdentity() -> TeXBuildIdentity? {
+        guard let texEngine, let packageAccess = texPackageAccess,
+            let mainPath = texProjectAnalysis?.mainFile,
+            let mainFile = document.files.first(where: { $0.relativePath == mainPath })
+        else { return nil }
+        return makeTeXBuildIdentity(
+            mainFile: mainFile,
+            engineID: texEngine.id,
+            packageAccess: packageAccess
+        )
+    }
+
+    private func makeTeXBuildIdentity(
+        mainFile: TextFile,
+        engineID: EngineID,
+        packageAccess: TeXPackageAccess
+    ) -> TeXBuildIdentity {
+        var files = document.files.map { file in
+            TeXBuildFileIdentity(
+                id: file.id,
+                relativePath: file.relativePath,
+                sourceURL: (sourceURLs[file.id] ?? projectFileURLs[file.relativePath])?
+                    .standardizedFileURL
+            )
+        }
+        let documentPaths = Set(document.files.map(\.relativePath))
+        files += projectFileURLs.compactMap { path, url in
+            guard !documentPaths.contains(path) else { return nil }
+            return TeXBuildFileIdentity(
+                id: nil,
+                relativePath: path,
+                sourceURL: url.standardizedFileURL
+            )
+        }
+        files.sort { lhs, rhs in lhs.relativePath < rhs.relativePath }
+        return TeXBuildIdentity(
+            documentID: document.id,
+            mainFileID: mainFile.id,
+            mainRelativePath: mainFile.relativePath,
+            files: files,
+            engineID: engineID,
+            packageAccess: packageAccess
+        )
+    }
+
+    private func invalidateTeXBuildIdentity() {
+        cancelTeXCompilation(resetState: true)
+        removeTeXResults()
+    }
+
     private struct TeXInputSnapshot {
         var mainFile: URL
         var projectDirectory: URL
@@ -1309,14 +1489,14 @@ public final class TextEditorViewModel {
     private func makeTeXInputSnapshot(
         mainFile: TextFile,
         mainPath: String,
-        reachablePaths: Set<String>,
+        projectPaths: Set<String>,
         sourceSnapshot: [FileID: String]
     ) throws -> TeXInputSnapshot {
         if let mainURL = sourceURLs[mainFile.id] {
             return TeXInputSnapshot(
                 mainFile: mainURL,
                 projectDirectory: Self.projectRoot(for: mainPath, sourceURL: mainURL),
-                projectFiles: reachablePaths.compactMap { projectFileURLs[$0] },
+                projectFiles: projectPaths.compactMap { projectFileURLs[$0] },
                 ephemeralRoot: nil
             )
         }
@@ -1328,17 +1508,23 @@ public final class TextEditorViewModel {
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             var urls: [URL] = []
-            for file in document.files where reachablePaths.contains(file.relativePath) {
-                guard let value = sourceSnapshot[file.id],
-                    let destination = Self.safeTeXDestination(file.relativePath, below: root)
-                else {
-                    throw TextEditorCommandError.fileNotFound(file.relativePath)
+            for path in projectPaths.sorted() {
+                guard let destination = Self.safeTeXDestination(path, below: root) else {
+                    throw TextEditorCommandError.fileNotFound(path)
                 }
                 try FileManager.default.createDirectory(
                     at: destination.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
-                try Data(value.utf8).write(to: destination, options: .atomic)
+                if let file = document.files.first(where: { $0.relativePath == path }),
+                    let value = sourceSnapshot[file.id]
+                {
+                    try Data(value.utf8).write(to: destination, options: .atomic)
+                } else if let source = projectFileURLs[path] {
+                    try FileManager.default.copyItem(at: source, to: destination)
+                } else {
+                    continue
+                }
                 urls.append(destination)
             }
             guard let mainURL = Self.safeTeXDestination(mainPath, below: root),

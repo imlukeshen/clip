@@ -49,6 +49,97 @@ import Testing
     #expect(analysis.unreachableTeXFiles == ["a.tex"])
 }
 
+@Test func texProjectExplicitMainSelectionWinsOverRootDirective() {
+    let sources = [
+        "chosen.tex": "Chosen without a document class",
+        "main.tex": "\\documentclass{article}",
+        "chapters/intro.tex": "% !TeX root = ../main.tex\nIntro",
+    ]
+
+    let mainFile = TeXProjectAnalyzer.inferMainFile(
+        sources: sources,
+        selectedMainFile: "chosen.tex"
+    )
+
+    #expect(mainFile == "chosen.tex")
+}
+
+@Test func texProjectUsesSafeRootMagicCommentBeforeDocumentClassInference() {
+    let sources = [
+        "paper.tex": "\\begin{document}Paper\\end{document}",
+        "other.tex": "\\documentclass{article}",
+        "chapters/intro.tex": "% !TEX root = ../paper\nIntro",
+    ]
+
+    let analysis = TeXProjectAnalyzer.analyze(
+        sources: sources,
+        availableFiles: Set(sources.keys)
+    )
+
+    #expect(analysis.mainFile == "paper.tex")
+}
+
+@Test func texProjectAcceptsQuotedRootMagicCommentPath() {
+    let sources = [
+        "My Paper.tex": "\\begin{document}Paper\\end{document}",
+        "chapters/intro.tex": #"% !TeX root = "../My Paper.tex""#,
+    ]
+
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: sources) == "My Paper.tex")
+}
+
+@Test func texProjectIgnoresUnsafeOrMissingRootMagicComments() {
+    let sources = [
+        "main.tex": "\\documentclass{article}",
+        "chapters/escape.tex": "% !TeX root = ../../outside.tex",
+        "chapters/absolute.tex": "% !TeX root = /tmp/outside.tex",
+        "chapters/tmp/outside.tex": "Would be selected if the absolute path were rebased",
+        "chapters/missing.tex": "% !TeX root = ../not-in-project.tex",
+    ]
+
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: sources) == "main.tex")
+}
+
+@Test func texProjectRootInferenceUsesStableCandidateRanking() {
+    let sources = [
+        // Shallower candidates win before conventional naming.
+        "paper.tex": "\\documentclass{article}\nA",
+        "nested/main.tex": "\\documentclass{article}\nA much larger nested source",
+    ]
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: sources) == "paper.tex")
+
+    let conventionalSources = [
+        "article.tex": "\\documentclass{article}\nA much larger root source",
+        "main.tex": "\\documentclass{article}",
+    ]
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: conventionalSources) == "main.tex")
+
+    let sizedSources = [
+        "alpha.tex": "\\documentclass{article}",
+        "paper.tex": "\\documentclass{article}\nSubstantial project content",
+    ]
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: sizedSources) == "alpha.tex")
+
+    let lexicalSources = [
+        "zeta.tex": "\\documentclass{book}",
+        "Alpha.tex": "\\documentclass{book}",
+    ]
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: lexicalSources) == "Alpha.tex")
+}
+
+@Test func texProjectRootInferenceIsIndependentOfDictionaryInsertionOrder() {
+    let entries = [
+        ("zeta.tex", "\\documentclass{book}"),
+        ("alpha.tex", "\\documentclass{book}"),
+        ("beta.tex", "\\documentclass{book}"),
+    ]
+    let forward = Dictionary(uniqueKeysWithValues: entries)
+    let reverse = Dictionary(uniqueKeysWithValues: entries.reversed())
+
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: forward) == "alpha.tex")
+    #expect(TeXProjectAnalyzer.inferMainFile(sources: reverse) == "alpha.tex")
+}
+
 @Test func texProjectAcceptsTheLatexExtensionAsAMainSource() {
     let analysis = TeXProjectAnalyzer.analyze(
         sources: ["paper.latex": "\\documentclass{article}"],
