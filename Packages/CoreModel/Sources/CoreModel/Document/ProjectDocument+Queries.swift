@@ -25,10 +25,10 @@ extension ProjectDocument {
         return nil
     }
 
-    /// The end of the final video item across all video tracks. Disabled media
-    /// still occupies timeline time and renders as a gap.
+    /// The end of the final media item across all video and audio tracks. Disabled
+    /// media still occupies timeline time and renders or plays as a gap.
     public var duration: RationalTime {
-        timeline.videoTracks
+        (timeline.videoTracks + timeline.audioTracks)
             .flatMap(\.items)
             .map(\.timelineEnd)
             .max() ?? .zero

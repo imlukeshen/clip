@@ -1,5 +1,20 @@
 import Foundation
 
+private struct ItemLocation {
+    let kind: TrackKind
+    let trackIndex: Int
+    let itemIndex: Int
+    let trackID: TrackID
+}
+
+private func assignGaplessTimelineStarts(to items: inout [TimelineItem]) {
+    var cursor = RationalTime.zero
+    for index in items.indices {
+        items[index].timelineStart = cursor
+        cursor = cursor + items[index].timelineDuration
+    }
+}
+
 extension ProjectDocument {
     /// Applies a patch transactionally and returns its exact inverse.
     ///
@@ -13,7 +28,6 @@ extension ProjectDocument {
 
         for operation in patch.ops {
             let inverse = try candidate.apply(operation)
-            candidate.normalizeLegacyTrack(after: operation)
             inverseOperations.append(inverse)
             try candidate.validate()
         }
@@ -26,27 +40,6 @@ extension ProjectDocument {
         )
     }
 
-    private mutating func normalizeLegacyTrack(after operation: GraphOp) {
-        switch operation {
-        case .insertItem(_, let track, _):
-            timeline.normalizePrimaryTrack(track)
-        case .removeItem(let id), .moveItem(let id, _), .setSourceRange(let id, _),
-            .setSpeed(let id, _):
-            if timeline.video.contains(where: { $0.id == id }) {
-                timeline.normalizePrimaryTrack(.video)
-            } else if timeline.audio.contains(where: { $0.id == id }) {
-                timeline.normalizePrimaryTrack(.audio)
-            } else {
-                // Removal has already erased the item; both primary tracks are
-                // cheap to normalize and only one can have changed.
-                timeline.normalizePrimaryTrack(.video)
-                timeline.normalizePrimaryTrack(.audio)
-            }
-        default:
-            break
-        }
-    }
-
     private mutating func apply(_ operation: GraphOp) throws -> GraphOp {
         switch operation {
         case .insertItem(let item, let track, let index):
@@ -54,61 +47,148 @@ extension ProjectDocument {
             guard self.item(item.id) == nil else {
                 throw ModelError.duplicateItem(item.id)
             }
-            let count = items(for: track).count
+            let previous = items(for: track)
+            let count = previous.count
             guard (0...count).contains(index) else {
                 throw ModelError.indexOutOfRange(index, count: count)
             }
-            mutateItems(for: track) { $0.insert(item, at: index) }
-            return .removeItem(item.id)
+            let previousTrackID: TrackID?
+            let previousTracks: [Track]
+            switch track {
+            case .video:
+                previousTrackID = timeline.videoTracks.first?.id
+                previousTracks = timeline.videoTracks
+            case .audio:
+                previousTrackID = timeline.audioTracks.first?.id
+                previousTracks = timeline.audioTracks
+            }
+            var inserted = item
+            inserted.timelineStart =
+                index < previous.count
+                ? previous[index].timelineStart
+                : previous.last?.timelineEnd ?? .zero
+            mutateItems(for: track) { items in
+                items.insert(inserted, at: index)
+                if index + 1 < items.count {
+                    for followingIndex in (index + 1)..<items.count {
+                        items[followingIndex].timelineStart =
+                            items[followingIndex].timelineStart + inserted.timelineDuration
+                    }
+                }
+            }
+            if let previousTrackID {
+                return .setTrackItems(previousTrackID, previous)
+            }
+            switch track {
+            case .video:
+                return .setVideoTracks(previousTracks)
+            case .audio:
+                return .setAudioTracks(previousTracks)
+            }
 
         case .removeItem(let id):
             let location = try itemLocation(id)
-            try ensureUnlocked(location.track)
-            let removed = items(for: location.track)[location.index]
-            mutateItems(for: location.track) { $0.remove(at: location.index) }
-            return .insertItem(removed, track: location.track, index: location.index)
+            try ensureUnlocked(location)
+            let previous = items(at: location)
+            let removed = previous[location.itemIndex]
+            let removesLegacyPrimaryTrack =
+                location.trackIndex == 0
+                && previous.count == 1
+                && location.trackID
+                    == TrackID(rawValue: location.kind == .video ? "v1" : "a1")
+            let previousTracks: [Track]
+            switch location.kind {
+            case .video:
+                previousTracks = timeline.videoTracks
+            case .audio:
+                previousTracks = timeline.audioTracks
+            }
+            mutateItems(at: location) { items in
+                items.remove(at: location.itemIndex)
+                if location.trackIndex == 0, location.itemIndex < items.count {
+                    for followingIndex in location.itemIndex..<items.count {
+                        items[followingIndex].timelineStart =
+                            items[followingIndex].timelineStart - removed.timelineDuration
+                    }
+                }
+            }
+            if removesLegacyPrimaryTrack {
+                switch location.kind {
+                case .video:
+                    timeline.videoTracks.removeFirst()
+                    return .setVideoTracks(previousTracks)
+                case .audio:
+                    timeline.audioTracks.removeFirst()
+                    return .setAudioTracks(previousTracks)
+                }
+            }
+            return .setTrackItems(location.trackID, previous)
 
         case .moveItem(let id, let destination):
             let location = try itemLocation(id)
-            try ensureUnlocked(location.track)
-            let count = items(for: location.track).count
+            try ensureUnlocked(location)
+            let previous = items(at: location)
+            let count = previous.count
             guard (0..<count).contains(destination) else {
                 throw ModelError.indexOutOfRange(destination, count: count)
             }
-            mutateItems(for: location.track) { items in
-                let moved = items.remove(at: location.index)
+            mutateItems(at: location) { items in
+                let moved = items.remove(at: location.itemIndex)
                 items.insert(moved, at: destination)
+                assignGaplessTimelineStarts(to: &items)
             }
-            return .moveItem(id, toIndex: location.index)
+            return .setTrackItems(location.trackID, previous)
 
         case .setSourceRange(let id, let range):
             let location = try itemLocation(id)
-            try ensureUnlocked(location.track)
-            let previous = items(for: location.track)[location.index].sourceRange
-            mutateItem(at: location) { $0.sourceRange = range }
-            return .setSourceRange(id, previous)
+            try ensureUnlocked(location)
+            let previous = items(at: location)
+            let previousDuration = previous[location.itemIndex].timelineDuration
+            mutateItems(at: location) { items in
+                items[location.itemIndex].sourceRange = range
+                guard location.trackIndex == 0 else { return }
+                let delta = items[location.itemIndex].timelineDuration - previousDuration
+                if location.itemIndex + 1 < items.count {
+                    for followingIndex in (location.itemIndex + 1)..<items.count {
+                        items[followingIndex].timelineStart =
+                            items[followingIndex].timelineStart + delta
+                    }
+                }
+            }
+            return .setTrackItems(location.trackID, previous)
 
         case .setSpeed(let id, let speed):
             guard speed.isFinite, (0.25...4).contains(speed) else {
                 throw ModelError.invalidSpeed(speed)
             }
             let location = try itemLocation(id)
-            try ensureUnlocked(location.track)
-            let previous = items(for: location.track)[location.index].speed
-            mutateItem(at: location) { $0.speed = speed }
-            return .setSpeed(id, previous)
+            try ensureUnlocked(location)
+            let previous = items(at: location)
+            let previousDuration = previous[location.itemIndex].timelineDuration
+            mutateItems(at: location) { items in
+                items[location.itemIndex].speed = speed
+                guard location.trackIndex == 0 else { return }
+                let delta = items[location.itemIndex].timelineDuration - previousDuration
+                if location.itemIndex + 1 < items.count {
+                    for followingIndex in (location.itemIndex + 1)..<items.count {
+                        items[followingIndex].timelineStart =
+                            items[followingIndex].timelineStart + delta
+                    }
+                }
+            }
+            return .setTrackItems(location.trackID, previous)
 
         case .setEnabled(let id, let isEnabled):
             let location = try itemLocation(id)
-            try ensureUnlocked(location.track)
-            let previous = items(for: location.track)[location.index].isEnabled
+            try ensureUnlocked(location)
+            let previous = items(at: location)[location.itemIndex].isEnabled
             mutateItem(at: location) { $0.isEnabled = isEnabled }
             return .setEnabled(id, previous)
 
         case .addEffect(let itemID, let effect, let requestedIndex):
             let location = try itemLocation(itemID)
-            try ensureUnlocked(location.track)
-            let effects = items(for: location.track)[location.index].effects
+            try ensureUnlocked(location)
+            let effects = items(at: location)[location.itemIndex].effects
             guard !effects.contains(where: { $0.id == effect.id }) else {
                 throw ModelError.duplicateEffect(itemID, effect.id)
             }
@@ -121,8 +201,8 @@ extension ProjectDocument {
 
         case .removeEffect(let itemID, let effectID):
             let location = try itemLocation(itemID)
-            try ensureUnlocked(location.track)
-            let effects = items(for: location.track)[location.index].effects
+            try ensureUnlocked(location)
+            let effects = items(at: location)[location.itemIndex].effects
             guard let effectIndex = effects.firstIndex(where: { $0.id == effectID }) else {
                 throw ModelError.effectNotFound(itemID, effectID)
             }
@@ -132,8 +212,8 @@ extension ProjectDocument {
 
         case .updateEffect(let itemID, let effect):
             let location = try itemLocation(itemID)
-            try ensureUnlocked(location.track)
-            let effects = items(for: location.track)[location.index].effects
+            try ensureUnlocked(location)
+            let effects = items(at: location)[location.itemIndex].effects
             guard let effectIndex = effects.firstIndex(where: { $0.id == effect.id }) else {
                 throw ModelError.effectNotFound(itemID, effect.id)
             }
@@ -216,14 +296,48 @@ extension ProjectDocument {
         }
     }
 
-    private func itemLocation(_ id: ItemID) throws -> (track: TrackKind, index: Int) {
-        if let index = timeline.video.firstIndex(where: { $0.id == id }) {
-            return (.video, index)
+    private func ensureUnlocked(_ location: ItemLocation) throws {
+        let track: Track
+        switch location.kind {
+        case .video:
+            track = timeline.videoTracks[location.trackIndex]
+        case .audio:
+            track = timeline.audioTracks[location.trackIndex]
         }
-        if let index = timeline.audio.firstIndex(where: { $0.id == id }) {
-            return (.audio, index)
+        if track.isLocked {
+            throw ModelError.trackLocked(track.id)
         }
-        throw ModelError.itemNotFound(id)
+    }
+
+    private func itemLocation(_ id: ItemID) throws -> ItemLocation {
+        guard let location = itemLocationIfPresent(id) else {
+            throw ModelError.itemNotFound(id)
+        }
+        return location
+    }
+
+    private func itemLocationIfPresent(_ id: ItemID) -> ItemLocation? {
+        for (trackIndex, track) in timeline.videoTracks.enumerated() {
+            if let itemIndex = track.items.firstIndex(where: { $0.id == id }) {
+                return ItemLocation(
+                    kind: .video,
+                    trackIndex: trackIndex,
+                    itemIndex: itemIndex,
+                    trackID: track.id
+                )
+            }
+        }
+        for (trackIndex, track) in timeline.audioTracks.enumerated() {
+            if let itemIndex = track.items.firstIndex(where: { $0.id == id }) {
+                return ItemLocation(
+                    kind: .audio,
+                    trackIndex: trackIndex,
+                    itemIndex: itemIndex,
+                    trackID: track.id
+                )
+            }
+        }
+        return nil
     }
 
     private func items(for track: TrackKind) -> [TimelineItem] {
@@ -243,13 +357,36 @@ extension ProjectDocument {
         }
     }
 
+    private func items(at location: ItemLocation) -> [TimelineItem] {
+        switch location.kind {
+        case .video:
+            timeline.videoTracks[location.trackIndex].items
+        case .audio:
+            timeline.audioTracks[location.trackIndex].items
+        }
+    }
+
+    private mutating func mutateItems(
+        at location: ItemLocation,
+        _ mutation: (inout [TimelineItem]) -> Void
+    ) {
+        switch location.kind {
+        case .video:
+            mutation(&timeline.videoTracks[location.trackIndex].items)
+        case .audio:
+            mutation(&timeline.audioTracks[location.trackIndex].items)
+        }
+    }
+
     private mutating func mutateItem(
-        at location: (track: TrackKind, index: Int),
+        at location: ItemLocation,
         _ mutation: (inout TimelineItem) -> Void
     ) {
-        switch location.track {
-        case .video: mutation(&timeline.video[location.index])
-        case .audio: mutation(&timeline.audio[location.index])
+        switch location.kind {
+        case .video:
+            mutation(&timeline.videoTracks[location.trackIndex].items[location.itemIndex])
+        case .audio:
+            mutation(&timeline.audioTracks[location.trackIndex].items[location.itemIndex])
         }
     }
 }

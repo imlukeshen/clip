@@ -143,6 +143,432 @@ import Testing
     #expect(document == original)
 }
 
+@Test func secondaryVideoAndAudioItemsSupportEveryIDBasedMutation() throws {
+    var document = try makeMultiTrackDocument()
+    let original = document
+    let overlayID = ItemID(rawValue: "overlay")
+    let detachedAudioID = ItemID(rawValue: "detached-audio")
+    let effectID = EffectID(rawValue: "overlay-effect")
+    let effect = Effect.zoom(
+        ZoomEffect(
+            id: effectID,
+            range: TimeRange(start: .zero, duration: RationalTime(seconds: 2)),
+            center: NormalizedPoint(x: 0.5, y: 0.5),
+            scale: 1.5
+        )
+    )
+    let updatedEffect = Effect.zoom(
+        ZoomEffect(
+            id: effectID,
+            range: TimeRange(start: .zero, duration: RationalTime(seconds: 2)),
+            center: NormalizedPoint(x: 0.25, y: 0.75),
+            scale: 2
+        )
+    )
+
+    let undoAdd = try document.apply(
+        GraphPatch(ops: [.addEffect(overlayID, effect)], label: "Add", origin: .user)
+    )
+    #expect(document.item(overlayID)?.effects == [effect])
+    let undoUpdate = try document.apply(
+        GraphPatch(ops: [.updateEffect(overlayID, updatedEffect)], label: "Update", origin: .user)
+    )
+    #expect(document.item(overlayID)?.effects == [updatedEffect])
+    let undoRemove = try document.apply(
+        GraphPatch(ops: [.removeEffect(overlayID, effectID)], label: "Remove", origin: .user)
+    )
+    #expect(document.item(overlayID)?.effects.isEmpty == true)
+
+    _ = try document.apply(undoRemove)
+    _ = try document.apply(undoUpdate)
+    _ = try document.apply(undoAdd)
+    #expect(document == original)
+
+    let inverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .setSourceRange(
+                    overlayID,
+                    TimeRange(
+                        start: RationalTime(seconds: 0.25),
+                        duration: RationalTime(seconds: 1.5)
+                    )
+                ),
+                .setSpeed(overlayID, 2),
+                .setEnabled(overlayID, false),
+                .setSourceRange(
+                    detachedAudioID,
+                    TimeRange(
+                        start: RationalTime(seconds: 0.5),
+                        duration: RationalTime(seconds: 1)
+                    )
+                ),
+                .setSpeed(detachedAudioID, 0.5),
+                .setEnabled(detachedAudioID, false),
+            ],
+            label: "Edit secondary tracks",
+            origin: .user
+        )
+    )
+
+    let overlay = try #require(document.item(overlayID))
+    let detachedAudio = try #require(document.item(detachedAudioID))
+    #expect(overlay.sourceRange.start == RationalTime(seconds: 0.25))
+    #expect(overlay.sourceRange.duration == RationalTime(seconds: 1.5))
+    #expect(overlay.speed == 2)
+    #expect(!overlay.isEnabled)
+    #expect(detachedAudio.sourceRange.start == RationalTime(seconds: 0.5))
+    #expect(detachedAudio.sourceRange.duration == RationalTime(seconds: 1))
+    #expect(detachedAudio.speed == 0.5)
+    #expect(!detachedAudio.isEnabled)
+    #expect(document.timeline.videoTracks[0] == original.timeline.videoTracks[0])
+    #expect(document.timeline.audioTracks[0] == original.timeline.audioTracks[0])
+
+    _ = try document.apply(inverse)
+    #expect(document == original)
+}
+
+@Test func secondaryTrackRemovalAndMoveAreExactlyUndoable() throws {
+    var document = try makeMultiTrackDocument()
+    let original = document
+
+    let removalInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .removeItem(ItemID(rawValue: "overlay")),
+                .removeItem(ItemID(rawValue: "detached-audio")),
+            ],
+            label: "Remove secondary media",
+            origin: .user
+        )
+    )
+    #expect(document.timeline.videoTracks[1].items.isEmpty)
+    #expect(document.timeline.audioTracks[1].items.isEmpty)
+    #expect(document.timeline.videoTracks[0] == original.timeline.videoTracks[0])
+    #expect(document.timeline.audioTracks[0] == original.timeline.audioTracks[0])
+
+    _ = try document.apply(removalInverse)
+    #expect(document == original)
+
+    let videoA = TimelineItem(
+        id: ItemID(rawValue: "video-a"),
+        assetID: AssetID(rawValue: "video-a-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+        timelineStart: RationalTime(seconds: 3)
+    )
+    let videoB = TimelineItem(
+        id: ItemID(rawValue: "video-b"),
+        assetID: AssetID(rawValue: "video-b-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 2)),
+        timelineStart: RationalTime(seconds: 5)
+    )
+    let audioA = TimelineItem(
+        id: ItemID(rawValue: "audio-a"),
+        assetID: AssetID(rawValue: "audio-a-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 3)),
+        timelineStart: RationalTime(seconds: 2)
+    )
+    let audioB = TimelineItem(
+        id: ItemID(rawValue: "audio-b"),
+        assetID: AssetID(rawValue: "audio-b-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+        timelineStart: RationalTime(seconds: 6)
+    )
+    document.timeline.videoTracks[1].items = [videoA, videoB]
+    document.timeline.audioTracks[1].items = [audioA, audioB]
+    let beforeMove = document
+
+    let moveInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .moveItem(videoA.id, toIndex: 1),
+                .moveItem(audioB.id, toIndex: 0),
+            ],
+            label: "Reorder secondary media",
+            origin: .user
+        )
+    )
+    #expect(document.timeline.videoTracks[1].items.map(\.id) == [videoB.id, videoA.id])
+    #expect(document.timeline.audioTracks[1].items.map(\.id) == [audioB.id, audioA.id])
+    #expect(
+        document.timeline.videoTracks[1].items.map(\.timelineStart) == [
+            .zero, RationalTime(seconds: 2),
+        ])
+    #expect(
+        document.timeline.audioTracks[1].items.map(\.timelineStart) == [
+            .zero, RationalTime(seconds: 1),
+        ])
+    #expect(document.timeline.videoTracks[0] == beforeMove.timeline.videoTracks[0])
+    #expect(document.timeline.audioTracks[0] == beforeMove.timeline.audioTracks[0])
+
+    _ = try document.apply(moveInverse)
+    #expect(document == beforeMove)
+}
+
+@Test func removingAndUndoingSoleCustomizedPrimaryItemsRestoresTrackMetadata() throws {
+    let range = TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+    let videoItem = TimelineItem(
+        id: ItemID(rawValue: "custom-video"),
+        assetID: AssetID(rawValue: "custom-video-asset"),
+        sourceRange: range
+    )
+    let audioItem = TimelineItem(
+        id: ItemID(rawValue: "custom-audio"),
+        assetID: AssetID(rawValue: "custom-audio-asset"),
+        sourceRange: range
+    )
+    let customVideoTrack = Track(
+        id: TrackID(rawValue: "v1"),
+        name: "Hero Camera",
+        items: [videoItem],
+        isEnabled: false,
+        isMuted: true,
+        isSolo: true,
+        gain: -3
+    )
+    let customAudioTrack = Track(
+        id: TrackID(rawValue: "a1"),
+        name: "Dialogue",
+        items: [audioItem],
+        isEnabled: false,
+        isMuted: true,
+        isSolo: true,
+        gain: -6
+    )
+    var document = try ProjectDocument(
+        id: ProjectID(rawValue: "custom-primary-project"),
+        name: "Custom primary tracks",
+        timeline: Timeline(
+            videoTracks: [customVideoTrack],
+            audioTracks: [customAudioTrack]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
+    )
+    let original = document
+
+    let inverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .removeItem(videoItem.id),
+                .removeItem(audioItem.id),
+            ],
+            label: "Remove customized primaries",
+            origin: .user
+        )
+    )
+    #expect(document.timeline.videoTracks.isEmpty)
+    #expect(document.timeline.audioTracks.isEmpty)
+
+    _ = try document.apply(inverse)
+    #expect(document == original)
+    #expect(document.timeline.videoTracks == [customVideoTrack])
+    #expect(document.timeline.audioTracks == [customAudioTrack])
+}
+
+@Test func primaryTimingMutationsRippleLocallyAndUndoGappedTracksExactly() throws {
+    func item(_ id: String, duration: Double, start: Double) -> TimelineItem {
+        TimelineItem(
+            id: ItemID(rawValue: id),
+            assetID: AssetID(rawValue: "asset-\(id)"),
+            sourceRange: TimeRange(
+                start: .zero,
+                duration: RationalTime(seconds: duration)
+            ),
+            timelineStart: RationalTime(seconds: start)
+        )
+    }
+    let videoItems = [
+        item("video-first", duration: 2, start: 2),
+        item("video-middle", duration: 2, start: 6),
+        item("video-last", duration: 1, start: 10),
+    ]
+    let audioItems = [
+        item("audio-first", duration: 2, start: 2),
+        item("audio-middle", duration: 2, start: 6),
+        item("audio-last", duration: 1, start: 10),
+    ]
+    var document = try ProjectDocument(
+        id: ProjectID(rawValue: "gapped-primary-project"),
+        name: "Gapped primaries",
+        timeline: Timeline(
+            videoTracks: [
+                Track(id: TrackID(rawValue: "v1"), name: "V1", items: videoItems)
+            ],
+            audioTracks: [
+                Track(id: TrackID(rawValue: "a1"), name: "A1", items: audioItems)
+            ]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
+    )
+    let original = document
+
+    let videoInsert = item("video-insert", duration: 1, start: 50)
+    let audioInsert = item("audio-insert", duration: 1, start: 50)
+    let insertInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .insertItem(videoInsert, track: .video, index: 1),
+                .insertItem(audioInsert, track: .audio, index: 1),
+            ],
+            label: "Insert into gaps",
+            origin: .user
+        )
+    )
+    #expect(
+        document.timeline.video.map(\.timelineStart) == [
+            RationalTime(seconds: 2),
+            RationalTime(seconds: 6),
+            RationalTime(seconds: 7),
+            RationalTime(seconds: 11),
+        ])
+    #expect(
+        document.timeline.audio.map(\.timelineStart)
+            == document.timeline.video.map(\.timelineStart)
+    )
+    _ = try document.apply(insertInverse)
+    #expect(document == original)
+
+    let removeInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .removeItem(ItemID(rawValue: "video-middle")),
+                .removeItem(ItemID(rawValue: "audio-middle")),
+            ],
+            label: "Remove from gaps",
+            origin: .user
+        )
+    )
+    #expect(
+        document.timeline.video.map(\.timelineStart) == [
+            RationalTime(seconds: 2), RationalTime(seconds: 8),
+        ])
+    #expect(
+        document.timeline.audio.map(\.timelineStart)
+            == document.timeline.video.map(\.timelineStart)
+    )
+    _ = try document.apply(removeInverse)
+    #expect(document == original)
+
+    let rangeInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .setSourceRange(
+                    ItemID(rawValue: "video-middle"),
+                    TimeRange(start: .zero, duration: RationalTime(seconds: 3))
+                ),
+                .setSourceRange(
+                    ItemID(rawValue: "audio-middle"),
+                    TimeRange(start: .zero, duration: RationalTime(seconds: 3))
+                ),
+            ],
+            label: "Grow clips in gaps",
+            origin: .user
+        )
+    )
+    #expect(
+        document.timeline.video.map(\.timelineStart) == [
+            RationalTime(seconds: 2),
+            RationalTime(seconds: 6),
+            RationalTime(seconds: 11),
+        ])
+    #expect(
+        document.timeline.audio.map(\.timelineStart)
+            == document.timeline.video.map(\.timelineStart)
+    )
+    _ = try document.apply(rangeInverse)
+    #expect(document == original)
+
+    let speedInverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .setSpeed(ItemID(rawValue: "video-middle"), 2),
+                .setSpeed(ItemID(rawValue: "audio-middle"), 2),
+            ],
+            label: "Speed clips in gaps",
+            origin: .user
+        )
+    )
+    #expect(
+        document.timeline.video.map(\.timelineStart) == [
+            RationalTime(seconds: 2),
+            RationalTime(seconds: 6),
+            RationalTime(seconds: 9),
+        ])
+    #expect(
+        document.timeline.audio.map(\.timelineStart)
+            == document.timeline.video.map(\.timelineStart)
+    )
+    _ = try document.apply(speedInverse)
+    #expect(document == original)
+}
+
+@Test func lockedSecondaryTrackRejectsItemMutationTransactionally() throws {
+    var document = try makeMultiTrackDocument(secondaryVideoLocked: true)
+    let original = document
+
+    #expect(throws: ModelError.trackLocked(TrackID(rawValue: "v2"))) {
+        try document.apply(
+            GraphPatch(
+                ops: [.setSpeed(ItemID(rawValue: "overlay"), 2)],
+                label: "Locked overlay",
+                origin: .user
+            )
+        )
+    }
+    #expect(document == original)
+}
+
+@Test func projectDurationIncludesEveryVideoAndAudioTrack() throws {
+    let video = TimelineItem(
+        id: ItemID(rawValue: "short-video"),
+        assetID: AssetID(rawValue: "short-video-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+    )
+    let overlay = TimelineItem(
+        id: ItemID(rawValue: "late-overlay"),
+        assetID: AssetID(rawValue: "late-overlay-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+        timelineStart: RationalTime(seconds: 4)
+    )
+    let audio = TimelineItem(
+        id: ItemID(rawValue: "long-audio"),
+        assetID: AssetID(rawValue: "long-audio-asset"),
+        sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 4)),
+        timelineStart: RationalTime(seconds: 3)
+    )
+    let document = try ProjectDocument(
+        id: ProjectID(rawValue: "duration-project"),
+        name: "Duration",
+        timeline: Timeline(
+            videoTracks: [
+                Track(id: TrackID(rawValue: "v1"), name: "V1", items: [video]),
+                Track(id: TrackID(rawValue: "v2"), name: "V2", items: [overlay]),
+            ],
+            audioTracks: [
+                Track(id: TrackID(rawValue: "a1"), name: "A1", items: [audio])
+            ]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
+    )
+    let audioOnly = try ProjectDocument(
+        id: ProjectID(rawValue: "audio-only-project"),
+        name: "Audio only",
+        timeline: Timeline(
+            audioTracks: [
+                Track(id: TrackID(rawValue: "a1"), name: "A1", items: [audio])
+            ]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
+    )
+
+    #expect(document.duration == RationalTime(seconds: 7))
+    #expect(audioOnly.duration == RationalTime(seconds: 7))
+}
+
 private func makeDocument(
     sequence: Int,
     random: inout DeterministicRandom
@@ -165,6 +591,45 @@ private func makeDocument(
         timeline: Timeline(video: video, audio: audio),
         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
         modifiedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+}
+
+private func makeMultiTrackDocument(
+    secondaryVideoLocked: Bool = false
+) throws -> ProjectDocument {
+    let range = TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+    func item(_ id: String, start: Double = 0) -> TimelineItem {
+        TimelineItem(
+            id: ItemID(rawValue: id),
+            assetID: AssetID(rawValue: "asset-\(id)"),
+            sourceRange: range,
+            timelineStart: RationalTime(seconds: start)
+        )
+    }
+    return try ProjectDocument(
+        id: ProjectID(rawValue: "multi-track-project"),
+        name: "Multi-track",
+        timeline: Timeline(
+            videoTracks: [
+                Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item("primary")]),
+                Track(
+                    id: TrackID(rawValue: "v2"),
+                    name: "V2",
+                    items: [item("overlay", start: 3)],
+                    isLocked: secondaryVideoLocked
+                ),
+            ],
+            audioTracks: [
+                Track(id: TrackID(rawValue: "a1"), name: "A1", items: [item("primary-audio")]),
+                Track(
+                    id: TrackID(rawValue: "a2"),
+                    name: "A2",
+                    items: [item("detached-audio", start: 4)]
+                ),
+            ]
+        ),
+        createdAt: Date(timeIntervalSince1970: 1),
+        modifiedAt: Date(timeIntervalSince1970: 1)
     )
 }
 

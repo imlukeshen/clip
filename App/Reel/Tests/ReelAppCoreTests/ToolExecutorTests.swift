@@ -91,6 +91,112 @@ struct ToolExecutorTests {
         }
     }
 
+    @Test("Reorder Clips targets one resolved track")
+    func reorderClipsWithinOneTrack() async throws {
+        let fixture = try Fixture()
+        var document = fixture.document
+        let overlayItems = [
+            TimelineItem(
+                id: ItemID(rawValue: "overlay-one"),
+                assetID: AssetID(rawValue: "asset-one"),
+                sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1))
+            ),
+            TimelineItem(
+                id: ItemID(rawValue: "overlay-two"),
+                assetID: AssetID(rawValue: "asset-two"),
+                sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+                timelineStart: RationalTime(seconds: 1)
+            ),
+        ]
+        document.timeline.videoTracks.append(
+            Track(id: TrackID(rawValue: "v2"), name: "V2", items: overlayItems)
+        )
+        try document.validate()
+        var context = fixture.context
+        context.document = document
+
+        let result = try await fixture.executor.execute(
+            call(
+                "reorderClips",
+                ["order": .array([.string("overlay-two"), .string("overlay-one")])]
+            ),
+            turnID: "reorder-v2",
+            policy: .autoApply,
+            context: context
+        )
+        let patch = try #require(result.patch)
+        var reordered = document
+        _ = try reordered.apply(patch)
+
+        #expect(reordered.timeline.videoTracks[0] == document.timeline.videoTracks[0])
+        #expect(
+            reordered.timeline.videoTracks[1].items.map(\.id)
+                == [ItemID(rawValue: "overlay-two"), ItemID(rawValue: "overlay-one")]
+        )
+    }
+
+    @Test("Reorder Clips rejects mixed tracks before returning a patch")
+    func reorderClipsRejectsMixedTracks() async throws {
+        let fixture = try Fixture()
+        var document = fixture.document
+        document.timeline.videoTracks.append(
+            Track(
+                id: TrackID(rawValue: "v2"),
+                name: "V2",
+                items: [
+                    TimelineItem(
+                        id: ItemID(rawValue: "overlay-one"),
+                        assetID: AssetID(rawValue: "asset-one"),
+                        sourceRange: TimeRange(
+                            start: .zero,
+                            duration: RationalTime(seconds: 1)
+                        )
+                    )
+                ]
+            )
+        )
+        try document.validate()
+        var context = fixture.context
+        context.document = document
+
+        await #expect(
+            throws: ToolExecutorError.invalidArguments(
+                "Reorder Clips can only move clips within one track"
+            )
+        ) {
+            try await fixture.executor.execute(
+                call(
+                    "reorderClips",
+                    ["order": .array([.string("one"), .string("overlay-one")])]
+                ),
+                turnID: "reorder-mixed",
+                policy: .autoApply,
+                context: context
+            )
+        }
+    }
+
+    @Test("Reorder Clips rejects duplicate clip IDs")
+    func reorderClipsRejectsDuplicates() async throws {
+        let fixture = try Fixture()
+
+        await #expect(
+            throws: ToolExecutorError.invalidArguments(
+                "Reorder Clips cannot contain the same clip more than once"
+            )
+        ) {
+            try await fixture.executor.execute(
+                call(
+                    "reorderClips",
+                    ["order": .array([.string("one"), .string("one")])]
+                ),
+                turnID: "reorder-duplicate",
+                policy: .autoApply,
+                context: fixture.context
+            )
+        }
+    }
+
     @Test("Dead-air plus click zoom is one request and one turn-level undo entry")
     @MainActor
     func acceptanceTurn() async throws {
