@@ -1134,14 +1134,16 @@ public final class ImageEditorViewModel {
             return
         }
 
-        var backgroundDocument = document
-        backgroundDocument.layers.removeAll { $0.id == selectedLayerID }
+        var backgroundSnapshot = document
+        backgroundSnapshot.layers.removeAll { $0.id == selectedLayerID }
+        let backgroundDocument = backgroundSnapshot
         let sourceURL = sourceURL
         let renderer = renderer
         let canvas = document.canvas
         selectedLayerRenderTask = Task { [weak self] in
             do {
                 let surfaces = try await Task.detached(priority: .userInitiated) {
+                    [renderer, backgroundDocument, sourceURL, layer, canvas] in
                     let background = try renderer.renderPreview(
                         backgroundDocument,
                         sourceURL: sourceURL
