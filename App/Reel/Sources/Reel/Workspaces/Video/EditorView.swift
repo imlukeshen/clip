@@ -631,8 +631,7 @@ struct EditorView: View {
             .foregroundStyle(theme.palette.textSecondary)
             .accessibilityElement(children: .ignore)
             .accessibilityIdentifier("video-timeline-item-count")
-            .accessibilityLabel("Timeline items")
-            .accessibilityValue("\(timelineItemCount)")
+            .accessibilityLabel("Timeline items: \(timelineItemCount)")
 
             Divider()
                 .overlay(theme.palette.line)

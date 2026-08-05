@@ -423,7 +423,9 @@ public actor AppRuntime {
     }
 
     public func renameAsset(_ id: AssetID, to name: String) async throws -> AssetRecord {
-        try await folders.renameAsset(id, to: name)
+        let renamed = try await folders.renameAsset(id, to: name)
+        await indexPipeline.enqueue(renamed.id, stages: Self.indexStages(for: renamed))
+        return renamed
     }
 
     public func folderDestinations() async throws -> [String] {

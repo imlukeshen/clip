@@ -152,6 +152,7 @@ public final class AppModel {
     private var indexProgressTask: Task<Void, Never>?
     private var indexActivityTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var assetRefreshGeneration = 0
     private var conversionTask: Task<Void, Never>?
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
@@ -913,6 +914,9 @@ public final class AppModel {
                     to: relocatedURL,
                     displayName: renamed.displayName
                 )
+                if let index = assets.firstIndex(where: { $0.id == id }) {
+                    assets[index] = renamed
+                }
                 await refreshAssets()
                 guard renamed.displayName != original.displayName else {
                     if let undoToken {
@@ -2529,8 +2533,12 @@ public final class AppModel {
 
     private func refreshAssets() async {
         guard let runtime else { return }
+        assetRefreshGeneration &+= 1
+        let generation = assetRefreshGeneration
         do {
-            assets = try await runtime.assets()
+            let snapshot = try await runtime.assets()
+            guard generation == assetRefreshGeneration else { return }
+            assets = snapshot
             await refreshFolderTree()
         } catch {
             lastMessage = "The library index could not be read. Reopen Clip to rebuild it."

@@ -129,8 +129,9 @@ public actor IngestCoordinator {
             Task {
                 for await url in events {
                     do {
-                        let record = try await pipeline.ingest(url, source: .inbox)
-                        await didIngest(record, url)
+                        let result = try await pipeline.ingestResult(url, source: .inbox)
+                        guard result.wasInserted else { continue }
+                        await didIngest(result.record, url)
                     } catch {
                         // IngestPipeline emits the typed failure event.
                     }

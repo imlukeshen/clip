@@ -9,6 +9,7 @@ import Testing
 private struct CoordinatorFixture {
     let root: URL
     let inboxURL: URL
+    let library: LibraryStore
     let pipeline: IngestPipeline
     let history: CaptureHistory
     let bookmarks: BookmarkStore
@@ -21,7 +22,7 @@ private struct CoordinatorFixture {
         inboxURL = LibraryLayout.inbox(in: root)
         try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
         bookmarks = BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
-        let library = try await LibraryStore(root: root, bookmarks: bookmarks)
+        library = try await LibraryStore(root: root, bookmarks: bookmarks)
         pipeline = IngestPipeline(
             library: library,
             libraryRoot: root,
@@ -34,6 +35,40 @@ private struct CoordinatorFixture {
     func watcher(_ url: URL) -> InboxWatcher {
         InboxWatcher(url: url, bookmarks: bookmarks, extensions: ["mov"])
     }
+}
+
+@Test func inboxCoordinatorDoesNotRepublishAClipOwnedRename() async throws {
+    let fixture = try await CoordinatorFixture(named: "clip-coordinator-rename-tests")
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+    let probe = AssociationProbe()
+    let coordinator = IngestCoordinator(
+        pipeline: fixture.pipeline,
+        libraryInboxes: [fixture.watcher(fixture.inboxURL)],
+        captureInboxes: [],
+        history: fixture.history,
+        didIngest: { record, url in await probe.record(record, url: url) }
+    )
+    try await coordinator.start()
+
+    let source = fixture.inboxURL.appendingPathComponent("Original.mov")
+    try Data(repeating: 0x35, count: 4_096).write(to: source)
+    for _ in 0..<40 where await probe.count == 0 {
+        try await Task.sleep(for: .milliseconds(100))
+    }
+    let original = try #require(await probe.lastRecord)
+
+    let folders = LibraryFolders(root: fixture.root, library: fixture.library)
+    let renamed = try await folders.renameAsset(original.id, to: "Renamed.mov")
+    try await Task.sleep(for: .seconds(1))
+    await coordinator.stop()
+
+    #expect(renamed.displayName == "Renamed.mov")
+    #expect(await probe.count == 1)
+    #expect(
+        FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent(renamed.relativePath).path
+        )
+    )
 }
 
 @Test func inboxCoordinatorImportsOnlyCapturesFromTheActiveSession() async throws {

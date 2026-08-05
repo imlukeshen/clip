@@ -361,9 +361,13 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
         renameButton.click()
 
-        let renameAlert = app.alerts["Rename File"]
+        // Native SwiftUI alerts are exposed as sheets on hosted macOS and may
+        // strip identifiers from their text fields. Scope the query to the
+        // presented sheet so it remains stable across macOS accessibility roles.
+        let renameAlert = app.sheets.firstMatch
         XCTAssertTrue(renameAlert.waitForExistence(timeout: 5))
-        let renameField = renameAlert.textFields["asset-rename-field"]
+        XCTAssertTrue(renameAlert.staticTexts["Rename File"].exists)
+        let renameField = renameAlert.textFields.firstMatch
         XCTAssertTrue(renameField.waitForExistence(timeout: 5))
         renameField.typeKey("a", modifierFlags: .command)
         renameField.typeText("Renamed Still")
@@ -624,8 +628,13 @@ final class TextEditorTypingTests: XCTestCase {
     ) -> Bool {
         let status = app.descendants(matching: .any)["video-timeline-item-count"]
         guard status.waitForExistence(timeout: min(timeout, 5)) else { return false }
-        let valueMatches = NSPredicate(format: "value == %@", "\(expectedCount)")
-        let expectation = XCTNSPredicateExpectation(predicate: valueMatches, object: status)
+        // SwiftUI's generic accessibility element drops AXValue on some macOS
+        // releases, while AXLabel is consistently available.
+        let labelMatches = NSPredicate(
+            format: "label == %@",
+            "Timeline items: \(expectedCount)"
+        )
+        let expectation = XCTNSPredicateExpectation(predicate: labelMatches, object: status)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 

@@ -40,11 +40,20 @@ public actor IngestPipeline {
     /// Imports a candidate URL or returns its previously imported duplicate.
     @discardableResult
     public func ingest(_ url: URL, source: IngestSource) async throws -> AssetRecord {
+        try await ingestResult(url, source: source).record
+    }
+
+    /// Imports a candidate while retaining whether this call inserted it.
+    ///
+    /// The library inbox watcher needs this distinction because Clip-owned
+    /// moves (such as a rename) appear as new filesystem URLs. Republishing a
+    /// duplicate as a fresh capture would unexpectedly navigate back into an
+    /// editor even though no new media arrived.
+    func ingestResult(_ url: URL, source: IngestSource) async throws -> IngestResult {
         let candidate = url.standardizedFileURL
         continuation.yield(.started(candidate))
         do {
-            let record = try await performIngest(candidate, source: source)
-            return record
+            return try await performIngest(candidate, source: source)
         } catch let error as IngestError {
             continuation.yield(.failed(candidate, error))
             throw error
@@ -85,7 +94,7 @@ public actor IngestPipeline {
         return try await ingest(temporaryURL, source: source)
     }
 
-    private func performIngest(_ url: URL, source: IngestSource) async throws -> AssetRecord {
+    private func performIngest(_ url: URL, source: IngestSource) async throws -> IngestResult {
         try ensureSupported(url)
         let probeService = probe
         let continuation = continuation
@@ -103,7 +112,7 @@ public actor IngestPipeline {
         let contentHash = try SampledFileHasher.hash(url)
         if let existing = try await library.asset(contentHash: contentHash) {
             continuation.yield(.duplicate(existing))
-            return existing
+            return IngestResult(record: existing, wasInserted: false)
         }
         continuation.yield(.progress(url, 0.6))
 
@@ -192,7 +201,7 @@ public actor IngestPipeline {
         _ = source
         continuation.yield(.progress(url, 1))
         continuation.yield(.finished(storedRecord))
-        return storedRecord
+        return IngestResult(record: storedRecord, wasInserted: true)
     }
 
     private func ensureSupported(_ url: URL) throws {
@@ -296,4 +305,9 @@ public actor IngestPipeline {
             }
         }
     }
+}
+
+struct IngestResult: Sendable, Equatable {
+    let record: AssetRecord
+    let wasInserted: Bool
 }
