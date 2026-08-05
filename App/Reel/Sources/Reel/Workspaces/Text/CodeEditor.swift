@@ -575,7 +575,6 @@ struct CodeEditor: NSViewRepresentable {
                 applyMarkdownPresentation(
                     source: textView.string,
                     range: styledRange,
-                    selectedRange: textView.selectedRange(),
                     storage: storage
                 )
                 applyTokens(fencedCodeTokens, intersecting: styledRange, to: storage)
@@ -638,11 +637,10 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         /// Presents Markdown as one calm writing canvas while preserving its portable source.
-        /// Markers stay faintly visible at the caret, while content carries the visual hierarchy.
+        /// Syntax markers remain in the file but collapse visually, matching a block editor.
         private func applyMarkdownPresentation(
             source: String,
             range: NSRange,
-            selectedRange: NSRange,
             storage: NSTextStorage
         ) {
             guard let syntaxBaseFont, let syntaxBaseColor, let markdownMarkerColor,
@@ -652,23 +650,15 @@ struct CodeEditor: NSViewRepresentable {
             let safeRange = NSIntersectionRange(
                 range, NSRange(location: 0, length: nsSource.length))
             guard safeRange.length > 0 else { return }
-            let syntaxColor: (NSRange) -> NSColor = { range in
-                self.markdownSyntaxColor(
-                    for: range,
-                    source: nsSource,
-                    selectedRange: selectedRange,
-                    visibleColor: markdownMarkerColor
-                )
-            }
+            let syntaxColor: (NSRange) -> NSColor = { _ in .clear }
 
             applyMarkdownMatches(
-                pattern: "(?m)^(#{1,6})[ \\t]+(.+?)[ \\t]*#*[ \\t]*$",
+                pattern: "(?m)^(#{1,6})(?:[ \\t]+(.*?)[ \\t]*#*[ \\t]*)?$",
                 source: source,
                 range: safeRange
             ) { match in
                 let marker = match.range(at: 1)
-                let content = match.range(at: 2)
-                guard marker.location != NSNotFound, content.location != NSNotFound else { return }
+                guard marker.location != NSNotFound else { return }
                 let level = min(max(marker.length, 1), 6)
                 let scale: CGFloat = [1.78, 1.5, 1.28, 1.12, 1.04, 1.0][level - 1]
                 let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
@@ -1000,7 +990,6 @@ struct CodeEditor: NSViewRepresentable {
             applyMarkdownPresentation(
                 source: textView.string,
                 range: range,
-                selectedRange: textView.selectedRange(),
                 storage: storage
             )
             storage.endEditing()
@@ -1069,21 +1058,6 @@ struct CodeEditor: NSViewRepresentable {
                 font = syntaxBaseFont ?? NSFont.systemFont(ofSize: 13)
             }
             return [.foregroundColor: color, .font: font]
-        }
-
-        private func markdownSyntaxColor(
-            for range: NSRange,
-            source: NSString,
-            selectedRange: NSRange,
-            visibleColor: NSColor
-        ) -> NSColor {
-            let caret = min(max(selectedRange.location, 0), source.length)
-            let activeLine = source.lineRange(for: NSRange(location: caret, length: 0))
-            let elementLine = source.lineRange(
-                for: NSRange(location: min(range.location, source.length), length: 0)
-            )
-            return NSIntersectionRange(activeLine, elementLine).length > 0
-                ? visibleColor : .clear
         }
 
         private func tokenUsesEmphasisFont(_ kind: SyntaxTokenKind) -> Bool {

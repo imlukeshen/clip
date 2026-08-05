@@ -758,9 +758,11 @@ public final class TextEditorViewModel {
         contentTask?.cancel()
         cleanupTask?.cancel()
         let original = text
+        let preservesMarkdownBlockMarker = language == .markdown
         cleanupTask = Task { [weak self] in
             let cleaned = await Task.detached(priority: .userInitiated) {
-                TextEditingOperations.trimmingTrailingWhitespace(in: original)
+                preservesMarkdownBlockMarker
+                    ? original : TextEditingOperations.trimmingTrailingWhitespace(in: original)
             }.value
             guard !Task.isCancelled, let self else { return }
             if text == original, cleaned != original {

@@ -81,6 +81,46 @@ struct TextEditorViewModelTests {
         #expect(editor.activeFile?.languageIsExplicit == true)
     }
 
+    @Test("Saving Markdown preserves empty block markers and rich formatting source")
+    func markdownFormattingPersistsExactly() async throws {
+        let fileID = FileID(rawValue: "markdown")
+        let file = TextFile(
+            id: fileID,
+            relativePath: "Notes.md",
+            language: .markdown,
+            languageIsExplicit: true
+        )
+        let writes = TextWriteRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            contents: [fileID: ""],
+            activeFileID: fileID,
+            sourceURLs: [:],
+            projectFileURLs: [:],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { id, data, _ in
+                await writes.record(id, data: data)
+            }
+        )
+        let source = "# Heading\n\nA **bold** note.\n\n# "
+        editor.text = source
+        editor.saveNow()
+
+        for _ in 0..<50 {
+            if await writes.text(for: fileID) != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(await writes.text(for: fileID) == source)
+        #expect(
+            MarkdownFormattingOperations.blockStyle(
+                in: source,
+                selectedRange: NSRange(location: (source as NSString).length, length: 0)
+            ) == .heading(1)
+        )
+        editor.stop()
+    }
+
     @Test("Mixed line ending normalization is one undoable edit")
     func normalizesMixedLineEndings() throws {
         let file = TextFile(

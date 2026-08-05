@@ -235,6 +235,62 @@ struct TextEditingOperationsTests {
         #expect(body.text == "Existing heading\n")
     }
 
+    @Test("Markdown blocks keep the caret in content and report rich toolbar state")
+    func markdownBlockSelectionAndState() {
+        let emptyHeading = MarkdownFormattingOperations.apply(
+            .heading1,
+            to: "",
+            selectedRange: NSRange(location: 0, length: 0)
+        )
+        #expect(emptyHeading.text == "# ")
+        #expect(emptyHeading.selectedRange == NSRange(location: 2, length: 0))
+        #expect(
+            (emptyHeading.text as NSString).replacingCharacters(
+                in: emptyHeading.selectedRange,
+                with: "Help"
+            ) == "# Help"
+        )
+        #expect(
+            MarkdownFormattingOperations.blockStyle(
+                in: emptyHeading.text,
+                selectedRange: emptyHeading.selectedRange
+            ) == .heading(1)
+        )
+
+        let converted = MarkdownFormattingOperations.apply(
+            .heading2,
+            to: "- Selected item",
+            selectedRange: NSRange(location: 2, length: 13)
+        )
+        #expect(converted.text == "## Selected item")
+        #expect(
+            (converted.text as NSString).substring(with: converted.selectedRange)
+                == "Selected item"
+        )
+        #expect(
+            MarkdownFormattingOperations.blockStyle(
+                in: converted.text,
+                selectedRange: converted.selectedRange
+            ) == .heading(2)
+        )
+
+        let rich = "Write **bold words** and `code`."
+        #expect(
+            MarkdownFormattingOperations.isInlineStyleActive(
+                .bold,
+                in: rich,
+                selectedRange: NSRange(location: 10, length: 4)
+            )
+        )
+        #expect(
+            MarkdownFormattingOperations.isInlineStyleActive(
+                .inlineCode,
+                in: rich,
+                selectedRange: NSRange(location: 27, length: 0)
+            )
+        )
+    }
+
     @Test("Markdown link and block insertion select the next editable content")
     func markdownInsertions() {
         let link = MarkdownFormattingOperations.apply(

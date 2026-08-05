@@ -29,8 +29,81 @@ public enum MarkdownFormattingAction: Sendable, Equatable {
     case divider
 }
 
+/// The block style at the insertion point. Keeping this derived from the
+/// portable Markdown source lets the toolbar behave like a rich-text editor
+/// without introducing a second, lossy document model.
+public enum MarkdownBlockStyle: Sendable, Equatable {
+    case body
+    case heading(Int)
+    case bulletedList
+    case numberedList
+    case checklist
+    case quote
+
+    public var displayName: String {
+        switch self {
+        case .body: "Text"
+        case .heading(let level): "Heading \(level)"
+        case .bulletedList: "Bulleted list"
+        case .numberedList: "Numbered list"
+        case .checklist: "Checklist"
+        case .quote: "Quote"
+        }
+    }
+}
+
 /// Pure Markdown transformations so toolbar and keyboard commands remain undoable and testable.
 public enum MarkdownFormattingOperations {
+    /// Returns the semantic block style at the start of the current selection.
+    public static func blockStyle(
+        in text: String,
+        selectedRange requestedRange: NSRange
+    ) -> MarkdownBlockStyle {
+        let source = text as NSString
+        let range = clamped(requestedRange, in: source)
+        let lineRange = source.lineRange(for: NSRange(location: range.location, length: 0))
+        let line = parsedLines(in: source.substring(with: lineRange)).first?.body ?? ""
+        return parsedBlockLine(line).style
+    }
+
+    /// Reports active inline formatting so toolbar state follows the caret or
+    /// selection instead of resetting visually after every edit.
+    public static func isInlineStyleActive(
+        _ action: MarkdownFormattingAction,
+        in text: String,
+        selectedRange requestedRange: NSRange
+    ) -> Bool {
+        let pattern: String
+        switch action {
+        case .bold: pattern = "\\*\\*[^\\n*]+\\*\\*|__[^\\n_]+__"
+        case .italic: pattern = "(?<!\\*)\\*[^*\\n]+\\*(?!\\*)|(?<!_)_[^_\\n]+_(?!_)"
+        case .strikethrough: pattern = "~~[^\\n~]+~~"
+        case .inlineCode: pattern = "(?<!`)`[^`\\n]+`(?!`)"
+        case .link: pattern = "\\[[^\\]\\n]+\\]\\([^)\\n]+\\)"
+        case .inlineMath: pattern = "(?<!\\$)\\$[^\\n$]+\\$(?!\\$)"
+        default: return false
+        }
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return false }
+        let source = text as NSString
+        let selection = clamped(requestedRange, in: source)
+        let lineRange = source.lineRange(
+            for: NSRange(location: selection.location, length: 0)
+        )
+        guard selection.length == 0 || NSMaxRange(selection) <= NSMaxRange(lineRange) else {
+            return false
+        }
+        return expression.matches(
+            in: text,
+            range: lineRange
+        ).contains { match in
+            if selection.length == 0 {
+                return selection.location > match.range.location
+                    && selection.location < NSMaxRange(match.range)
+            }
+            return NSIntersectionRange(selection, match.range).length == selection.length
+        }
+    }
+
     public static func apply(
         _ action: MarkdownFormattingAction,
         to text: String,
@@ -40,19 +113,19 @@ public enum MarkdownFormattingOperations {
         let range = clamped(requestedRange, in: source)
         switch action {
         case .body:
-            return changeHeading(in: source, selectedRange: range, level: nil)
+            return changeBlock(in: source, selectedRange: range, to: .body)
         case .heading1:
-            return changeHeading(in: source, selectedRange: range, level: 1)
+            return changeBlock(in: source, selectedRange: range, to: .heading(1))
         case .heading2:
-            return changeHeading(in: source, selectedRange: range, level: 2)
+            return changeBlock(in: source, selectedRange: range, to: .heading(2))
         case .heading3:
-            return changeHeading(in: source, selectedRange: range, level: 3)
+            return changeBlock(in: source, selectedRange: range, to: .heading(3))
         case .heading4:
-            return changeHeading(in: source, selectedRange: range, level: 4)
+            return changeBlock(in: source, selectedRange: range, to: .heading(4))
         case .heading5:
-            return changeHeading(in: source, selectedRange: range, level: 5)
+            return changeBlock(in: source, selectedRange: range, to: .heading(5))
         case .heading6:
-            return changeHeading(in: source, selectedRange: range, level: 6)
+            return changeBlock(in: source, selectedRange: range, to: .heading(6))
         case .bold:
             return wrap(
                 in: source, selectedRange: range, opening: "**", closing: "**",
@@ -71,13 +144,13 @@ public enum MarkdownFormattingOperations {
         case .link:
             return insertLink(in: source, selectedRange: range)
         case .bulletedList:
-            return changeList(in: source, selectedRange: range, style: .bulleted)
+            return changeBlock(in: source, selectedRange: range, to: .bulletedList, toggles: true)
         case .numberedList:
-            return changeList(in: source, selectedRange: range, style: .numbered)
+            return changeBlock(in: source, selectedRange: range, to: .numberedList, toggles: true)
         case .checklist:
-            return changeList(in: source, selectedRange: range, style: .checklist)
+            return changeBlock(in: source, selectedRange: range, to: .checklist, toggles: true)
         case .quote:
-            return toggleLinePrefix(in: source, selectedRange: range, prefix: "> ")
+            return changeBlock(in: source, selectedRange: range, to: .quote, toggles: true)
         case .codeBlock:
             return insertCodeBlock(in: source, selectedRange: range)
         case .image:
@@ -112,12 +185,6 @@ public enum MarkdownFormattingOperations {
             contents: contents,
             languageLabel: MarkdownEditingIntelligence.fenceLabel(for: language)
         )
-    }
-
-    private enum ListStyle {
-        case bulleted
-        case numbered
-        case checklist
     }
 
     private static func wrap(
@@ -191,86 +258,58 @@ public enum MarkdownFormattingOperations {
         )
     }
 
-    private static func changeHeading(
+    private static func changeBlock(
         in source: NSString,
         selectedRange: NSRange,
-        level: Int?
-    ) -> TextEditResult {
-        transformSelectedLines(in: source, selectedRange: selectedRange) { line, _ in
-            let parts = indentationAndBody(line)
-            let body = strippingHeadingPrefix(from: parts.body)
-            guard let level else { return parts.indentation + body }
-            return parts.indentation + String(repeating: "#", count: level) + " " + body
-        }
-    }
-
-    private static func changeList(
-        in source: NSString,
-        selectedRange: NSRange,
-        style: ListStyle
+        to requestedStyle: MarkdownBlockStyle,
+        toggles: Bool = false
     ) -> TextEditResult {
         let affected = affectedLineRange(in: source, selection: selectedRange)
         let lines = parsedLines(in: source.substring(with: affected))
-        let bodies = lines.map { strippingListPrefix(from: indentationAndBody($0.body).body) }
-        let alreadyApplied = zip(lines, bodies).allSatisfy { line, stripped in
-            let body = indentationAndBody(line.body).body
-            switch style {
-            case .bulleted:
-                return body.hasPrefix("- ") && !body.hasPrefix("- [ ] ")
-                    && !body.hasPrefix("- [x] ")
-            case .numbered:
-                return numberedPrefixLength(in: body) != nil
-            case .checklist:
-                return body.hasPrefix("- [ ] ") || body.hasPrefix("- [x] ")
-                    || body.hasPrefix("- [X] ")
-            }
+        let parsed = lines.map { parsedBlockLine($0.body) }
+        let style: MarkdownBlockStyle =
+            toggles && parsed.allSatisfy({ $0.style == requestedStyle })
+            ? .body : requestedStyle
+        var replacement = ""
+        var mappings: [BlockLineMapping] = []
+        var oldOffset = 0
+        var newOffset = 0
+        for (index, pair) in zip(lines, parsed).enumerated() {
+            let (line, block) = pair
+            let prefix = blockPrefix(for: style, lineIndex: index)
+            let updatedBody = block.indentation + prefix + block.content
+            let oldBodyLength = (line.body as NSString).length
+            let oldTerminatorLength = (line.terminator as NSString).length
+            let newBodyLength = (updatedBody as NSString).length
+            mappings.append(
+                BlockLineMapping(
+                    oldStart: oldOffset,
+                    oldBodyLength: oldBodyLength,
+                    oldTerminatorLength: oldTerminatorLength,
+                    oldContentStart: ((block.indentation + block.prefix) as NSString).length,
+                    contentLength: (block.content as NSString).length,
+                    newStart: newOffset,
+                    newBodyLength: newBodyLength,
+                    newTerminatorLength: oldTerminatorLength,
+                    newContentStart: ((block.indentation + prefix) as NSString).length
+                )
+            )
+            replacement += updatedBody + line.terminator
+            oldOffset += oldBodyLength + oldTerminatorLength
+            newOffset += newBodyLength + oldTerminatorLength
         }
-        let replacement = zip(lines, bodies).enumerated().map { offset, pair in
-            let (line, stripped) = pair
-            let indentation = indentationAndBody(line.body).indentation
-            let prefix: String
-            if alreadyApplied {
-                prefix = ""
-            } else {
-                switch style {
-                case .bulleted: prefix = "- "
-                case .numbered: prefix = "\(offset + 1). "
-                case .checklist: prefix = "- [ ] "
-                }
-            }
-            return indentation + prefix + stripped + line.terminator
-        }.joined()
+        let localStart = selectedRange.location - affected.location
+        let localEnd = NSMaxRange(selectedRange) - affected.location
+        let mappedStart = mapBlockPosition(localStart, through: mappings)
+        let mappedEnd = mapBlockPosition(localEnd, through: mappings)
         return replacing(
             affected,
             in: source,
             with: replacement,
             selection: NSRange(
-                location: affected.location, length: (replacement as NSString).length)
-        )
-    }
-
-    private static func toggleLinePrefix(
-        in source: NSString,
-        selectedRange: NSRange,
-        prefix: String
-    ) -> TextEditResult {
-        let affected = affectedLineRange(in: source, selection: selectedRange)
-        let lines = parsedLines(in: source.substring(with: affected))
-        let removesPrefix = lines.allSatisfy { line in
-            indentationAndBody(line.body).body.hasPrefix(prefix)
-        }
-        let replacement = lines.map { line in
-            let parts = indentationAndBody(line.body)
-            let body =
-                removesPrefix ? String(parts.body.dropFirst(prefix.count)) : prefix + parts.body
-            return parts.indentation + body + line.terminator
-        }.joined()
-        return replacing(
-            affected,
-            in: source,
-            with: replacement,
-            selection: NSRange(
-                location: affected.location, length: (replacement as NSString).length)
+                location: affected.location + mappedStart,
+                length: max(mappedEnd - mappedStart, 0)
+            )
         )
     }
 
@@ -284,6 +323,99 @@ public enum MarkdownFormattingOperations {
             contents: selectedRange.length == 0 ? "code" : source.substring(with: selectedRange),
             languageLabel: ""
         )
+    }
+
+    private struct ParsedBlockLine {
+        var indentation: String
+        var prefix: String
+        var content: String
+        var style: MarkdownBlockStyle
+    }
+
+    private struct BlockLineMapping {
+        var oldStart: Int
+        var oldBodyLength: Int
+        var oldTerminatorLength: Int
+        var oldContentStart: Int
+        var contentLength: Int
+        var newStart: Int
+        var newBodyLength: Int
+        var newTerminatorLength: Int
+        var newContentStart: Int
+    }
+
+    private static func parsedBlockLine(_ line: String) -> ParsedBlockLine {
+        let parts = indentationAndBody(line)
+        let body = parts.body as NSString
+        let fullRange = NSRange(location: 0, length: body.length)
+        let patterns: [(String, (NSTextCheckingResult) -> MarkdownBlockStyle)] = [
+            (
+                "^(#{1,6})(?:[ \\t]+|$)",
+                { match in .heading(min(max(match.range(at: 1).length, 1), 6)) }
+            ),
+            ("^[-+*][ \\t]+\\[[ xX]\\][ \\t]+", { _ in .checklist }),
+            ("^[0-9]+\\.[ \\t]+", { _ in .numberedList }),
+            ("^[-+*][ \\t]+", { _ in .bulletedList }),
+            ("^>[ \\t]+", { _ in .quote }),
+        ]
+        for (pattern, style) in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                let match = expression.firstMatch(in: parts.body, range: fullRange)
+            else { continue }
+            let prefix = body.substring(with: match.range)
+            return ParsedBlockLine(
+                indentation: parts.indentation,
+                prefix: prefix,
+                content: body.substring(from: NSMaxRange(match.range)),
+                style: style(match)
+            )
+        }
+        return ParsedBlockLine(
+            indentation: parts.indentation,
+            prefix: "",
+            content: parts.body,
+            style: .body
+        )
+    }
+
+    private static func blockPrefix(for style: MarkdownBlockStyle, lineIndex: Int) -> String {
+        switch style {
+        case .body: ""
+        case .heading(let level): String(repeating: "#", count: min(max(level, 1), 6)) + " "
+        case .bulletedList: "- "
+        case .numberedList: "\(lineIndex + 1). "
+        case .checklist: "- [ ] "
+        case .quote: "> "
+        }
+    }
+
+    private static func mapBlockPosition(
+        _ requestedPosition: Int,
+        through mappings: [BlockLineMapping]
+    ) -> Int {
+        let position = max(requestedPosition, 0)
+        for (index, mapping) in mappings.enumerated() {
+            let oldBodyEnd = mapping.oldStart + mapping.oldBodyLength
+            let oldLineEnd = oldBodyEnd + mapping.oldTerminatorLength
+            if position < mapping.oldStart { return mapping.newStart }
+            if position <= oldBodyEnd {
+                let local = position - mapping.oldStart
+                guard local > mapping.oldContentStart else {
+                    return mapping.newStart + mapping.newContentStart
+                }
+                return mapping.newStart + mapping.newContentStart
+                    + min(local - mapping.oldContentStart, mapping.contentLength)
+            }
+            if position < oldLineEnd || index == mappings.count - 1 {
+                let terminatorOffset = min(
+                    max(position - oldBodyEnd, 0),
+                    mapping.newTerminatorLength
+                )
+                return mapping.newStart + mapping.newBodyLength + terminatorOffset
+            }
+        }
+        guard let last = mappings.last else { return position }
+        return last.newStart + last.newBodyLength + last.newTerminatorLength
     }
 
     private static func insertCodeBlock(
@@ -442,56 +574,6 @@ public enum MarkdownFormattingOperations {
             return Int(text.substring(with: range))
         }
         return (indexes.max() ?? 0) + 1
-    }
-
-    private static func transformSelectedLines(
-        in source: NSString,
-        selectedRange: NSRange,
-        transform: (String, Int) -> String
-    ) -> TextEditResult {
-        let affected = affectedLineRange(in: source, selection: selectedRange)
-        let replacement = parsedLines(in: source.substring(with: affected)).enumerated().map {
-            index, line in
-            transform(line.body, index) + line.terminator
-        }.joined()
-        return replacing(
-            affected,
-            in: source,
-            with: replacement,
-            selection: NSRange(
-                location: affected.location, length: (replacement as NSString).length)
-        )
-    }
-
-    private static func strippingHeadingPrefix(from body: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: "^#{1,6}[ \\t]+") else {
-            return body
-        }
-        let source = body as NSString
-        let range = NSRange(location: 0, length: source.length)
-        guard let match = expression.firstMatch(in: body, range: range) else { return body }
-        return source.substring(from: NSMaxRange(match.range))
-    }
-
-    private static func strippingListPrefix(from body: String) -> String {
-        if body.hasPrefix("- [ ] ") || body.hasPrefix("- [x] ") || body.hasPrefix("- [X] ") {
-            return String(body.dropFirst(6))
-        }
-        if body.hasPrefix("- ") || body.hasPrefix("* ") || body.hasPrefix("+ ") {
-            return String(body.dropFirst(2))
-        }
-        if let length = numberedPrefixLength(in: body) {
-            return String(body.dropFirst(length))
-        }
-        return body
-    }
-
-    private static func numberedPrefixLength(in body: String) -> Int? {
-        guard let expression = try? NSRegularExpression(pattern: "^[0-9]+\\.[ \\t]+") else {
-            return nil
-        }
-        let range = NSRange(location: 0, length: (body as NSString).length)
-        return expression.firstMatch(in: body, range: range)?.range.length
     }
 
     private static func indentationAndBody(_ line: String) -> (indentation: String, body: String) {

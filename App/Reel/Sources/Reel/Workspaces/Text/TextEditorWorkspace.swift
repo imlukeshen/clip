@@ -401,30 +401,31 @@ struct TextEditorWorkspace: View {
     private var markdownFormattingControls: some View {
         HStack(spacing: 4) {
             Menu {
-                Button("Body") { sendMarkdownAction(#selector(CodeTextView.markdownBody(_:))) }
-                Button("Heading 1") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading1(_:)))
-                }
-                Button("Heading 2") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading2(_:)))
-                }
-                Button("Heading 3") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading3(_:)))
-                }
+                markdownBlockMenuButton(
+                    "Body", style: .body, action: #selector(CodeTextView.markdownBody(_:)))
+                markdownBlockMenuButton(
+                    "Heading 1", style: .heading(1),
+                    action: #selector(CodeTextView.markdownHeading1(_:)))
+                markdownBlockMenuButton(
+                    "Heading 2", style: .heading(2),
+                    action: #selector(CodeTextView.markdownHeading2(_:)))
+                markdownBlockMenuButton(
+                    "Heading 3", style: .heading(3),
+                    action: #selector(CodeTextView.markdownHeading3(_:)))
                 Divider()
-                Button("Heading 4") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading4(_:)))
-                }
-                Button("Heading 5") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading5(_:)))
-                }
-                Button("Heading 6") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownHeading6(_:)))
-                }
+                markdownBlockMenuButton(
+                    "Heading 4", style: .heading(4),
+                    action: #selector(CodeTextView.markdownHeading4(_:)))
+                markdownBlockMenuButton(
+                    "Heading 5", style: .heading(5),
+                    action: #selector(CodeTextView.markdownHeading5(_:)))
+                markdownBlockMenuButton(
+                    "Heading 6", style: .heading(6),
+                    action: #selector(CodeTextView.markdownHeading6(_:)))
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "textformat.size")
-                    Text("Text")
+                    Text(currentMarkdownBlockStyle.displayName)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                 }
@@ -449,39 +450,45 @@ struct TextEditorWorkspace: View {
                 systemImage: "bold",
                 action: #selector(CodeTextView.markdownBold(_:)),
                 identifier: "markdown-bold",
-                shortcut: "⌘B"
+                shortcut: "⌘B",
+                isActive: markdownInlineStyleIsActive(.bold)
             )
             markdownFormatButton(
                 "Italic",
                 systemImage: "italic",
                 action: #selector(CodeTextView.markdownItalic(_:)),
                 identifier: "markdown-italic",
-                shortcut: "⌘I"
+                shortcut: "⌘I",
+                isActive: markdownInlineStyleIsActive(.italic)
             )
             markdownFormatButton(
                 "Strikethrough",
                 systemImage: "strikethrough",
                 action: #selector(CodeTextView.markdownStrikethrough(_:)),
                 identifier: "markdown-strikethrough",
-                shortcut: "⇧⌘X"
+                shortcut: "⇧⌘X",
+                isActive: markdownInlineStyleIsActive(.strikethrough)
             )
             markdownFormatButton(
                 "Inline code",
                 systemImage: "chevron.left.forwardslash.chevron.right",
                 action: #selector(CodeTextView.markdownInlineCode(_:)),
-                identifier: "markdown-inline-code"
+                identifier: "markdown-inline-code",
+                isActive: markdownInlineStyleIsActive(.inlineCode)
             )
             markdownFormatButton(
                 "Link",
                 systemImage: "link",
                 action: #selector(CodeTextView.markdownLink(_:)),
-                identifier: "markdown-link"
+                identifier: "markdown-link",
+                isActive: markdownInlineStyleIsActive(.link)
             )
             markdownFormatButton(
                 "Inline math",
                 systemImage: "function",
                 action: #selector(CodeTextView.markdownInlineMath(_:)),
-                identifier: "markdown-inline-math"
+                identifier: "markdown-inline-math",
+                isActive: markdownInlineStyleIsActive(.inlineMath)
             )
 
             formattingDivider
@@ -490,25 +497,29 @@ struct TextEditorWorkspace: View {
                 "Bulleted list",
                 systemImage: "list.bullet",
                 action: #selector(CodeTextView.markdownBulletedList(_:)),
-                identifier: "markdown-bulleted-list"
+                identifier: "markdown-bulleted-list",
+                isActive: currentMarkdownBlockStyle == .bulletedList
             )
             markdownFormatButton(
                 "Numbered list",
                 systemImage: "list.number",
                 action: #selector(CodeTextView.markdownNumberedList(_:)),
-                identifier: "markdown-numbered-list"
+                identifier: "markdown-numbered-list",
+                isActive: currentMarkdownBlockStyle == .numberedList
             )
             markdownFormatButton(
                 "Checklist",
                 systemImage: "checklist",
                 action: #selector(CodeTextView.markdownChecklist(_:)),
-                identifier: "markdown-checklist"
+                identifier: "markdown-checklist",
+                isActive: currentMarkdownBlockStyle == .checklist
             )
             markdownFormatButton(
                 "Quote",
                 systemImage: "text.quote",
                 action: #selector(CodeTextView.markdownQuote(_:)),
-                identifier: "markdown-quote"
+                identifier: "markdown-quote",
+                isActive: currentMarkdownBlockStyle == .quote
             )
 
             Menu {
@@ -556,7 +567,8 @@ struct TextEditorWorkspace: View {
         systemImage: String,
         action: Selector,
         identifier: String,
-        shortcut: String? = nil
+        shortcut: String? = nil,
+        isActive: Bool = false
     ) -> some View {
         Button {
             sendMarkdownAction(action)
@@ -564,10 +576,41 @@ struct TextEditorWorkspace: View {
             Image(systemName: systemImage)
                 .frame(width: 28, height: 28)
         }
-        .buttonStyle(ReelIconButtonStyle())
+        .buttonStyle(ReelIconButtonStyle(isActive: isActive))
         .help(shortcut.map { "\(title) (\($0))" } ?? title)
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
+    }
+
+    private var currentMarkdownBlockStyle: MarkdownBlockStyle {
+        MarkdownFormattingOperations.blockStyle(
+            in: editor.text,
+            selectedRange: selectedRange
+        )
+    }
+
+    private func markdownBlockMenuButton(
+        _ title: String,
+        style: MarkdownBlockStyle,
+        action: Selector
+    ) -> some View {
+        Button {
+            sendMarkdownAction(action)
+        } label: {
+            if currentMarkdownBlockStyle == style {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func markdownInlineStyleIsActive(_ action: MarkdownFormattingAction) -> Bool {
+        MarkdownFormattingOperations.isInlineStyleActive(
+            action,
+            in: editor.text,
+            selectedRange: selectedRange
+        )
     }
 
     private func sendMarkdownAction(_ action: Selector) {
