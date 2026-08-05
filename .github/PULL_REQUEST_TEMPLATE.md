@@ -4,6 +4,7 @@
 
 - [ ] `make test`
 - [ ] `make lint`
+- [ ] UI changes include `make test-ui`
 - [ ] Distribution or licence changes include `make distribution-check licence-audit`
 
 ## Privacy and release impact

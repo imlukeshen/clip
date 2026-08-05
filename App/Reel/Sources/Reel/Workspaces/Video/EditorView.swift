@@ -244,6 +244,7 @@ struct EditorView: View {
         EditableFileTitle(
             name: editor.document.name,
             accessibilityIdentifier: "video-project-title",
+            renameKind: "project",
             onCommit: { _ = editor.renameProject(to: $0) }
         )
     }
@@ -1004,6 +1005,9 @@ private struct ToolButton: View {
             }
             .buttonStyle(ReelIconButtonStyle(isActive: isActive))
             .disabled(isDisabled)
+            .accessibilityLabel(title)
+            .accessibilityHint(detail)
+            .accessibilityIdentifier(identifier)
         }
         .contentShape(Rectangle())
         .overlay(alignment: .leading) {
@@ -1043,9 +1047,6 @@ private struct ToolButton: View {
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
         .help("\(title): \(detail)")
-        .accessibilityLabel(title)
-        .accessibilityHint(detail)
-        .accessibilityIdentifier(identifier)
         .zIndex(isHovered ? 100 : 0)
     }
 }

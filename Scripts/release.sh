@@ -18,13 +18,18 @@ require_environment() {
 }
 
 require_environment
+readonly VERSION="$RELEASE_VERSION"
+if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "RELEASE_VERSION must use vMAJOR.MINOR.PATCH" >&2
+    exit 1
+fi
+
 cd "$ROOT_DIR"
 Scripts/check-distribution.sh
 Scripts/check-licenses.sh
-xcodegen generate
+make generate
 
 mkdir -p "$BUILD_DIR" "$DIRECT_EXPORT" "$ARTIFACTS"
-readonly VERSION="$RELEASE_VERSION"
 readonly MARKETING_VERSION="${VERSION#v}"
 readonly BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}"
 
@@ -34,6 +39,7 @@ xcodebuild archive \
     -configuration Release \
     -destination 'generic/platform=macOS' \
     -archivePath "$DIRECT_ARCHIVE" \
+    -disableAutomaticPackageResolution \
     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
     MARKETING_VERSION="$MARKETING_VERSION" \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
@@ -49,9 +55,9 @@ xcodebuild -exportArchive \
 
 readonly DIRECT_APP="$DIRECT_EXPORT/Clip.app"
 codesign --verify --deep --strict --verbose=2 "$DIRECT_APP"
-spctl --assess --type execute --verbose=2 "$DIRECT_APP" || true
 
-readonly DMG="$ARTIFACTS/Clip-$VERSION.dmg"
+readonly DMG_NAME="Clip-$VERSION.dmg"
+readonly DMG="$ARTIFACTS/$DMG_NAME"
 hdiutil create -volname Clip -srcfolder "$DIRECT_APP" -ov -format UDZO "$DMG"
 xcrun notarytool submit "$DMG" \
     --key "$NOTARY_KEY" \
@@ -60,7 +66,11 @@ xcrun notarytool submit "$DMG" \
     --wait
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
-shasum -a 256 "$DMG" > "$DMG.sha256"
+spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+(
+    cd "$ARTIFACTS"
+    shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256"
+)
 
 xcodebuild archive \
     -project Clip.xcodeproj \
@@ -68,6 +78,7 @@ xcodebuild archive \
     -configuration AppStoreRelease \
     -destination 'generic/platform=macOS' \
     -archivePath "$STORE_ARCHIVE" \
+    -disableAutomaticPackageResolution \
     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
     MARKETING_VERSION="$MARKETING_VERSION" \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER"

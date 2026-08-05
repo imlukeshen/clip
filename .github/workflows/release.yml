@@ -7,17 +7,67 @@ on:
 permissions:
   contents: write
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   distribute:
     runs-on: macos-26
     environment: release
+    timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           lfs: true
+          persist-credentials: false
 
-      - run: brew install xcodegen
+      - name: Verify release tag and source branch
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tags must point to a commit on main." >&2
+            exit 1
+          fi
+
+      - name: Validate release configuration
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APP_STORE_CONNECT_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_KEY_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          missing=()
+          for name in \
+            MACOS_CERTIFICATE_BASE64 \
+            MACOS_CERTIFICATE_PASSWORD \
+            KEYCHAIN_PASSWORD \
+            APP_STORE_CONNECT_KEY_BASE64 \
+            APP_STORE_CONNECT_KEY_ID \
+            APP_STORE_CONNECT_ISSUER_ID \
+            APPLE_DEVELOPMENT_TEAM; do
+            if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing release secret: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Install release tools
+        run: |
+          brew install ripgrep
+          Scripts/install-xcodegen-ci.sh
 
       - name: Import distribution certificate
         env:
@@ -34,6 +84,7 @@ jobs:
           security import "$certificate" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$keychain"
           security list-keychains -d user -s "$keychain" login.keychain-db
+          echo "RELEASE_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
       - name: Materialize App Store Connect key
         env:
@@ -54,13 +105,28 @@ jobs:
           make test
           make release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Reel-${{ github.ref_name }}
+          name: Clip-${{ github.ref_name }}
           path: ReleaseBuild/artifacts/*
           if-no-files-found: error
+          retention-days: 30
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" ReleaseBuild/artifacts/* --generate-notes --verify-tag
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" ReleaseBuild/artifacts/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" ReleaseBuild/artifacts/* \
+              --generate-notes \
+              --verify-tag
+          fi
+
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          if [[ -n "${RELEASE_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$RELEASE_KEYCHAIN" || true
+          fi

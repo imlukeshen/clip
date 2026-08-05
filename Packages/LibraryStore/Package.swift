@@ -10,7 +10,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../CoreModel"),
-        .package(url: "https://github.com/groue/GRDB.swift.git", .upToNextMajor(from: "7.0.0")),
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
     ],
     targets: [
         .target(

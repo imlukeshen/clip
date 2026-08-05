@@ -35,7 +35,12 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.click()
 
-        app.typeKey("c", modifierFlags: [.command, .shift])
+        // Open from Clip's menu so this paste-behaviour test remains isolated
+        // from global shortcut ownership (for example, when Maccy owns ⌘⇧C).
+        app.menuBars.menuBarItems["Capture"].click()
+        let openClipboard = app.menuItems["Open Clip Clipboard"]
+        XCTAssertTrue(openClipboard.waitForExistence(timeout: 2))
+        openClipboard.click()
         let pasteRow = app.buttons["Paste one-click paste"]
         XCTAssertTrue(pasteRow.waitForExistence(timeout: 5))
         pasteRow.click()
@@ -339,9 +344,14 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(mediaCommand.waitForExistence(timeout: 5))
         mediaCommand.click()
 
-        let originalName = app.staticTexts["Pasted Image.mov"]
-        XCTAssertTrue(originalName.waitForExistence(timeout: 10))
-        originalName.click()
+        // AssetCard intentionally combines the visible name and metadata into
+        // the primary button's accessibility label. Query that actionable
+        // element instead of relying on an implementation-detail StaticText.
+        let originalAsset = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Pasted Image.mov,")
+        ).firstMatch
+        XCTAssertTrue(originalAsset.waitForExistence(timeout: 10))
+        originalAsset.click()
         let renameButton = app.buttons["asset-rename-button"]
         XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
         renameButton.click()
@@ -354,8 +364,11 @@ final class TextEditorTypingTests: XCTestCase {
         renameField.typeText("Renamed Still")
         renameAlert.buttons["Rename"].click()
 
+        let renamedAsset = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Renamed Still.mov,")
+        ).firstMatch
         XCTAssertTrue(
-            app.staticTexts["Renamed Still.mov"].waitForExistence(timeout: 10),
+            renamedAsset.waitForExistence(timeout: 10),
             "The library did not publish the canonical renamed filename"
         )
         let originalURL = libraryRoot.appendingPathComponent("Media/Inbox/Pasted Image.mov")
