@@ -2,6 +2,7 @@ import AppKit
 import CoreModel
 import DesignSystem
 import LibraryStore
+import PDFEngine
 import ReelAppCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -20,12 +21,6 @@ struct PDFView: View {
 
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeader(
-                title: model.isSearching ? "PDF search" : "PDF",
-                subtitle: model.isSearching
-                    ? "Documents matching “\(model.searchQuery)”."
-                    : "Edit pages, add text and markup, export Markdown, and OCR scans locally."
-            )
             if !model.isSearching {
                 WorkspaceDropZone(model: model, workspace: .pdf)
                 HStack(spacing: theme.metrics.spacing.sm) {
@@ -35,19 +30,14 @@ struct PDFView: View {
                     }
                     .buttonStyle(ReelBorderedButtonStyle())
                     .disabled(selectedPDF == nil)
-                    Text("PDFium · local")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textTertiary)
                 }
-                .padding(.top, 18)
+                .padding(.top, 12)
             }
-            SectionLabel(model.isSearching ? "Results" : "Documents")
-                .padding(.top, 28)
-                .padding(.bottom, 11)
             AssetGrid(
                 model: model,
                 assets: model.visibleAssets.filter { $0.kind == .document }
             )
+            .padding(.top, 24)
         }
     }
 
@@ -64,6 +54,9 @@ private struct PDFEditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
     @State private var dragStart: CGPoint?
+    @State private var editingTextObjectID: Int?
+    @State private var textDraft = ""
+    @FocusState private var isInlineTextFocused: Bool
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -99,9 +92,13 @@ private struct PDFEditorView: View {
             }
             .buttonStyle(ReelPlainButtonStyle())
             .help("Back to PDF library")
-            Text(editor.document.title)
-                .font(theme.type.label.font)
-                .lineLimit(1)
+            EditableFileTitle(
+                name: model.assets.first(where: {
+                    $0.id == editor.document.sourceAssetID
+                })?.displayName ?? editor.sourceURL.lastPathComponent,
+                accessibilityIdentifier: "pdf-file-title",
+                onCommit: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+            )
             Text("Page \(editor.selectedPageNumber) of \(editor.document.pages.count)")
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -126,7 +123,10 @@ private struct PDFEditorView: View {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(ReelPlainButtonStyle())
-            .disabled(!editor.undoManager.canUndo)
+            .disabled(
+                model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                    || !editor.undoManager.canUndo
+            )
             .keyboardShortcut("z", modifiers: .command)
             Button {
                 editor.redo()
@@ -134,11 +134,14 @@ private struct PDFEditorView: View {
                 Image(systemName: "arrow.uturn.forward")
             }
             .buttonStyle(ReelPlainButtonStyle())
-            .disabled(!editor.undoManager.canRedo)
+            .disabled(
+                model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                    || !editor.undoManager.canRedo
+            )
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 
@@ -183,7 +186,7 @@ private struct PDFEditorView: View {
             ForEach(PDFEditorTool.allCases) { tool in
                 PDFToolButton(
                     systemName: tool.symbol,
-                    help: tool.title,
+                    help: tool.help,
                     isActive: editor.activeTool == tool
                 ) {
                     editor.activeTool = tool
@@ -232,12 +235,170 @@ private struct PDFEditorView: View {
                         .frame(width: frame.width, height: frame.height)
                         .position(x: frame.midX, y: frame.midY)
                         .gesture(editGesture(in: frame))
+                        .onTapGesture {
+                            commitInlineTextEdit()
+                            editor.selectSourceTextBlock(nil)
+                            editor.selectLayer(nil)
+                        }
+                    if editor.activeTool == .select {
+                        ForEach(editor.editableTextBlocks) { block in
+                            sourceTextOverlay(block, pageFrame: frame)
+                        }
+                    }
                 } else if editor.isRendering {
                     ProgressView()
                 }
             }
         }
         .padding(24)
+        .onChange(of: isInlineTextFocused) { _, focused in
+            if !focused { commitInlineTextEdit() }
+        }
+        .onExitCommand {
+            cancelInlineTextEdit()
+        }
+    }
+
+    private func sourceTextOverlay(
+        _ block: PDFTextBlock,
+        pageFrame: CGRect
+    ) -> some View {
+        let normalizedBounds = displayBounds(
+            block.bounds,
+            rotation: editor.selectedPage?.rotation ?? .degrees0
+        )
+        let blockFrame = CGRect(
+            x: pageFrame.minX + normalizedBounds.minX * pageFrame.width,
+            y: pageFrame.minY + normalizedBounds.minY * pageFrame.height,
+            width: max(normalizedBounds.width * pageFrame.width, 18),
+            height: max(normalizedBounds.height * pageFrame.height, 16)
+        )
+        let isSelected = editor.selectedSourceTextBlockID == block.pageObjectIndex
+        return ZStack {
+            if editingTextObjectID == block.pageObjectIndex {
+                TextField("PDF text", text: $textDraft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: max(min(blockFrame.height * 0.72, 24), 11)))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 5)
+                    .frame(
+                        minWidth: max(blockFrame.width, 150),
+                        minHeight: max(blockFrame.height, 30),
+                        alignment: .leading
+                    )
+                    .background(theme.palette.surfaceRaised.opacity(0.98))
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.control,
+                            style: .continuous
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.control,
+                            style: .continuous
+                        )
+                        .strokeBorder(theme.palette.accent, lineWidth: 1.5)
+                    }
+                    .shadow(color: .black.opacity(0.24), radius: 10, y: 4)
+                    .focused($isInlineTextFocused)
+                    .onSubmit(commitInlineTextEdit)
+                    .accessibilityIdentifier("pdf-inline-text-editor")
+            } else {
+                RoundedRectangle(
+                    cornerRadius: theme.metrics.radius.small,
+                    style: .continuous
+                )
+                .fill(isSelected ? theme.palette.accentDim.opacity(0.28) : Color.clear)
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.small,
+                        style: .continuous
+                    )
+                    .strokeBorder(
+                        isSelected ? theme.palette.accent : Color.clear,
+                        lineWidth: 1
+                    )
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    TapGesture(count: 2)
+                        .exclusively(before: TapGesture())
+                        .onEnded { value in
+                            switch value {
+                            case .first:
+                                beginInlineTextEdit(block)
+                            case .second:
+                                commitInlineTextEdit()
+                                editor.selectSourceTextBlock(block.pageObjectIndex)
+                            }
+                        }
+                )
+                .accessibilityAction {
+                    commitInlineTextEdit()
+                    editor.selectSourceTextBlock(block.pageObjectIndex)
+                }
+                .help("Double-click to edit “\(block.text.prefix(60))”")
+                .accessibilityLabel("PDF text: \(block.text)")
+                .accessibilityHint("Double-click to edit this text in place")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .frame(width: blockFrame.width, height: blockFrame.height)
+        .position(x: blockFrame.midX, y: blockFrame.midY)
+        .zIndex(editingTextObjectID == block.pageObjectIndex ? 4 : 2)
+    }
+
+    private func beginInlineTextEdit(_ block: PDFTextBlock) {
+        commitInlineTextEdit()
+        editor.selectSourceTextBlock(block.pageObjectIndex)
+        editingTextObjectID = block.pageObjectIndex
+        textDraft = block.text
+        Task { @MainActor in isInlineTextFocused = true }
+    }
+
+    private func commitInlineTextEdit() {
+        guard let editingTextObjectID else { return }
+        let value = textDraft
+        self.editingTextObjectID = nil
+        isInlineTextFocused = false
+        editor.replaceSourceText(objectIndex: editingTextObjectID, with: value)
+    }
+
+    private func cancelInlineTextEdit() {
+        editingTextObjectID = nil
+        textDraft = ""
+        isInlineTextFocused = false
+    }
+
+    private func displayBounds(_ rect: CGRect, rotation: PDFPageRotation) -> CGRect {
+        switch rotation {
+        case .degrees0:
+            return rect
+        case .degrees90:
+            return CGRect(
+                x: 1 - rect.maxY,
+                y: rect.minX,
+                width: rect.height,
+                height: rect.width
+            )
+        case .degrees180:
+            return CGRect(
+                x: 1 - rect.maxX,
+                y: 1 - rect.maxY,
+                width: rect.width,
+                height: rect.height
+            )
+        case .degrees270:
+            return CGRect(
+                x: rect.minY,
+                y: 1 - rect.maxX,
+                width: rect.height,
+                height: rect.width
+            )
+        }
     }
 
     private func editGesture(in frame: CGRect) -> some Gesture {
@@ -312,11 +473,14 @@ private struct PDFPageThumbnail: View {
                     .frame(width: 92, height: 118)
                     .background(Color.white)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(
-                                isSelected ? theme.palette.accent : theme.palette.line,
-                                lineWidth: isSelected ? 2 : 1
-                            )
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.small,
+                            style: .continuous
+                        )
+                        .stroke(
+                            isSelected ? theme.palette.accent : theme.palette.line,
+                            lineWidth: isSelected ? 2 : 1
+                        )
                     }
                 Text("\(number)")
                     .font(theme.type.numeric.font)

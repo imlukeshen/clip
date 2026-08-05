@@ -3,6 +3,7 @@ import CoreModel
 import DesignSystem
 import MediaEngine
 import ReelAppCore
+import SearchEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,7 @@ struct ImageEditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: ImageEditorViewModel
     @State private var zoomLevel = 1.0
+    @State private var liveTextSpans: [OCRSpan] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,7 +23,17 @@ struct ImageEditorView: View {
             HStack(spacing: 0) {
                 toolRail
                 Divider().overlay(theme.palette.line)
-                ImageCanvasView(editor: editor, zoomLevel: $zoomLevel)
+                ImageCanvasView(
+                    editor: editor,
+                    zoomLevel: $zoomLevel,
+                    liveTextSpans: liveTextSpans,
+                    onSearch: model.searchLibrary,
+                    onRedact: { regions in
+                        editor.addRedaction(
+                            regions: regions.map(LiveTextFrame.canvasRect(for:))
+                        )
+                    }
+                )
             }
         }
         .background(theme.palette.surfaceBase)
@@ -34,6 +46,12 @@ struct ImageEditorView: View {
                         editor.clearNotice()
                     }
             }
+        }
+        .task(id: editor.document.sourceAssetID) {
+            liveTextSpans = await model.indexedText(
+                at: .zero,
+                in: editor.document.sourceAssetID
+            )
         }
     }
 
@@ -58,9 +76,13 @@ struct ImageEditorView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(editor.sourceURL.deletingPathExtension().lastPathComponent)
-                    .font(theme.type.label.font)
-                    .lineLimit(1)
+                EditableFileTitle(
+                    name: model.assets.first(where: {
+                        $0.id == editor.document.sourceAssetID
+                    })?.displayName ?? editor.sourceURL.lastPathComponent,
+                    accessibilityIdentifier: "image-file-title",
+                    onCommit: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                )
                 HStack(spacing: 5) {
                     Circle()
                         .fill(editor.isRendering ? theme.palette.click : theme.palette.success)
@@ -77,6 +99,27 @@ struct ImageEditorView: View {
 
             Spacer(minLength: 12)
 
+            Menu {
+                Button {
+                    importImages()
+                } label: {
+                    Label("Import Images…", systemImage: "folder")
+                }
+                Button {
+                    model.pasteImageIntoCanvas()
+                } label: {
+                    Label("Paste Image", systemImage: "doc.on.clipboard")
+                }
+                .keyboardShortcut("v", modifiers: .command)
+            } label: {
+                Label("Add image", systemImage: "photo.badge.plus")
+                    .frame(height: 30)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Import or paste another image as a new canvas layer")
+            .accessibilityIdentifier("photo-add-image")
+
             HStack(spacing: 2) {
                 Button {
                     editor.undo()
@@ -85,7 +128,10 @@ struct ImageEditorView: View {
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(ReelIconButtonStyle())
-                .disabled(!editor.undoManager.canUndo)
+                .disabled(
+                    model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                        || !editor.undoManager.canUndo
+                )
                 .help("Undo")
 
                 Button {
@@ -95,7 +141,10 @@ struct ImageEditorView: View {
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(ReelIconButtonStyle())
-                .disabled(!editor.undoManager.canRedo)
+                .disabled(
+                    model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                        || !editor.undoManager.canRedo
+                )
                 .help("Redo")
             }
 
@@ -105,7 +154,7 @@ struct ImageEditorView: View {
             .buttonStyle(ReelProminentButtonStyle())
         }
         .padding(.horizontal, 14)
-        .frame(height: 54)
+        .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
     }
 
@@ -306,16 +355,35 @@ struct ImageEditorView: View {
             editor.export(to: url, format: format)
         }
     }
+
+    private func importImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Add to Canvas"
+        panel.message = "Each image becomes an independent, non-destructive layer."
+        panel.begin { response in
+            guard response == .OK else { return }
+            for url in panel.urls {
+                _ = try? editor.addRasterLayer(from: url)
+            }
+        }
+    }
 }
 
 private struct ImageCanvasView: View {
     @Environment(\.theme) private var theme
     @Bindable var editor: ImageEditorViewModel
     @Binding var zoomLevel: Double
+    let liveTextSpans: [OCRSpan]
+    let onSearch: (String) -> Void
+    let onRedact: ([NormalizedRect]) -> Void
     @State private var draftPoints: [CGPoint] = []
-    @State private var movingLayerID: LayerID?
-    @State private var selectionTranslation = CGPoint.zero
+    @State private var selectionGestureDidBegin = false
+    @State private var transientTransform: ImageLayerTransformState?
     @State private var magnificationStart = 1.0
+    @State private var isDropTargeted = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -333,26 +401,37 @@ private struct ImageCanvasView: View {
                     height: max(proxy.size.height, artboardSize.height + 128)
                 )
 
-                ScrollView([.horizontal, .vertical]) {
-                    ZStack {
-                        CanvasBackdrop()
-                        artboard(rendered, size: artboardSize)
-                            .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
-                        ScrollViewPanBridge(isEnabled: editor.activeTool == .pan)
-                            .frame(width: 0, height: 0)
+                ScrollViewReader { scroller in
+                    ScrollView([.horizontal, .vertical]) {
+                        ZStack {
+                            CanvasBackdrop()
+                            artboard(rendered, size: artboardSize)
+                                .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
+                            // Anchoring on the artboard centre keeps the picture in
+                            // view when a zoom change resizes the scrollable area.
+                            Color.clear
+                                .frame(width: 1, height: 1)
+                                .position(x: workspaceSize.width / 2, y: workspaceSize.height / 2)
+                                .id(Self.centerAnchor)
+                            ScrollViewPanBridge(isEnabled: editor.activeTool == .pan)
+                                .frame(width: 0, height: 0)
+                        }
+                        .frame(width: workspaceSize.width, height: workspaceSize.height)
                     }
-                    .frame(width: workspaceSize.width, height: workspaceSize.height)
-                }
-                .scrollIndicators(.never)
-                .background(theme.palette.surfaceSunken)
-                .simultaneousGesture(magnificationGesture)
-                .overlay(alignment: .topTrailing) {
-                    canvasInfoBadge
-                        .padding(12)
-                }
-                .overlay(alignment: .bottom) {
-                    zoomControls
-                        .padding(.bottom, 14)
+                    .scrollIndicators(.never)
+                    .background(theme.palette.surfaceSunken)
+                    .simultaneousGesture(magnificationGesture)
+                    .onChange(of: zoomLevel) { _, _ in
+                        scroller.scrollTo(Self.centerAnchor, anchor: .center)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        canvasInfoBadge
+                            .padding(12)
+                    }
+                    .overlay(alignment: .bottom) {
+                        zoomControls(scroller: scroller)
+                            .padding(.bottom, 14)
+                    }
                 }
             } else {
                 ZStack {
@@ -375,14 +454,79 @@ private struct ImageCanvasView: View {
             @unknown default: break
             }
         }
+        .onChange(of: editor.selectedLayerID) { _, _ in
+            transientTransform = nil
+            selectionGestureDidBegin = false
+        }
+        .onChange(of: editor.isRendering) { wasRendering, isRendering in
+            if wasRendering, !isRendering {
+                withAnimation(.smooth(duration: 0.14)) {
+                    transientTransform = nil
+                }
+            }
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                    .strokeBorder(
+                        theme.palette.accent,
+                        style: StrokeStyle(lineWidth: 2, dash: [7, 5])
+                    )
+                    .padding(18)
+                    .allowsHitTesting(false)
+                Label("Drop to add image layers", systemImage: "photo.stack")
+                    .font(theme.type.label.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(theme.palette.surfacePanel.opacity(0.96))
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let imported = urls.reduce(into: 0) { count, url in
+                if (try? editor.addRasterLayer(from: url)) != nil { count += 1 }
+            }
+            return imported > 0
+        } isTargeted: { isTargeted in
+            withAnimation(.smooth(duration: 0.16)) {
+                isDropTargeted = isTargeted
+            }
+        }
     }
 
     private func artboard(_ image: CGImage, size: CGSize) -> some View {
         ZStack {
             Checkerboard()
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .interpolation(.high)
+            if let transientTransform,
+                let background = editor.renderedImageWithoutSelectedLayer,
+                let selectedSurface = editor.renderedSelectedLayer,
+                let selectedLayer = editor.selectedLayer
+            {
+                Image(decorative: background, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+                liveLayerSurface(
+                    selectedSurface,
+                    layer: selectedLayer,
+                    transform: transientTransform,
+                    canvasSize: size
+                )
+            } else {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+            }
+
+            if editor.activeTool == .select, !liveTextSpans.isEmpty {
+                LiveTextOverlay(
+                    spans: liveTextSpans,
+                    onSearch: onSearch,
+                    onRedact: onRedact
+                )
+            }
 
             if editor.activeTool == .crop, let crop = editor.pendingCrop {
                 CropOverlay(crop: crop)
@@ -401,12 +545,27 @@ private struct ImageCanvasView: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
                 .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.38), radius: 26, y: 12)
+        .overlay(alignment: .bottomLeading) {
+            if editor.activeTool == .select, !liveTextSpans.isEmpty {
+                Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 9)
+                    .background(theme.palette.surfacePanel.opacity(0.9))
+                    .clipShape(Capsule())
+                    .padding(10)
+                    .allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .gesture(interactionGesture(in: size))
     }
@@ -471,35 +630,34 @@ private struct ImageCanvasView: View {
 
     @ViewBuilder private var selectionOverlay: some View {
         if editor.activeTool == .select, let layer = editor.selectedLayer {
+            let rotation = layer.editorRotationDegrees
             GeometryReader { proxy in
-                let normalized = layer.editorBounds(canvas: editor.document.canvas)
-                let rect = CGRect(
-                    x: normalized.minX * proxy.size.width + selectionTranslation.x
-                        * proxy.size.width,
-                    y: normalized.minY * proxy.size.height + selectionTranslation.y
-                        * proxy.size.height,
-                    width: max(normalized.width * proxy.size.width, 12),
-                    height: max(normalized.height * proxy.size.height, 12)
-                ).insetBy(dx: -4, dy: -4)
-
-                ZStack {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(
-                            theme.palette.accent,
-                            style: StrokeStyle(lineWidth: 1.25, dash: [5, 3])
+                ImageLayerTransformOverlay(
+                    normalizedFrame: layer.editorBounds(canvas: editor.document.canvas),
+                    rotationDegrees: rotation,
+                    canvasSize: proxy.size,
+                    isLocked: layer.isLocked || !layer.supportsCanvasTransform,
+                    allowsRotation: layer.supportsCanvasRotation,
+                    preservesAspectRatio: layer.preservesAspectRatioDuringTransform,
+                    onChange: { transientTransform = $0 },
+                    onCommit: { state in
+                        let original = ImageLayerTransformState(
+                            frame: layer.editorBounds(canvas: editor.document.canvas),
+                            rotationDegrees: rotation
                         )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                    ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
-                        Circle()
-                            .fill(theme.palette.surfacePanel)
-                            .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1.25))
-                            .frame(width: 7, height: 7)
-                            .position(point)
+                        guard state != original else {
+                            transientTransform = nil
+                            return
+                        }
+                        transientTransform = state
+                        editor.transformSelectedLayer(
+                            frame: state.frame,
+                            rotationDegrees: state.rotationDegrees
+                        )
+                        if !editor.isRendering { transientTransform = nil }
                     }
-                }
+                )
             }
-            .allowsHitTesting(false)
         }
     }
 
@@ -512,14 +670,10 @@ private struct ImageCanvasView: View {
                 case .pan:
                     break
                 case .select:
-                    if movingLayerID == nil {
+                    if !selectionGestureDidBegin {
                         editor.selectLayer(at: start)
-                        movingLayerID = editor.selectedLayerID
+                        selectionGestureDidBegin = true
                     }
-                    selectionTranslation = CGPoint(
-                        x: value.translation.width / size.width,
-                        y: value.translation.height / size.height
-                    )
                 case .crop:
                     editor.stageCrop(normalizedRect(from: start, to: current))
                 case .freehand:
@@ -541,8 +695,7 @@ private struct ImageCanvasView: View {
             .onEnded { value in
                 defer {
                     draftPoints = []
-                    movingLayerID = nil
-                    selectionTranslation = .zero
+                    selectionGestureDidBegin = false
                 }
                 let start = normalized(value.startLocation, in: size)
                 let end = normalized(value.location, in: size)
@@ -550,15 +703,7 @@ private struct ImageCanvasView: View {
                 case .pan:
                     break
                 case .select:
-                    guard movingLayerID != nil,
-                        hypot(value.translation.width, value.translation.height) > 2
-                    else { return }
-                    editor.moveSelectedLayer(
-                        by: CGPoint(
-                            x: value.translation.width / size.width,
-                            y: value.translation.height / size.height
-                        )
-                    )
+                    break
                 case .crop, .padding:
                     break
                 case .eyedropper:
@@ -571,10 +716,30 @@ private struct ImageCanvasView: View {
             }
     }
 
+    private func liveLayerSurface(
+        _ image: CGImage,
+        layer: Layer,
+        transform: ImageLayerTransformState,
+        canvasSize: CGSize
+    ) -> some View {
+        let rect = ImageLayerTransformGeometry.displayRect(
+            for: transform.frame,
+            canvasSize: canvasSize
+        )
+        return Image(decorative: image, scale: 1)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: rect.width, height: rect.height)
+            .rotationEffect(.degrees(transform.rotationDegrees))
+            .position(x: rect.midX, y: rect.midY)
+            .blendMode(layer.editorBlendMode)
+            .allowsHitTesting(false)
+    }
+
     private var magnificationGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                zoomLevel = min(max(magnificationStart * value, 0.25), 4)
+                zoomLevel = CanvasZoom.pinched(from: magnificationStart, magnification: value)
             }
             .onEnded { _ in magnificationStart = zoomLevel }
     }
@@ -595,61 +760,101 @@ private struct ImageCanvasView: View {
         }
     }
 
-    private var zoomControls: some View {
+    private func zoomControls(scroller: ScrollViewProxy) -> some View {
         HStack(spacing: 5) {
             Button {
-                setZoom(zoomLevel - 0.25)
+                setZoom(CanvasZoom.zoomedOut(from: zoomLevel))
             } label: {
                 Image(systemName: "minus")
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel <= CanvasZoom.minimum)
+            .help("Zoom out")
 
-            Slider(value: $zoomLevel, in: 0.25...4)
+            Slider(value: zoomExponent, in: CanvasZoom.exponentRange)
                 .frame(width: 112)
-                .onChange(of: zoomLevel) { _, value in magnificationStart = value }
+                .accessibilityLabel("Zoom")
+                .accessibilityValue(zoomPercentage)
 
             Button {
-                setZoom(zoomLevel + 0.25)
+                setZoom(CanvasZoom.zoomedIn(from: zoomLevel))
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel >= CanvasZoom.maximum)
+            .help("Zoom in")
 
-            Text("\(Int((zoomLevel * 100).rounded()))%")
+            Text(zoomPercentage)
                 .font(theme.type.numeric.font)
                 .foregroundStyle(theme.palette.textSecondary)
                 .frame(width: 42, alignment: .trailing)
 
-            Button("Fit") { setZoom(1) }
+            Button("Recenter") { recenter(scroller) }
                 .buttonStyle(ReelPlainButtonStyle())
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textSecondary)
                 .padding(.horizontal, 4)
+                .help("Bring the image back to the middle of the canvas")
+
+            Button("Fit") {
+                setZoom(CanvasZoom.fit)
+                recenter(scroller)
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .font(theme.type.caption.font)
+            .foregroundStyle(theme.palette.textSecondary)
+            .padding(.horizontal, 4)
+            .help("Fit the whole image in the canvas")
         }
         .padding(5)
         .background(theme.palette.surfacePanel.opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
         }
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
     }
 
+    private static let centerAnchor = "canvas.center"
+
+    private var zoomPercentage: String {
+        "\(Int((zoomLevel * 100).rounded()))%"
+    }
+
+    /// Drives the slider in octaves so the track is evenly split either side of 100%.
+    private var zoomExponent: Binding<Double> {
+        Binding(
+            get: { CanvasZoom.exponent(for: zoomLevel) },
+            set: { exponent in
+                zoomLevel = CanvasZoom.value(forExponent: exponent)
+                magnificationStart = zoomLevel
+            }
+        )
+    }
+
     private func setZoom(_ value: Double) {
         withAnimation(.smooth(duration: 0.2)) {
-            zoomLevel = min(max(value, 0.25), 4)
+            zoomLevel = CanvasZoom.clamped(value)
             magnificationStart = zoomLevel
+        }
+    }
+
+    private func recenter(_ scroller: ScrollViewProxy) {
+        withAnimation(.smooth(duration: 0.25)) {
+            scroller.scrollTo(Self.centerAnchor, anchor: .center)
         }
     }
 
     private func fittedSize(imageSize: CGSize, in container: CGSize) -> CGSize {
         guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let margin = min(max(min(container.width, container.height) * 0.09, 40), 112)
         let available = CGSize(
-            width: max(container.width - 112, 120),
-            height: max(container.height - 112, 120)
+            width: max(container.width - margin, 120),
+            height: max(container.height - margin, 120)
         )
         let scale = min(available.width / imageSize.width, available.height / imageSize.height)
         return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
@@ -759,7 +964,7 @@ private struct CropOverlay: View {
             ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
                 Circle()
                     .fill(.white)
-                    .overlay(Circle().stroke(theme.palette.accent, lineWidth: 1))
+                    .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
                     .frame(width: 8, height: 8)
                     .position(point)
             }
@@ -889,9 +1094,44 @@ extension ImageEditorTool {
 }
 
 extension Layer {
+    fileprivate var editorRotationDegrees: Double {
+        if case .raster(let value) = self { return value.rotationDegrees }
+        return 0
+    }
+
+    fileprivate var preservesAspectRatioDuringTransform: Bool {
+        switch self {
+        case .raster, .step: return true
+        default: return false
+        }
+    }
+
+    fileprivate var supportsCanvasTransform: Bool {
+        if case .padding = self { return false }
+        return true
+    }
+
+    fileprivate var supportsCanvasRotation: Bool {
+        if case .raster = self { return true }
+        return false
+    }
+
+    fileprivate var editorBlendMode: SwiftUI.BlendMode {
+        guard case .raster(let value) = self else { return .normal }
+        switch value.blendMode {
+        case .normal: return .normal
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+
     fileprivate func editorBounds(canvas: ImageCanvas) -> CGRect {
         let bounds: CGRect
         switch self {
+        case .raster(let value): bounds = value.frame
         case .annotation(let value): bounds = value.bounds
         case .text(let value): bounds = value.frame
         case .highlight(let value): bounds = value.regions.editorUnion
@@ -899,12 +1139,13 @@ extension Layer {
         case .blur(let value): bounds = value.regions.editorUnion
         case .padding: bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
         case .step(let value):
-            let diameter = CGFloat(value.diameter) / CGFloat(min(canvas.width, canvas.height))
+            let width = CGFloat(value.diameter) / CGFloat(canvas.width)
+            let height = CGFloat(value.diameter) / CGFloat(canvas.height)
             bounds = CGRect(
-                x: value.position.x - diameter / 2,
-                y: value.position.y - diameter / 2,
-                width: diameter,
-                height: diameter
+                x: value.position.x - width / 2,
+                y: value.position.y - height / 2,
+                width: width,
+                height: height
             )
         }
         return bounds.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))

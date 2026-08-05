@@ -5,6 +5,7 @@ public enum Workspace: String, Sendable, CaseIterable, Identifiable {
     case video
     case photo
     case pdf
+    case text
     case convert
 
     public var id: Self { self }
@@ -17,6 +18,7 @@ public enum Workspace: String, Sendable, CaseIterable, Identifiable {
         case .video: "Video"
         case .photo: "Photo"
         case .pdf: "PDF"
+        case .text: "Text"
         case .convert: "Convert"
         }
     }
@@ -27,6 +29,7 @@ public enum Workspace: String, Sendable, CaseIterable, Identifiable {
         case .video: "play.rectangle"
         case .photo: "photo"
         case .pdf: "doc"
+        case .text: "doc.text"
         case .convert: "arrow.left.arrow.right"
         }
     }

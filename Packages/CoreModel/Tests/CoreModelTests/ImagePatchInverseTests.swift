@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreModel
+import Foundation
 import Testing
 
 @Test func imagePatchAndInverseRestoreIdentityAcrossOneThousandRandomSequences() throws {
@@ -44,6 +45,27 @@ import Testing
         #expect(error as? ImageDocumentError == .invalidGeometry)
     }
     #expect(document == original)
+}
+
+@Test func rasterLayerDocumentRoundTripsWithoutLosingSourceOrTransform() throws {
+    let layer = RasterLayer(
+        id: LayerID(rawValue: "composite-overlay"),
+        name: "Product overlay",
+        sourceURL: URL(fileURLWithPath: "/tmp/product-overlay.png"),
+        frame: CGRect(x: 0.2, y: 0.15, width: 0.45, height: 0.5),
+        rotationDegrees: -14,
+        opacity: 0.72,
+        blendMode: .overlay,
+        isLocked: true
+    )
+    let document = try ImageDocument(
+        sourceAssetID: AssetID(rawValue: "composite-source"),
+        canvas: ImageCanvas(width: 1_920, height: 1_080),
+        layers: [.raster(layer)]
+    )
+
+    let data = try JSONEncoder().encode(document)
+    #expect(try JSONDecoder().decode(ImageDocument.self, from: data) == document)
 }
 
 private func randomPatch(
@@ -92,20 +114,32 @@ private func randomPatch(
 private func randomLayer(id: String, random: inout ImageRandom) -> Layer {
     let layerID = LayerID(rawValue: id)
     let rect = CGRect(x: 0.15, y: 0.2, width: 0.35, height: 0.25)
-    switch random.int(in: 0...6) {
-    case 0: return .annotation(AnnotationLayer(id: layerID, kind: .arrow, bounds: rect))
-    case 1: return .text(TextLayer(id: layerID, text: "Note", frame: rect))
-    case 2: return .highlight(HighlightLayer(id: layerID, regions: [rect]))
-    case 3:
+    switch random.int(in: 0...7) {
+    case 0:
+        return .raster(
+            RasterLayer(
+                id: layerID,
+                name: "Overlay",
+                sourceURL: URL(fileURLWithPath: "/tmp/overlay.png"),
+                frame: rect
+            )
+        )
+    case 1: return .annotation(AnnotationLayer(id: layerID, kind: .arrow, bounds: rect))
+    case 2: return .text(TextLayer(id: layerID, text: "Note", frame: rect))
+    case 3: return .highlight(HighlightLayer(id: layerID, regions: [rect]))
+    case 4:
         return .redaction(RedactionLayer(id: layerID, regions: [rect], style: .pixelate(size: 12)))
-    case 4: return .blur(BlurLayer(id: layerID, regions: [rect]))
-    case 5: return .padding(PaddingLayer(id: layerID, amount: 0.1))
+    case 5: return .blur(BlurLayer(id: layerID, regions: [rect]))
+    case 6: return .padding(PaddingLayer(id: layerID, amount: 0.1))
     default: return .step(StepLayer(id: layerID, number: 1, position: CGPoint(x: 0.3, y: 0.4)))
     }
 }
 
 private func updated(_ layer: Layer) -> Layer {
     switch layer {
+    case .raster(var value):
+        value.opacity = value.opacity == 1 ? 0.5 : 1
+        return .raster(value)
     case .annotation(var value):
         value.strokeWidth += 1
         return .annotation(value)

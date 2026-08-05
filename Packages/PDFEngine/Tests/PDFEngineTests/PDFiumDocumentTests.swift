@@ -8,6 +8,27 @@ import Testing
 
 @Suite("PDFium document engine")
 struct PDFiumDocumentTests {
+    @Test("Missing-font resolution stays offline when downloads are disabled")
+    func fontResolutionHonorsOfflineMode() async throws {
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-offline-font-test-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: cache) }
+        let store = PDFOpenFontStore(cacheDirectory: cache)
+        let resolution = try await store.resolve(
+            PDFFontDescriptor(
+                postScriptName: "ABCDEF+DefinitelyMissingFont",
+                isEmbedded: true,
+                isSubset: true
+            ),
+            requiredCharacters: Set("New € text"),
+            allowsDownload: false
+        )
+        #expect(resolution == nil)
+        #expect(!FileManager.default.fileExists(atPath: cache.path))
+    }
+
     @Test("PDFium opens, measures, renders, rotates, and extracts text")
     func completeReadPipeline() throws {
         let engine = try PDFiumDocument(data: fixturePDF())
@@ -30,6 +51,7 @@ struct PDFiumDocumentTests {
         let analysis = try engine.analyzePage(at: 0)
         #expect(analysis.text.contains("Hello PDFium"))
         #expect(analysis.glyphs.contains { $0.text == "H" && $0.bounds != nil })
+        #expect(analysis.textBlocks.contains { $0.text.contains("Hello PDFium") })
         #expect(
             analysis.fonts.contains {
                 $0.postScriptName.localizedCaseInsensitiveContains("Helvetica")
@@ -41,6 +63,105 @@ struct PDFiumDocumentTests {
         )
         #expect(document.pages.count == 2)
         #expect(document.pages.map(\.sourcePageIndex) == [0, 1])
+    }
+
+    @Test("Direct text edits stay selectable in a vector-preserving export")
+    func directTextExport() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let analysis = try source.analyzePage(at: 0)
+        let block = try #require(
+            analysis.textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "fixture"),
+            title: "Fixture"
+        )
+        let pageID = document.pages[0].id
+        let edit = PDFTextLayer(
+            text: "PDFium Hello",
+            frame: block.bounds,
+            font: block.font,
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: block.pageObjectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName
+            )
+        )
+        _ = try document.apply(.addLayer(.text(edit), to: pageID, atIndex: 0))
+
+        let requestedOutput = ProcessInfo.processInfo.environment["CLIP_PDF_DIRECT_QA_OUTPUT"].map {
+            URL(fileURLWithPath: $0)
+        }
+        let output =
+            requestedOutput
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent(
+                "clip-direct-pdf-edit-\(UUID().uuidString).pdf"
+            )
+        defer {
+            if requestedOutput == nil { try? FileManager.default.removeItem(at: output) }
+        }
+        try PDFDocumentRenderer(source: source).export(document, to: output)
+
+        let exported = try PDFiumDocument(url: output)
+        let exportedText = try exported.analyzePage(at: 0).text
+        #expect(exportedText.contains("PDFium Hello"))
+        #expect(!exportedText.contains("Hello PDFium"))
+    }
+
+    @Test("Replacement fonts preserve Unicode text and spaces")
+    func replacementFontExport() throws {
+        let systemFontURL = URL(fileURLWithPath: "/System/Library/Fonts/SFNS.ttf")
+        guard FileManager.default.fileExists(atPath: systemFontURL.path) else { return }
+        let fontData = try Data(contentsOf: systemFontURL)
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "replacement-font-fixture"),
+            title: "Replacement Font Fixture"
+        )
+        let replacementName = "ClipQAFallback"
+        let edit = PDFTextLayer(
+            text: "Clip PDF Editor",
+            frame: block.bounds,
+            font: PDFFontDescriptor(
+                postScriptName: replacementName,
+                familyName: "System Sans",
+                isEmbedded: true,
+                isSubset: false
+            ),
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: block.pageObjectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName
+            )
+        )
+        _ = try document.apply(.addLayer(.text(edit), to: document.pages[0].id, atIndex: 0))
+
+        let requestedOutput = ProcessInfo.processInfo.environment[
+            "CLIP_PDF_REPLACEMENT_QA_OUTPUT"
+        ].map { URL(fileURLWithPath: $0) }
+        let output =
+            requestedOutput
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent(
+                "clip-replacement-font-\(UUID().uuidString).pdf"
+            )
+        defer {
+            if requestedOutput == nil { try? FileManager.default.removeItem(at: output) }
+        }
+        try PDFDocumentRenderer(
+            source: source,
+            fontData: { $0 == replacementName ? fontData : nil }
+        ).export(document, to: output)
+
+        let exportedText = try PDFiumDocument(url: output).analyzePage(at: 0).text
+        #expect(exportedText.contains("Clip PDF Editor"))
+        #expect(!exportedText.contains("ClipPDFEditor"))
     }
 
     @Test("Malformed input fails without leaving a PDFium session")
@@ -81,7 +202,8 @@ struct PDFiumDocumentTests {
         let requestedOutput = ProcessInfo.processInfo.environment["REEL_PDF_QA_OUTPUT"].map {
             URL(fileURLWithPath: $0)
         }
-        let output = requestedOutput
+        let output =
+            requestedOutput
             ?? FileManager.default.temporaryDirectory.appendingPathComponent(
                 "reel-pdf-export-\(UUID().uuidString).pdf"
             )

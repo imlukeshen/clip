@@ -2,6 +2,7 @@ import AIKit
 import CoreModel
 import Foundation
 import LibraryStore
+import SearchEngine
 import Testing
 
 @testable import ReelAppCore
@@ -178,6 +179,143 @@ struct ToolExecutorTests {
         _ = try document.apply(patch)
         #expect(document.timeline.captions.map(\.text) == ["Welcome to Reel"])
     }
+
+    @Test("Agent search decomposes discovery into one undoable split")
+    @MainActor
+    func agenticSearchAcceptance() async throws {
+        let fixture = try Fixture()
+        let ledger = EgressLedger()
+        var context = fixture.context
+        context.searching = { query in
+            #expect(query.text == "error state")
+            #expect(query.filters.kind == .video)
+            let moment = SearchMoment(
+                assetID: AssetID(rawValue: "asset-one"),
+                start: RationalTime(seconds: 2),
+                end: RationalTime(seconds: 3),
+                snippet: AttributedString("Error state"),
+                source: .ocr
+            )
+            return SearchResponse(
+                hits: [
+                    SearchHit(
+                        assetID: moment.assetID,
+                        score: 1,
+                        moments: [moment],
+                        snippet: moment.snippet,
+                        sources: [.ocr],
+                        isUnavailable: false
+                    )
+                ],
+                isComplete: true
+            )
+        }
+        context.searchingWithin = { assetID, text in
+            #expect(assetID == AssetID(rawValue: "asset-one"))
+            #expect(text == "error state")
+            return [
+                SearchMoment(
+                    assetID: assetID,
+                    start: RationalTime(seconds: 2),
+                    end: RationalTime(seconds: 3),
+                    snippet: AttributedString("Error state"),
+                    source: .ocr
+                )
+            ]
+        }
+
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "find where I showed the error state and split there",
+            turnID: "search-acceptance",
+            provider: SearchSequenceProvider(ledger: ledger),
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: context
+        )
+
+        #expect(
+            turn.invocations.map(\.name)
+                == ["search.library", "search.withinAsset", "splitClip"]
+        )
+        #expect(turn.results[1].message.contains("sourceAt=2.000s"))
+        #expect(turn.results[1].message.contains("itemID=one splitAt=2.000s"))
+        #expect(await ledger.summary().requestCount == 3)
+
+        let editor = fixture.editor()
+        let original = editor.document
+        try editor.perform(try #require(turn.combinedPatch))
+        #expect(editor.document.timeline.video.count == 3)
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
+    @Test("All four search tools are read-only and return actionable context")
+    func searchToolContract() async throws {
+        let names = [
+            "search.library", "search.withinAsset", "search.textAt", "search.similar",
+        ]
+        for name in names {
+            let schema = try #require(CommandRegistry.command(named: name)?.schema)
+            #expect(schema.kind == .read)
+        }
+        let libraryDescription = try #require(
+            CommandRegistry.command(named: "search.library")?.schema.description
+        )
+        #expect(libraryDescription.localizedCaseInsensitiveContains("timestamp"))
+        #expect(libraryDescription.localizedCaseInsensitiveContains("quoted"))
+        #expect(libraryDescription.localizedCaseInsensitiveContains("exact"))
+
+        let fixture = try Fixture()
+        var context = fixture.context
+        context.readingText = { assetID, time in
+            [
+                OCRSpan(
+                    assetID: assetID,
+                    start: time,
+                    end: time + RationalTime(seconds: 1),
+                    text: "Fatal error",
+                    boundingBox: NormalizedRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1),
+                    confidence: 0.99,
+                    revision: 1,
+                    script: .alphabetic
+                )
+            ]
+        }
+        context.searchingSimilar = { _, _ in
+            [
+                SearchHit(
+                    assetID: AssetID(rawValue: "asset-two"),
+                    score: 0.91,
+                    moments: [],
+                    snippet: AttributedString("Similar setup"),
+                    sources: [.ocr],
+                    isUnavailable: false
+                )
+            ]
+        }
+        let text = try await fixture.executor.execute(
+            call(
+                "search.textAt",
+                ["assetID": .string("asset-one"), "time": .number(2)]
+            ),
+            turnID: "search-contract",
+            policy: .autoApply,
+            context: context
+        )
+        #expect(text.patch == nil)
+        #expect(text.message.contains("Fatal error"))
+        let similar = try await fixture.executor.execute(
+            call(
+                "search.similar",
+                ["assetID": .string("asset-one"), "limit": .number(5)]
+            ),
+            turnID: "search-contract",
+            policy: .autoApply,
+            context: context
+        )
+        #expect(similar.patch == nil)
+        #expect(similar.message.contains("asset-two"))
+    }
 }
 
 private struct FixtureProvider: AIProvider {
@@ -197,6 +335,55 @@ private struct FixtureProvider: AIProvider {
                         provider: id, model: request.model, purpose: request.purpose,
                         mediaAttached: request.mediaAttached))
                 for chunk in chunks { continuation.yield(chunk) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+private struct SearchSequenceProvider: AIProvider {
+    let ledger: EgressLedger
+    var id: ProviderID { .openAICompatible }
+    var displayName: String { "Search Fixture" }
+    var supportsTools: Bool { true }
+    var supportsVision: Bool { false }
+    var defaultModel: String { "fixture" }
+
+    func send(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
+        let invocation: ToolInvocation
+        switch request.messages.count {
+        case 1:
+            invocation = call(
+                "search.library",
+                ["text": .string("error state"), "kind": .string("video")],
+                id: "library"
+            )
+        case 3:
+            invocation = call(
+                "search.withinAsset",
+                ["assetID": .string("asset-one"), "text": .string("error state")],
+                id: "within"
+            )
+        default:
+            invocation = call(
+                "splitClip",
+                ["itemID": .string("one"), "at": .number(2)],
+                id: "split"
+            )
+        }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                await ledger.record(
+                    EgressEntry(
+                        provider: id,
+                        model: request.model,
+                        purpose: request.purpose,
+                        mediaAttached: request.mediaAttached
+                    )
+                )
+                continuation.yield(.toolCall(invocation))
+                continuation.yield(.done(.toolUse))
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }

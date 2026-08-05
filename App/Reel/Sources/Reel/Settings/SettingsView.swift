@@ -1,4 +1,6 @@
 import AIKit
+import AppKit
+import CaptureKit
 import DesignSystem
 import Foundation
 import ReelAppCore
@@ -10,7 +12,9 @@ struct SettingsView: View {
 
     var body: some View {
         SettingsContent(model: model, settings: model.aiSettings)
-            .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+            .environment(\.theme, model.appearance.theme(matching: colorScheme))
+            .tint(model.appearance.theme(matching: colorScheme).palette.accent)
+            .preferredColorScheme(model.appearance.colorScheme)
             .frame(width: 560, height: 520)
     }
 }
@@ -23,6 +27,8 @@ private struct SettingsContent: View {
     @State private var anthropicKey = ""
     @State private var googleKey = ""
     @State private var showsAcknowledgements = false
+    @State private var confirmsTeXCacheClear = false
+    @State private var confirmsPDFFontCacheClear = false
 
     var body: some View {
         Form {
@@ -35,6 +41,94 @@ private struct SettingsContent: View {
                 Button("Revert library migration…", role: .destructive) {
                     model.revertLibraryMigration()
                 }
+            }
+            Picker("Appearance", selection: $model.appearance) {
+                ForEach(AppearancePreference.allCases, id: \.self) { preference in
+                    Text(preference.title).tag(preference)
+                }
+            }
+            Section("Capture") {
+                Toggle(
+                    "Global Clip Clipboard shortcut (Command-Shift-C)",
+                    isOn: clipboardShortcutBinding
+                )
+                .accessibilityIdentifier("settings-global-clipboard-shortcut")
+                Text(
+                    "Turn this off if Maccy or another clipboard manager uses Command-Shift-C. "
+                        + "Clip Clipboard remains available from the sidebar and Capture menu."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                Picker("New recordings", selection: captureDestinationBinding) {
+                    ForEach(CaptureDestination.allCases) { destination in
+                        Text(destination.title).tag(destination)
+                    }
+                }
+                Text(model.captureDestination.detail)
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                Text(
+                    "While Clip is open, screenshots enter Clip Clipboard. Recordings can "
+                        + "open in the video editor, enter the clipboard, or stay untouched. "
+                        + "Clip stops watching when you quit, and the original macOS file stays put."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            }
+            Section("LaTeX") {
+                LabeledContent("Package cache") {
+                    Text(model.texPackageCacheURL.path(percentEncoded: false))
+                        .font(theme.type.numeric.font)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([
+                            model.texPackageCacheURL
+                        ])
+                    }
+                    Button("Clear cache…", role: .destructive) {
+                        confirmsTeXCacheClear = true
+                    }
+                }
+                Text(
+                    "Package downloads happen only after your one-time choice and are recorded "
+                        + "in the egress ledger. Clearing the cache may require downloading packages again."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            }
+            Section("PDF text editing") {
+                Toggle(
+                    "Automatically resolve missing fonts",
+                    isOn: pdfFontDownloadBinding
+                )
+                LabeledContent("Verified font cache") {
+                    Text(model.pdfFontCacheURL.path(percentEncoded: false))
+                        .font(theme.type.numeric.font)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([
+                            model.pdfFontCacheURL
+                        ])
+                    }
+                    Button("Clear cache…", role: .destructive) {
+                        confirmsPDFFontCacheClear = true
+                    }
+                }
+                Text(
+                    "Clip first uses the PDF's embedded or installed font. If new text needs "
+                        + "missing glyphs, it can download a pinned, SHA-256 verified open font "
+                        + "from the Google Fonts repository. PDF-provided URLs are never opened."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
             }
             Section("Assistant") {
                 Picker("Provider", selection: providerBinding) {
@@ -99,6 +193,52 @@ private struct SettingsContent: View {
             AcknowledgementsView()
                 .environment(\.theme, theme)
         }
+        .confirmationDialog(
+            "Clear cached TeX packages?",
+            isPresented: $confirmsTeXCacheClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear cache", role: .destructive) { model.clearTeXPackageCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your documents and generated PDFs will not be removed.")
+        }
+        .confirmationDialog(
+            "Clear cached PDF fonts?",
+            isPresented: $confirmsPDFFontCacheClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear cache", role: .destructive) { model.clearPDFFontCache() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("PDFs and edits stay intact. Missing open fonts may be downloaded again.")
+        }
+    }
+
+    private var captureDestinationBinding: Binding<CaptureDestination> {
+        // Written as a closure rather than a method reference: the reabstraction
+        // thunk the latter produces crashes IRGen in this toolchain.
+        Binding(
+            get: { model.captureDestination },
+            set: { model.setCaptureDestination($0) }
+        )
+    }
+
+    private var clipboardShortcutBinding: Binding<Bool> {
+        Binding(
+            get: { model.isGlobalClipboardShortcutEnabled },
+            set: { isEnabled in
+                model.setGlobalClipboardShortcutEnabled(isEnabled)
+                ClipAppDelegate.refreshClipboardShortcutRegistration()
+            }
+        )
+    }
+
+    private var pdfFontDownloadBinding: Binding<Bool> {
+        Binding(
+            get: { model.isPDFFontAutoDownloadEnabled },
+            set: { model.setPDFFontAutoDownloadEnabled($0) }
+        )
     }
 
     private var providerBinding: Binding<ProviderID> {

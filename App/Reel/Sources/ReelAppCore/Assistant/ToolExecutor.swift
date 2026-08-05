@@ -1,17 +1,78 @@
 import AIKit
+import ConvertKit
 import CoreModel
 import Foundation
 import LibraryStore
 import MediaEngine
+import SearchEngine
+
+public struct TextToolLineEdit: Sendable, Equatable {
+    public var startLine: Int
+    public var endLine: Int
+    public var replacement: String
+
+    public init(startLine: Int, endLine: Int, replacement: String) {
+        self.startLine = startLine
+        self.endLine = endLine
+        self.replacement = replacement
+    }
+}
+
+public struct TextToolFormatRequest: Sendable, Equatable {
+    public var file: String?
+    public var contents: String?
+    public var edits: [TextToolLineEdit]
+    public var trimsTrailingWhitespace: Bool
+    public var lineEnding: String?
+
+    public init(
+        file: String? = nil,
+        contents: String? = nil,
+        edits: [TextToolLineEdit] = [],
+        trimsTrailingWhitespace: Bool = false,
+        lineEnding: String? = nil
+    ) {
+        self.file = file
+        self.contents = contents
+        self.edits = edits
+        self.trimsTrailingWhitespace = trimsTrailingWhitespace
+        self.lineEnding = lineEnding
+    }
+}
+
+public enum TextToolRequest: Sendable, Equatable {
+    case create(name: String?, language: String?, contents: String)
+    case setLanguage(String)
+    case format(TextToolFormatRequest)
+    case compileTeX
+    case diagnostics
+    case export(format: String, destination: String)
+}
 
 /// Immutable App-layer state used to resolve one assistant turn.
 public struct ToolExecutionContext: Sendable {
+    public typealias LibrarySearcher = @Sendable (SearchQuery) async throws -> SearchResponse
+    public typealias AssetSearcher = @Sendable (AssetID, String) async throws -> [SearchMoment]
+    public typealias TextReader = @Sendable (AssetID, RationalTime) async throws -> [OCRSpan]
+    public typealias SimilarSearcher = @Sendable (AssetID, Int) async throws -> [SearchHit]
+    public typealias BatchConverter =
+        @Sendable ([BatchConversionJob]) async throws -> [BatchItemOutcome]
+    public typealias TextCommander = @Sendable (TextToolRequest) async throws -> String
+
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
     public var eventTracks: [AssetID: EventTrack]
     public var selectedItemIDs: Set<ItemID>
     public var playhead: RationalTime
     public var resolving: @Sendable (AssetID) async throws -> URL
+    public var searching: LibrarySearcher
+    public var searchingWithin: AssetSearcher
+    public var readingText: TextReader
+    public var searchingSimilar: SimilarSearcher
+    public var conversionDestination: URL?
+    public var conversionCapabilities: ConversionCapabilities
+    public var converting: BatchConverter
+    public var textCommand: TextCommander
 
     public init(
         document: ProjectDocument,
@@ -19,7 +80,27 @@ public struct ToolExecutionContext: Sendable {
         eventTracks: [AssetID: EventTrack],
         selectedItemIDs: Set<ItemID> = [],
         playhead: RationalTime = .zero,
-        resolving: @escaping @Sendable (AssetID) async throws -> URL
+        resolving: @escaping @Sendable (AssetID) async throws -> URL,
+        searching: @escaping LibrarySearcher = { _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        searchingWithin: @escaping AssetSearcher = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        readingText: @escaping TextReader = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        searchingSimilar: @escaping SimilarSearcher = { _, _ in
+            throw ToolExecutorError.searchUnavailable
+        },
+        conversionDestination: URL? = nil,
+        conversionCapabilities: ConversionCapabilities = .appStore,
+        converting: @escaping BatchConverter = { _ in
+            throw ToolExecutorError.conversionUnavailable
+        },
+        textCommand: @escaping TextCommander = { _ in
+            throw ToolExecutorError.textUnavailable
+        }
     ) {
         self.document = document
         self.assets = assets
@@ -27,6 +108,14 @@ public struct ToolExecutionContext: Sendable {
         self.selectedItemIDs = selectedItemIDs
         self.playhead = playhead
         self.resolving = resolving
+        self.searching = searching
+        self.searchingWithin = searchingWithin
+        self.readingText = readingText
+        self.searchingSimilar = searchingSimilar
+        self.conversionDestination = conversionDestination
+        self.conversionCapabilities = conversionCapabilities
+        self.converting = converting
+        self.textCommand = textCommand
     }
 }
 
@@ -55,16 +144,36 @@ public struct ToolExecutor: Sendable {
         _ invocation: ToolInvocation,
         turnID: String,
         policy: ConfirmationPolicy,
-        context: ToolExecutionContext
+        context: ToolExecutionContext,
+        confirmed: Bool = false
     ) async throws -> ToolResult {
         guard let command = CommandRegistry.command(named: invocation.name) else {
             throw ToolExecutorError.unknownTool(invocation.name)
         }
         let schema = command.schema
-        if schema.kind == .confirm {
+        let executesTextSideEffect = [
+            "text.create", "text.setLanguage", "text.format", "tex.compile", "text.export",
+        ].contains(invocation.name)
+        let needsUpfrontConfirmation =
+            schema.kind == .confirm
+            || (executesTextSideEffect
+                && policy.requiresConfirmation(
+                    for: schema.kind,
+                    isDestructive: command.isDestructive
+                ))
+        if needsUpfrontConfirmation && !confirmed {
+            let detail =
+                invocation.name == "convert.run"
+                ? try conversionConfirmation(
+                    invocation.arguments.decode(ConvertArguments.self), context: context)
+                : invocation.name == "text.export"
+                    ? try textExportConfirmation(
+                        invocation.arguments.decode(TextExportArguments.self)
+                    )
+                    : "\(invocation.name) requires your confirmation."
             return ToolResult(
                 callID: invocation.callID,
-                message: "\(invocation.name) requires your confirmation.",
+                message: detail,
                 requiresConfirmation: true
             )
         }
@@ -72,6 +181,157 @@ public struct ToolExecutor: Sendable {
         let patch: GraphPatch?
         let message: String
         switch invocation.name {
+        case "text.create":
+            let arguments = try invocation.arguments.decode(TextCreateArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .create(
+                    name: arguments.name,
+                    language: arguments.language,
+                    contents: arguments.contents ?? ""
+                )
+            )
+        case "text.setLanguage":
+            let arguments = try invocation.arguments.decode(TextLanguageArguments.self)
+            patch = nil
+            message = try await context.textCommand(.setLanguage(arguments.language))
+        case "text.format":
+            let arguments = try invocation.arguments.decode(TextFormatArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .format(
+                    TextToolFormatRequest(
+                        file: arguments.file,
+                        contents: arguments.contents,
+                        edits: (arguments.edits ?? []).map {
+                            TextToolLineEdit(
+                                startLine: $0.startLine,
+                                endLine: $0.endLine,
+                                replacement: $0.replacement
+                            )
+                        },
+                        trimsTrailingWhitespace: arguments.trimTrailingWhitespace ?? false,
+                        lineEnding: arguments.lineEnding
+                    )
+                )
+            )
+        case "tex.compile":
+            patch = nil
+            message = try await context.textCommand(.compileTeX)
+        case "tex.diagnostics":
+            patch = nil
+            message = try await context.textCommand(.diagnostics)
+        case "text.export":
+            let arguments = try invocation.arguments.decode(TextExportArguments.self)
+            patch = nil
+            message = try await context.textCommand(
+                .export(format: arguments.format, destination: arguments.destination)
+            )
+        case "search.library":
+            let arguments = try invocation.arguments.decode(SearchLibraryArguments.self)
+            let filters = try searchFilters(arguments)
+            let mode = try searchMode(arguments.mode)
+            let response = try await context.searching(
+                SearchQuery(
+                    text: arguments.text,
+                    filters: filters,
+                    mode: mode,
+                    limit: arguments.limit ?? 20
+                )
+            )
+            patch = nil
+            message =
+                searchResults(response.hits, context: context)
+                + (response.isComplete
+                    ? "\nIndex status: complete." : "\nIndex status: still indexing.")
+        case "search.withinAsset":
+            let arguments = try invocation.arguments.decode(SearchWithinArguments.self)
+            let assetID = AssetID(rawValue: arguments.assetID)
+            let moments = try await context.searchingWithin(assetID, arguments.text)
+            patch = nil
+            message = momentResults(moments, assetID: assetID, context: context)
+        case "search.textAt":
+            let arguments = try invocation.arguments.decode(SearchTextAtArguments.self)
+            let assetID = AssetID(rawValue: arguments.assetID)
+            let spans = try await context.readingText(
+                assetID,
+                RationalTime(seconds: arguments.time)
+            )
+            patch = nil
+            message = textResults(spans, assetID: assetID, time: arguments.time)
+        case "search.similar":
+            let arguments = try invocation.arguments.decode(SearchSimilarArguments.self)
+            let hits = try await context.searchingSimilar(
+                AssetID(rawValue: arguments.assetID),
+                arguments.limit ?? 10
+            )
+            patch = nil
+            message = searchResults(hits, context: context)
+        case "convert.listTargets":
+            let arguments = try invocation.arguments.decode(ConvertAssetArguments.self)
+            let records = try conversionAssets(arguments.assetIDs, context: context)
+            let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
+            let sets = try records.map { asset -> Set<TargetFormat> in
+                guard let source = FormatID(asset: asset) else {
+                    throw ToolExecutorError.invalidArguments(
+                        "The source format for \(asset.displayName) could not be identified"
+                    )
+                }
+                return Set(
+                    TargetFormat.allCases.filter { target in
+                        target.formatID != source
+                            && planner.plan(from: source, to: target.formatID) != nil
+                    }
+                )
+            }
+            let common = sets.dropFirst().reduce(sets.first ?? []) { $0.intersection($1) }
+            let targets = TargetFormat.allCases.filter(common.contains)
+            patch = nil
+            message =
+                targets.isEmpty
+                ? "No common conversion target is available for these assets."
+                : "Common targets for \(records.count) asset\(records.count == 1 ? "" : "s"): "
+                    + targets.map { "\($0.rawValue) (\($0.displayName))" }
+                    .joined(separator: ", ")
+        case "convert.plan":
+            let arguments = try invocation.arguments.decode(ConvertArguments.self)
+            patch = nil
+            message = try conversionPlanDescription(arguments, context: context)
+        case "convert.presets":
+            patch = nil
+            message = ConversionPreset.builtIns.map { preset in
+                let tradeoff = preset.options.removesMetadata ? "metadata removed" : "metadata kept"
+                return "\(preset.id): \(preset.name) → \(preset.target.rawValue) · \(tradeoff)"
+            }.joined(separator: "\n")
+        case "convert.run":
+            let arguments = try invocation.arguments.decode(ConvertArguments.self)
+            let prepared = try await prepareConversionJobs(arguments, context: context)
+            let outcomes =
+                prepared.jobs.isEmpty
+                ? [] : try await context.converting(prepared.jobs)
+            guard outcomes.count == prepared.jobs.count else {
+                throw ToolExecutorError.conversionFailed(
+                    "The converter returned \(outcomes.count) results for \(prepared.jobs.count) files"
+                )
+            }
+            let succeeded = outcomes.compactMap { outcome -> URL? in
+                if case .succeeded(let url) = outcome { return url }
+                return nil
+            }
+            let failures = outcomes.compactMap { outcome -> String? in
+                switch outcome {
+                case .failed(let reason): return reason
+                case .cancelled: return "cancelled"
+                case .succeeded: return nil
+                }
+            }
+            patch = nil
+            message =
+                "Converted \(succeeded.count) of \(prepared.requested) files"
+                + (prepared.skipped == 0 ? "" : "; skipped \(prepared.skipped) existing files")
+                + (failures.isEmpty ? "." : "; failures: \(failures.joined(separator: "; ")).")
+                + (succeeded.isEmpty
+                    ? "" : "\nOutputs:\n" + succeeded.map(\.path).joined(separator: "\n"))
         case "listCommands":
             let arguments = try invocation.arguments.decode(ListCommandsArguments.self)
             let category = arguments.category.flatMap(CommandCategory.init(rawValue:))
@@ -99,7 +359,8 @@ public struct ToolExecutor: Sendable {
                 ),
                 turnID: turnID,
                 policy: policy,
-                context: context
+                context: context,
+                confirmed: confirmed
             )
         case "describeTimeline":
             patch = nil
@@ -499,10 +760,11 @@ public struct ToolExecutor: Sendable {
             callID: invocation.callID,
             message: message,
             patch: patch,
-            requiresConfirmation: policy.requiresConfirmation(
-                for: schema.kind,
-                isDestructive: command.isDestructive
-            )
+            requiresConfirmation: !confirmed
+                && policy.requiresConfirmation(
+                    for: schema.kind,
+                    isDestructive: command.isDestructive
+                )
         )
     }
 
@@ -535,6 +797,10 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     case silenceDetectionUnavailable
     case clipHasNoAudio(ItemID)
     case remoteCaptioningRequiresConsent
+    case searchUnavailable
+    case conversionUnavailable
+    case textUnavailable
+    case conversionFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -547,6 +813,10 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
         case .silenceDetectionUnavailable: return "Silence detection is unavailable."
         case .clipHasNoAudio: return "This clip has no audio."
         case .remoteCaptioningRequiresConsent: return "Remote captioning requires explicit consent."
+        case .searchUnavailable: return "Library search is unavailable."
+        case .conversionUnavailable: return "Conversion is unavailable in this workspace."
+        case .textUnavailable: return "Text commands are unavailable in this workspace."
+        case .conversionFailed(let reason): return "Conversion failed: \(reason)."
         }
     }
 }
@@ -660,6 +930,417 @@ private struct RunCommandArguments: Codable {
     var id: String
     var arguments: JSONValue?
 }
+private struct SearchLibraryArguments: Codable {
+    var text: String
+    var kind: String?
+    var after: String?
+    var before: String?
+    var folder: String?
+    var minimumDuration: Double?
+    var maximumDuration: Double?
+    var hasAudio: Bool?
+    var mode: String?
+    var limit: Int?
+}
+private struct SearchWithinArguments: Codable {
+    var assetID: String
+    var text: String
+}
+private struct SearchTextAtArguments: Codable {
+    var assetID: String
+    var time: Double
+}
+private struct SearchSimilarArguments: Codable {
+    var assetID: String
+    var limit: Int?
+}
+private struct ConvertAssetArguments: Codable {
+    var assetIDs: [String]
+}
+private struct ConvertArguments: Codable {
+    var assetIDs: [String]
+    var target: String
+    var preset: String?
+    var quality: Double?
+    var longestSide: Int?
+    var maximumBytes: Int?
+    var stripMetadata: Bool?
+    var destination: String?
+    var filenameTemplate: String?
+    var conflictPolicy: String?
+}
+private struct TextCreateArguments: Codable {
+    var name: String?
+    var language: String?
+    var contents: String?
+}
+private struct TextLanguageArguments: Codable { var language: String }
+private struct TextFormatArguments: Codable {
+    struct LineEdit: Codable {
+        var startLine: Int
+        var endLine: Int
+        var replacement: String
+    }
+
+    var file: String?
+    var contents: String?
+    var edits: [LineEdit]?
+    var trimTrailingWhitespace: Bool?
+    var lineEnding: String?
+}
+private struct TextExportArguments: Codable {
+    var format: String
+    var destination: String
+}
+
+private func textExportConfirmation(_ arguments: TextExportArguments) throws -> String {
+    guard arguments.destination.hasPrefix("/") else {
+        throw ToolExecutorError.invalidArguments("destination must be an absolute file path")
+    }
+    return "Confirm exporting the active text as \(arguments.format) to \(arguments.destination)."
+}
+
+private struct PreparedConversionJobs {
+    var jobs: [BatchConversionJob]
+    var skipped: Int
+    var requested: Int
+}
+
+private func conversionAssets(
+    _ rawIDs: [String],
+    context: ToolExecutionContext
+) throws -> [AssetRecord] {
+    guard !rawIDs.isEmpty else {
+        throw ToolExecutorError.invalidArguments("At least one assetID is required")
+    }
+    var seen: Set<AssetID> = []
+    return try rawIDs.compactMap { rawID in
+        let id = AssetID(rawValue: rawID)
+        guard seen.insert(id).inserted else { return nil }
+        guard let asset = context.assets[id] else {
+            throw ToolExecutorError.invalidArguments("Asset \(rawID) is not in the library")
+        }
+        guard !asset.isMissing else {
+            throw ToolExecutorError.invalidArguments("Asset \(rawID) is offline")
+        }
+        return asset
+    }
+}
+
+private func conversionTarget(_ rawValue: String) throws -> TargetFormat {
+    let normalized = rawValue.lowercased().filter(\.isLetter)
+    if let target = TargetFormat.allCases.first(where: { candidate in
+        let values = [candidate.rawValue, candidate.displayName, candidate.fileExtension]
+        return values.contains { $0.lowercased().filter(\.isLetter) == normalized }
+    }) {
+        return target
+    }
+    let aliases: [String: TargetFormat] = [
+        "jpg": .jpeg, "jpeg": .jpeg, "weboptimizedjpeg": .jpeg,
+        "gif": .animatedGIF, "animatedgif": .animatedGIF,
+        "mp4": .mp4H264, "h264": .mp4H264, "hevc": .mp4HEVC,
+        "webm": .webMVP9, "mkv": .matroska, "txt": .plainText,
+    ]
+    guard let target = aliases[normalized] else {
+        throw ToolExecutorError.invalidArguments("Unknown conversion target \(rawValue)")
+    }
+    return target
+}
+
+private func conversionOptions(
+    _ arguments: ConvertArguments,
+    target: TargetFormat
+) throws -> ConversionOptions {
+    var options: ConversionOptions
+    if let requestedPreset = arguments.preset {
+        let normalized = requestedPreset.lowercased()
+        guard
+            let preset = ConversionPreset.builtIns.first(where: {
+                $0.id.lowercased() == normalized || $0.name.lowercased() == normalized
+            })
+        else {
+            throw ToolExecutorError.invalidArguments("Unknown preset \(requestedPreset)")
+        }
+        guard preset.target == target else {
+            throw ToolExecutorError.invalidArguments(
+                "Preset \(preset.name) targets \(preset.target.rawValue), not \(target.rawValue)"
+            )
+        }
+        options = preset.options
+    } else {
+        options = ConversionOptions()
+    }
+
+    if let quality = arguments.quality {
+        let normalized = quality > 1 ? quality / 100 : quality
+        guard (0...1).contains(normalized) else {
+            throw ToolExecutorError.invalidArguments("Quality must be between 0 and 1 or 0 and 100")
+        }
+        if target.isImageTarget {
+            var image = options.image ?? ImageConversionOptions()
+            image.quality = normalized
+            options.image = image
+        } else {
+            var video = options.video ?? VideoConversionOptions()
+            video.quality = normalized
+            options.video = video
+        }
+    }
+    if let longestSide = arguments.longestSide {
+        guard target.isImageTarget, longestSide > 0 else {
+            throw ToolExecutorError.invalidArguments(
+                "longestSide requires a positive value and an image target"
+            )
+        }
+        var image = options.image ?? ImageConversionOptions()
+        image.resize = .longestSide(longestSide)
+        options.image = image
+    }
+    if let maximumBytes = arguments.maximumBytes {
+        guard maximumBytes > 0 else {
+            throw ToolExecutorError.invalidArguments("maximumBytes must be positive")
+        }
+        guard target.supportsHardSizeLimit else {
+            throw ToolExecutorError.invalidArguments(
+                "A hard maximumBytes limit is currently supported for ImageIO images and GIF"
+            )
+        }
+        if target.isImageTarget {
+            var image = options.image ?? ImageConversionOptions()
+            image.maximumFileSize = maximumBytes
+            options.image = image
+        } else {
+            var video = options.video ?? VideoConversionOptions()
+            video.maximumFileSize = maximumBytes
+            options.video = video
+        }
+    }
+    if arguments.stripMetadata == true { options.stripAllMetadata = true }
+    if let rawPolicy = arguments.conflictPolicy {
+        guard let conflictPolicy = ConversionConflictPolicy(rawValue: rawPolicy.lowercased()) else {
+            throw ToolExecutorError.invalidArguments(
+                "conflictPolicy must be rename, overwrite, or skip"
+            )
+        }
+        options.conflictPolicy = conflictPolicy
+    }
+    return options
+}
+
+private func conversionPlanDescription(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) throws -> String {
+    let target = try conversionTarget(arguments.target)
+    let options = try conversionOptions(arguments, target: target)
+    let assets = try conversionAssets(arguments.assetIDs, context: context)
+    let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
+    let rows = try assets.map { asset in
+        let plan = try conversionPlan(
+            asset: asset,
+            target: target,
+            options: options,
+            planner: planner
+        )
+        let route = plan.steps.map(\.backend.rawValue).joined(separator: " → ")
+        let warnings =
+            plan.warnings.isEmpty
+            ? "none" : plan.warnings.joined(separator: " ")
+        return "\(asset.id.rawValue) (\(asset.displayName)): \(target.displayName) · "
+            + "\(plan.isLossless ? "lossless" : "lossy") · "
+            + "\(plan.steps.count) step\(plan.steps.count == 1 ? "" : "s") via \(route) · "
+            + "warnings: \(warnings)"
+    }
+    var constraints: [String] = []
+    if let quality = arguments.quality { constraints.append("quality \(quality.formatted())") }
+    if let longestSide = arguments.longestSide {
+        constraints.append("longest side \(longestSide) px")
+    }
+    if let maximumBytes = arguments.maximumBytes {
+        constraints.append("hard maximum \(maximumBytes) bytes")
+    }
+    if arguments.stripMetadata == true { constraints.append("metadata removed") }
+    let constraintLine =
+        constraints.isEmpty
+        ? "" : "\nConstraints: " + constraints.joined(separator: ", ") + "."
+    return "Conversion plan for \(assets.count) asset\(assets.count == 1 ? "" : "s"):\n"
+        + rows.joined(separator: "\n") + constraintLine
+}
+
+private func conversionConfirmation(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) throws -> String {
+    let destination =
+        arguments.destination
+        ?? context.conversionDestination?.path
+        ?? "the configured export folder"
+    return try conversionPlanDescription(arguments, context: context)
+        + "\nConfirm writing \(Set(arguments.assetIDs).count) converted file"
+        + "\(Set(arguments.assetIDs).count == 1 ? "" : "s") to \(destination)."
+}
+
+private func conversionPlan(
+    asset: AssetRecord,
+    target: TargetFormat,
+    options: ConversionOptions,
+    planner: ConversionPlanner
+) throws -> ConversionPlan {
+    guard let source = FormatID(asset: asset) else {
+        throw ToolExecutorError.invalidArguments(
+            "The source format for \(asset.displayName) could not be identified"
+        )
+    }
+    guard source != target.formatID else {
+        throw ToolExecutorError.invalidArguments(
+            "\(asset.displayName) is already \(target.displayName)"
+        )
+    }
+    guard let plan = planner.plan(from: source, to: target.formatID, options: options) else {
+        throw ToolExecutorError.invalidArguments(
+            "\(asset.displayName) cannot be converted to \(target.displayName) with these options"
+        )
+    }
+    return plan
+}
+
+private func prepareConversionJobs(
+    _ arguments: ConvertArguments,
+    context: ToolExecutionContext
+) async throws -> PreparedConversionJobs {
+    let assets = try conversionAssets(arguments.assetIDs, context: context)
+    let target = try conversionTarget(arguments.target)
+    let options = try conversionOptions(arguments, target: target)
+    let destination: URL
+    if let rawDestination = arguments.destination {
+        guard rawDestination.hasPrefix("/") else {
+            throw ToolExecutorError.invalidArguments("destination must be an absolute folder path")
+        }
+        destination = URL(fileURLWithPath: rawDestination, isDirectory: true).standardizedFileURL
+    } else if let configured = context.conversionDestination {
+        destination = configured.standardizedFileURL
+    } else {
+        throw ToolExecutorError.invalidArguments("No conversion destination is configured")
+    }
+    let planner = ConversionPlanner(capabilities: context.conversionCapabilities)
+    var jobs: [BatchConversionJob] = []
+    var reserved: Set<URL> = []
+    var skipped = 0
+    for (offset, asset) in assets.enumerated() {
+        let plan = try conversionPlan(
+            asset: asset,
+            target: target,
+            options: options,
+            planner: planner
+        )
+        let stem = (asset.displayName as NSString).deletingPathExtension
+        let filename = try conversionFilename(
+            template: arguments.filenameTemplate ?? "{name}",
+            name: stem,
+            target: target,
+            index: offset + 1
+        )
+        let proposed = destination.appendingPathComponent(filename)
+            .appendingPathExtension(target.fileExtension)
+        guard
+            let output = try resolvedAgentOutput(
+                proposed,
+                policy: options.conflictPolicy,
+                reserved: &reserved
+            )
+        else {
+            skipped += 1
+            continue
+        }
+        jobs.append(
+            BatchConversionJob(
+                plan: plan,
+                input: try await context.resolving(asset.id),
+                output: output
+            )
+        )
+    }
+    return PreparedConversionJobs(jobs: jobs, skipped: skipped, requested: assets.count)
+}
+
+private func conversionFilename(
+    template: String,
+    name: String,
+    target: TargetFormat,
+    index: Int
+) throws -> String {
+    let sanitizedName = name.replacingOccurrences(of: "/", with: "-")
+        .replacingOccurrences(of: ":", with: "-")
+    var filename =
+        template
+        .replacingOccurrences(of: "{name}", with: sanitizedName)
+        .replacingOccurrences(of: "{target}", with: target.fileExtension)
+        .replacingOccurrences(of: "{index}", with: String(index))
+    filename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !filename.isEmpty, !filename.contains("/"), !filename.contains("{"),
+        !filename.contains("}")
+    else {
+        throw ToolExecutorError.invalidArguments(
+            "filenameTemplate may use only {name}, {target}, and {index}"
+        )
+    }
+    return filename
+}
+
+private func resolvedAgentOutput(
+    _ proposed: URL,
+    policy: ConversionConflictPolicy,
+    reserved: inout Set<URL>
+) throws -> URL? {
+    switch policy {
+    case .overwrite:
+        guard reserved.insert(proposed).inserted else {
+            throw ToolExecutorError.invalidArguments(
+                "Two files resolve to \(proposed.lastPathComponent)")
+        }
+        return proposed
+    case .skip:
+        guard !FileManager.default.fileExists(atPath: proposed.path),
+            reserved.insert(proposed).inserted
+        else { return nil }
+        return proposed
+    case .rename:
+        if !FileManager.default.fileExists(atPath: proposed.path),
+            reserved.insert(proposed).inserted
+        {
+            return proposed
+        }
+        let stem = proposed.deletingPathExtension().lastPathComponent
+        var suffix = 2
+        while true {
+            let candidate = proposed.deletingLastPathComponent()
+                .appendingPathComponent("\(stem)-\(suffix)")
+                .appendingPathExtension(proposed.pathExtension)
+            if !FileManager.default.fileExists(atPath: candidate.path),
+                reserved.insert(candidate).inserted
+            {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+}
+
+extension TargetFormat {
+    fileprivate var isImageTarget: Bool {
+        switch self {
+        case .png, .jpeg, .heic, .tiff, .webP: true
+        default: false
+        }
+    }
+
+    fileprivate var supportsHardSizeLimit: Bool {
+        switch self {
+        case .png, .jpeg, .heic, .tiff, .animatedGIF: true
+        default: false
+        }
+    }
+}
 
 private func assistant(_ patch: GraphPatch, turnID: String) -> GraphPatch {
     GraphPatch(
@@ -729,4 +1410,130 @@ private func transform(from fields: [String: JSONValue]) throws -> Transform2D {
 extension JSONValue {
     fileprivate var text: String? { if case .string(let value) = self { value } else { nil } }
     fileprivate var number: Double? { if case .number(let value) = self { value } else { nil } }
+}
+
+private func searchFilters(_ arguments: SearchLibraryArguments) throws -> SearchFilters {
+    let kind: AssetKind?
+    if let rawKind = arguments.kind {
+        guard let value = AssetKind(rawValue: rawKind.lowercased()) else {
+            throw ToolExecutorError.invalidArguments("Unknown asset kind \(rawKind)")
+        }
+        kind = value
+    } else {
+        kind = nil
+    }
+    return SearchFilters(
+        kind: kind,
+        after: try arguments.after.map { try searchDate($0, endOfDay: false) },
+        before: try arguments.before.map { try searchDate($0, endOfDay: true) },
+        folder: arguments.folder,
+        minimumDuration: arguments.minimumDuration.map(RationalTime.init(seconds:)),
+        maximumDuration: arguments.maximumDuration.map(RationalTime.init(seconds:)),
+        hasAudio: arguments.hasAudio
+    )
+}
+
+private func searchMode(_ value: String?) throws -> SearchMode {
+    guard let value else { return .auto }
+    guard let mode = SearchMode(rawValue: value.lowercased()) else {
+        throw ToolExecutorError.invalidArguments("Search mode must be auto, keyword, or semantic")
+    }
+    return mode
+}
+
+private func searchDate(_ value: String, endOfDay: Bool) throws -> Date {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyy-MM-dd"
+    guard let date = formatter.date(from: value) else {
+        throw ToolExecutorError.invalidArguments("Dates must use YYYY-MM-DD")
+    }
+    return endOfDay ? date.addingTimeInterval(86_400 - 0.001) : date
+}
+
+private func searchResults(_ hits: [SearchHit], context: ToolExecutionContext) -> String {
+    guard !hits.isEmpty else { return "No matching assets." }
+    let rows = hits.prefix(12).enumerated().map { index, hit in
+        let itemIDs = timelineItemIDs(for: hit.assetID, context: context)
+        let score = String(format: "%.4f", hit.score)
+        let moment =
+            hit.moments.first.map {
+                " sourceAt=\(searchSeconds($0.start))s source=\($0.source.rawValue) timelineTargets=\(timelineTargets(for: hit.assetID, sourceTime: $0.start, context: context))"
+            } ?? ""
+        return
+            "\(index + 1). assetID=\(hit.assetID.rawValue) itemIDs=\(itemIDs) score=\(score)\(moment) text=\(quoted(hit.snippet))"
+    }
+    let suffix = hits.count == 1 ? "" : "s"
+    return "\(hits.count) matching asset\(suffix):\n" + rows.joined(separator: "\n")
+}
+
+private func momentResults(
+    _ moments: [SearchMoment],
+    assetID: AssetID,
+    context: ToolExecutionContext
+) -> String {
+    guard !moments.isEmpty else { return "No matching moments in assetID=\(assetID.rawValue)." }
+    let itemIDs = timelineItemIDs(for: assetID, context: context)
+    let rows = moments.prefix(20).enumerated().map { index, moment in
+        let end = moment.end.map { " end=\(searchSeconds($0))s" } ?? ""
+        let targets = timelineTargets(for: assetID, sourceTime: moment.start, context: context)
+        return
+            "\(index + 1). sourceAt=\(searchSeconds(moment.start))s\(end) timelineTargets=\(targets) source=\(moment.source.rawValue) text=\(quoted(moment.snippet))"
+    }
+    return "\(moments.count) moments for assetID=\(assetID.rawValue) itemIDs=\(itemIDs):\n"
+        + rows.joined(separator: "\n")
+}
+
+private func textResults(_ spans: [OCRSpan], assetID: AssetID, time: Double) -> String {
+    let formattedTime = String(format: "%.3f", time)
+    guard !spans.isEmpty else {
+        return "No OCR text near source time \(formattedTime)s in assetID=\(assetID.rawValue)."
+    }
+    let rows = spans.prefix(40).enumerated().map { index, span in
+        let box = span.boundingBox
+        return
+            "\(index + 1). text=\(quoted(span.text)) box=(x:\(box.x), y:\(box.y), width:\(box.width), height:\(box.height))"
+    }
+    return "OCR at source time \(formattedTime)s in assetID=\(assetID.rawValue):\n"
+        + rows.joined(separator: "\n")
+}
+
+private func timelineItemIDs(for assetID: AssetID, context: ToolExecutionContext) -> String {
+    let ids = context.document.timeline.videoTracks.flatMap(\.items)
+        .filter { $0.assetID == assetID }
+        .map { $0.id.rawValue }
+    return ids.isEmpty ? "[]" : "[\(ids.joined(separator: ","))]"
+}
+
+private func timelineTargets(
+    for assetID: AssetID,
+    sourceTime: RationalTime,
+    context: ToolExecutionContext
+) -> String {
+    let targets = context.document.timeline.videoTracks.flatMap(\.items).compactMap {
+        item -> String? in
+        guard item.assetID == assetID,
+            sourceTime >= item.sourceRange.start,
+            sourceTime <= item.sourceRange.end
+        else { return nil }
+        let offset = (sourceTime - item.sourceRange.start).scaled(by: 1 / item.speed)
+        return "itemID=\(item.id.rawValue) splitAt=\(searchSeconds(item.timelineStart + offset))s"
+    }
+    return targets.isEmpty ? "[]" : "[\(targets.joined(separator: ";"))]"
+}
+
+private func searchSeconds(_ time: RationalTime) -> String {
+    String(format: "%.3f", time.seconds)
+}
+
+private func quoted(_ value: AttributedString) -> String {
+    quoted(String(value.characters))
+}
+
+private func quoted(_ value: String) -> String {
+    let compact = value.replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(String(compact.prefix(320)))\""
 }

@@ -80,6 +80,235 @@ enum LibrarySchema {
                 table.add(column: "missing_since", .double)
             }
         }
+        migrator.registerMigration("v4-search-index-jobs") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE index_job (
+                      asset_id   TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      stage      TEXT NOT NULL,
+                      state      TEXT NOT NULL CHECK (
+                        state IN ('pending', 'running', 'done', 'failed', 'skipped')
+                      ),
+                      attempts   INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                      error      TEXT,
+                      updated_at REAL NOT NULL,
+                      PRIMARY KEY (asset_id, stage)
+                    );
+                    CREATE INDEX idx_index_job_schedule
+                      ON index_job(state, updated_at, stage);
+                    """
+            )
+        }
+        migrator.registerMigration("v5-search-ocr") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE ocr_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      bbox        TEXT NOT NULL,
+                      confidence  REAL NOT NULL,
+                      revision    INTEGER NOT NULL,
+                      script      TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_ocr_asset ON ocr_span(asset_id);
+                    CREATE INDEX idx_ocr_revision ON ocr_span(revision);
+
+                    CREATE VIRTUAL TABLE ocr_fts USING fts5(
+                      text,
+                      content='ocr_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE ocr_fts_cjk USING fts5(
+                      text,
+                      content='ocr_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+
+                    CREATE TRIGGER ocr_fts_insert AFTER INSERT ON ocr_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO ocr_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_delete AFTER DELETE ON ocr_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO ocr_fts(ocr_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_cjk_insert AFTER INSERT ON ocr_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO ocr_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER ocr_fts_cjk_delete AFTER DELETE ON ocr_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO ocr_fts_cjk(ocr_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    """
+            )
+        }
+        migrator.registerMigration("v6-search-keywords") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE transcript_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      start_value INTEGER NOT NULL,
+                      start_scale INTEGER NOT NULL,
+                      end_value   INTEGER NOT NULL,
+                      end_scale   INTEGER NOT NULL,
+                      text        TEXT NOT NULL,
+                      script      TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_transcript_asset ON transcript_span(asset_id);
+
+                    CREATE VIRTUAL TABLE transcript_fts USING fts5(
+                      text,
+                      content='transcript_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE transcript_fts_cjk USING fts5(
+                      text,
+                      content='transcript_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+                    CREATE TRIGGER transcript_fts_insert AFTER INSERT ON transcript_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_delete AFTER DELETE ON transcript_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO transcript_fts(transcript_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_cjk_insert AFTER INSERT ON transcript_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO transcript_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER transcript_fts_cjk_delete AFTER DELETE ON transcript_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO transcript_fts_cjk(transcript_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+
+                    CREATE VIRTUAL TABLE asset_fts USING fts5(
+                      asset_id UNINDEXED,
+                      display_name,
+                      relative_path,
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE TRIGGER asset_fts_insert AFTER INSERT ON asset BEGIN
+                      INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                      VALUES (new.id, new.display_name, new.relative_path);
+                    END;
+                    CREATE TRIGGER asset_fts_update AFTER UPDATE OF display_name, relative_path
+                    ON asset BEGIN
+                      DELETE FROM asset_fts WHERE asset_id = old.id;
+                      INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                      VALUES (new.id, new.display_name, new.relative_path);
+                    END;
+                    CREATE TRIGGER asset_fts_delete AFTER DELETE ON asset BEGIN
+                      DELETE FROM asset_fts WHERE asset_id = old.id;
+                    END;
+                    INSERT INTO asset_fts(asset_id, display_name, relative_path)
+                    SELECT id, display_name, relative_path FROM asset;
+                    """
+            )
+        }
+        migrator.registerMigration("v7-search-embeddings") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE embedding (
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      chunk_index INTEGER NOT NULL,
+                      kind        TEXT NOT NULL,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      vector      BLOB NOT NULL,
+                      dims        INTEGER NOT NULL CHECK (dims > 0),
+                      model       TEXT NOT NULL,
+                      PRIMARY KEY (asset_id, chunk_index, kind, model)
+                    );
+                    CREATE INDEX idx_embedding_model ON embedding(model, asset_id);
+                    INSERT OR IGNORE INTO meta (key, value)
+                    VALUES ('embeddingGeneration', '0');
+                    """
+            )
+        }
+        migrator.registerMigration("v8-search-text-content") { db in
+            try db.execute(
+                sql: """
+                    CREATE TABLE text_span (
+                      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                      asset_id    TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+                      chunk_index INTEGER NOT NULL,
+                      start_value INTEGER,
+                      start_scale INTEGER,
+                      end_value   INTEGER,
+                      end_scale   INTEGER,
+                      text        TEXT NOT NULL,
+                      script      TEXT NOT NULL,
+                      UNIQUE (asset_id, chunk_index)
+                    );
+                    CREATE INDEX idx_text_span_asset ON text_span(asset_id, chunk_index);
+
+                    CREATE VIRTUAL TABLE text_fts USING fts5(
+                      text,
+                      content='text_span',
+                      content_rowid='id',
+                      tokenize='unicode61 remove_diacritics 2'
+                    );
+                    CREATE VIRTUAL TABLE text_fts_cjk USING fts5(
+                      text,
+                      content='text_span',
+                      content_rowid='id',
+                      tokenize='trigram'
+                    );
+                    CREATE TRIGGER text_fts_insert AFTER INSERT ON text_span
+                    WHEN new.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO text_fts(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER text_fts_delete AFTER DELETE ON text_span
+                    WHEN old.script IN ('alphabetic', 'mixed') BEGIN
+                      INSERT INTO text_fts(text_fts, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+                    CREATE TRIGGER text_fts_cjk_insert AFTER INSERT ON text_span
+                    WHEN new.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO text_fts_cjk(rowid, text) VALUES (new.id, new.text);
+                    END;
+                    CREATE TRIGGER text_fts_cjk_delete AFTER DELETE ON text_span
+                    WHEN old.script IN ('cjk', 'mixed') BEGIN
+                      INSERT INTO text_fts_cjk(text_fts_cjk, rowid, text)
+                      VALUES ('delete', old.id, old.text);
+                    END;
+
+                    INSERT OR IGNORE INTO index_job
+                      (asset_id, stage, state, attempts, error, updated_at)
+                    SELECT id, 'text', 'pending', 0, NULL, unixepoch('now')
+                    FROM asset WHERE kind = 'text';
+                    INSERT OR IGNORE INTO index_job
+                      (asset_id, stage, state, attempts, error, updated_at)
+                    SELECT id, 'embedding', 'pending', 0, NULL, unixepoch('now')
+                    FROM asset WHERE kind = 'text';
+                    UPDATE index_job
+                    SET state = 'pending', attempts = 0, error = NULL,
+                        updated_at = unixepoch('now')
+                    WHERE stage = 'embedding'
+                      AND asset_id IN (SELECT id FROM asset WHERE kind = 'text');
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }

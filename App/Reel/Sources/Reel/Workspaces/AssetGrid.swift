@@ -13,6 +13,9 @@ struct AssetGrid: View {
     @State private var gridWidth: CGFloat = 0
     @State private var marqueeStart: CGPoint?
     @State private var marqueeCurrent: CGPoint?
+    @State private var infoAsset: AssetRecord?
+    @State private var renamingAsset: AssetRecord?
+    @State private var renameValue = ""
 
     private let columns = [
         GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 14)
@@ -30,24 +33,66 @@ struct AssetGrid: View {
                     if model.browserViewMode == .grid {
                         grid
                     } else {
-                        AssetList(model: model, assets: assets, modifiers: currentModifiers)
+                        AssetList(
+                            model: model,
+                            assets: assets,
+                            modifiers: currentModifiers,
+                            onRename: beginRename
+                        )
                     }
                 }
             }
         }
         .onAppear { model.selection.setItems(assetIDs) }
         .onChange(of: assetIDs) { _, ids in model.selection.setItems(ids) }
+        .alert(
+            "Rename File",
+            isPresented: isRenamePresented,
+            presenting: renamingAsset
+        ) { asset in
+            TextField("File name", text: $renameValue)
+                .accessibilityIdentifier("asset-rename-field")
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { commitRename(asset) }
+                .disabled(renameValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            _ in
+            Text("If you leave off the extension, Clip keeps the current one.")
+        }
     }
 
     private var browserToolbar: some View {
         HStack(spacing: 10) {
             Text("\(assets.count) item\(assets.count == 1 ? "" : "s")")
                 .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.textSecondary)
+                .foregroundStyle(theme.palette.textTertiary)
             if !model.selection.selected.isEmpty {
                 Text("\(model.selection.selected.count) selected")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
+                if let selectedAsset {
+                    if model.selection.selected.count == 1 {
+                        Button {
+                            beginRename(selectedAsset)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .buttonStyle(ReelBorderedButtonStyle())
+                        .help("Rename the selected file")
+                        .accessibilityIdentifier("asset-rename-button")
+                    }
+                    Menu {
+                        if model.selection.selected.count == 1 {
+                            Button("Rename…") { beginRename(selectedAsset) }
+                        }
+                        AssetMoveMenu(model: model, asset: selectedAsset)
+                    } label: {
+                        Label("Organize", systemImage: "folder")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Rename or move the selected files")
+                }
             }
             Spacer()
             Button {
@@ -77,16 +122,7 @@ struct AssetGrid: View {
             .pickerStyle(.segmented)
             .frame(width: 72)
         }
-        .padding(.horizontal, 10)
-        .frame(height: 36)
-        .background(theme.palette.surfacePanel)
-        .clipShape(
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-                .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
-        }
+        .frame(height: 28)
     }
 
     private var grid: some View {
@@ -103,6 +139,9 @@ struct AssetGrid: View {
                     },
                     openAction: {
                         model.activateAsset(asset.id)
+                    },
+                    renameAction: {
+                        beginRename(asset)
                     }
                 ) {
                     AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
@@ -120,14 +159,24 @@ struct AssetGrid: View {
                             .padding(6)
                     }
                 }
-                .draggable(dragValue(for: asset))
+                .draggable(dragValue(for: asset)) {
+                    dragPreview(for: asset)
+                }
                 .contextMenu {
                     Button("Open") { model.activateAsset(asset.id) }
                         .disabled(asset.isMissing)
                     Divider()
+                    Button("Rename…") { beginRename(asset) }
+                    AssetMoveMenu(model: model, asset: asset)
+                    Divider()
+                    Button("Get Info") {
+                        if !model.selection.selected.contains(asset.id) {
+                            model.selectAsset(asset.id)
+                        }
+                        infoAsset = asset
+                    }
                     if asset.isMissing {
                         Button("Locate…") { locate(asset) }
-                        Divider()
                     }
                     Button("Reveal in Finder") {
                         if !model.selection.selected.contains(asset.id) {
@@ -135,12 +184,22 @@ struct AssetGrid: View {
                         }
                         model.revealSelectionInFinder()
                     }
+                    Divider()
                     Button("Move to Trash", role: .destructive) {
                         if !model.selection.selected.contains(asset.id) {
                             model.selectAsset(asset.id)
                         }
                         AppCommandRouter.run("asset.delete", in: model)
                     }
+                }
+                .popover(
+                    isPresented: Binding(
+                        get: { infoAsset?.id == asset.id },
+                        set: { if !$0 { infoAsset = nil } }
+                    ),
+                    arrowEdge: .trailing
+                ) {
+                    AssetInfoPopover(model: model, asset: asset)
                 }
             }
         }
@@ -155,8 +214,8 @@ struct AssetGrid: View {
         .overlay(alignment: .topLeading) {
             if let rect = marqueeRect {
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.12))
-                    .stroke(Color.accentColor, lineWidth: 1)
+                    .fill(theme.palette.accentDim)
+                    .stroke(theme.palette.accentLine, lineWidth: 1)
                     .frame(width: rect.width, height: rect.height)
                     .offset(x: rect.minX, y: rect.minY)
                     .allowsHitTesting(false)
@@ -172,19 +231,70 @@ struct AssetGrid: View {
         if model.isSearching {
             EmptyState(
                 headline: "No results for “\(model.searchQuery)”",
-                body: "Try a file name, folder, type, format, or codec.",
                 actionTitle: "Clear search",
                 action: model.clearSearch
             )
         } else {
-            EmptyState(
-                headline: "Nothing here yet",
-                body: "Drop files above or choose files to add them to Clip."
-            )
+            EmptyState(headline: "No files yet")
         }
     }
 
     private var assetIDs: [AssetID] { assets.map(\.id) }
+
+    private var selectedAsset: AssetRecord? {
+        assets.first { model.selection.selected.contains($0.id) }
+    }
+
+    private var isRenamePresented: Binding<Bool> {
+        Binding(
+            get: { renamingAsset != nil },
+            set: { if !$0 { renamingAsset = nil } }
+        )
+    }
+
+    private func beginRename(_ asset: AssetRecord) {
+        if !model.selection.selected.contains(asset.id) {
+            model.selectAsset(asset.id)
+        }
+        renameValue = asset.displayName
+        renamingAsset = asset
+    }
+
+    private func commitRename(_ asset: AssetRecord) {
+        let name = renameValue
+        renamingAsset = nil
+        model.renameAsset(asset.id, to: name)
+    }
+
+    /// A fixed-size chip so the system drag image never balloons past the grid
+    /// cell it came from. The count reflects the dragged multi-selection.
+    private func dragPreview(for asset: AssetRecord) -> some View {
+        let count =
+            model.selection.selected.contains(asset.id)
+            ? max(1, model.selection.selected.count) : 1
+        return HStack(spacing: 8) {
+            AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
+                .frame(width: 44, height: 28)
+                .background(theme.palette.surfaceSunken)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
+                )
+            Text(count > 1 ? "\(count) items" : asset.displayName)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textPrimary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 44)
+        .frame(maxWidth: 220)
+        .fixedSize()
+        .background(theme.palette.surfacePanel)
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                .strokeBorder(theme.palette.accentLine, lineWidth: theme.metrics.hairline)
+        }
+    }
 
     private func dragValue(for asset: AssetRecord) -> String {
         let ids =
@@ -291,15 +401,18 @@ private struct AssetList: View {
     @Bindable var model: AppModel
     let assets: [AssetRecord]
     let modifiers: ReelAppCore.EventModifiers
+    let onRename: (AssetRecord) -> Void
 
     var body: some View {
         LazyVStack(spacing: 1) {
-            HStack(spacing: 12) {
-                Text("Name").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Kind").frame(width: 90, alignment: .leading)
-                Text("Duration").frame(width: 80, alignment: .trailing)
-                Text("Size").frame(width: 90, alignment: .trailing)
-                Text("Modified").frame(width: 120, alignment: .trailing)
+            AssetListColumns(
+                kind: "Kind",
+                duration: "Duration",
+                size: "Size",
+                modified: "Modified"
+            ) {
+                Color.clear.frame(width: 18)
+                Text("Name").assetListName()
             }
             .font(theme.type.caption.font)
             .foregroundStyle(theme.palette.textTertiary)
@@ -307,7 +420,12 @@ private struct AssetList: View {
             .frame(height: 28)
 
             ForEach(assets) { asset in
-                AssetListRow(model: model, asset: asset, modifiers: modifiers)
+                AssetListRow(
+                    model: model,
+                    asset: asset,
+                    modifiers: modifiers,
+                    onRename: onRename
+                )
             }
         }
         .focusable()
@@ -325,33 +443,81 @@ private struct AssetList: View {
 
 }
 
+extension View {
+    /// The name cell keeps a stable ideal width so a long file name never starves
+    /// the trailing columns of the space they need to be measured.
+    fileprivate func assetListName() -> some View {
+        lineLimit(1)
+            .truncationMode(.middle)
+            .frame(minWidth: 120, idealWidth: 120, maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Header and rows share this layout so their columns stay aligned. When the
+/// window is narrow it sheds the least useful columns instead of squeezing the
+/// name to nothing.
+private struct AssetListColumns<Leading: View>: View {
+    let kind: String
+    let duration: String
+    let size: String
+    let modified: String
+    @ViewBuilder let leading: Leading
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            columns(kind: true, duration: true, size: true, modified: true)
+            columns(kind: true, duration: false, size: true, modified: true)
+            columns(kind: false, duration: false, size: true, modified: true)
+            columns(kind: false, duration: false, size: true, modified: false)
+            columns(kind: false, duration: false, size: false, modified: false)
+        }
+    }
+
+    private func columns(
+        kind showKind: Bool,
+        duration showDuration: Bool,
+        size showSize: Bool,
+        modified showModified: Bool
+    ) -> some View {
+        HStack(spacing: 12) {
+            leading
+            if showKind {
+                Text(kind).frame(width: 90, alignment: .leading)
+            }
+            if showDuration {
+                Text(duration).frame(width: 80, alignment: .trailing)
+            }
+            if showSize {
+                Text(size).frame(width: 90, alignment: .trailing)
+            }
+            if showModified {
+                Text(modified).frame(width: 120, alignment: .trailing)
+            }
+        }
+    }
+}
+
 private struct AssetListRow: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     let asset: AssetRecord
     let modifiers: ReelAppCore.EventModifiers
+    let onRename: (AssetRecord) -> Void
     @State private var isHovered = false
+    @State private var isInfoPresented = false
 
     var body: some View {
         Button {
             model.selectAsset(asset.id, modifiers: modifiers)
         } label: {
-            HStack(spacing: 12) {
+            AssetListColumns(
+                kind: asset.kind.rawValue.capitalized,
+                duration: duration,
+                size: ByteCountFormatter.string(fromByteCount: asset.byteSize, countStyle: .file),
+                modified: asset.createdAt.formatted(date: .abbreviated, time: .omitted)
+            ) {
                 Image(systemName: icon).frame(width: 18)
-                Text(asset.displayName)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(asset.kind.rawValue.capitalized).frame(width: 90, alignment: .leading)
-                Text(duration).frame(width: 80, alignment: .trailing)
-                Text(
-                    ByteCountFormatter.string(
-                        fromByteCount: asset.byteSize,
-                        countStyle: .file
-                    )
-                )
-                .frame(width: 90, alignment: .trailing)
-                Text(asset.createdAt.formatted(date: .abbreviated, time: .omitted))
-                    .frame(width: 120, alignment: .trailing)
+                Text(asset.displayName).assetListName()
             }
             .font(theme.type.caption.font)
             .padding(.horizontal, 10)
@@ -369,6 +535,9 @@ private struct AssetListRow: View {
         .opacity(asset.isMissing ? 0.45 : 1)
         .draggable(dragValue)
         .contextMenu { contextMenu }
+        .popover(isPresented: $isInfoPresented, arrowEdge: .trailing) {
+            AssetInfoPopover(model: model, asset: asset)
+        }
     }
 
     private var rowBackground: Color {
@@ -387,14 +556,21 @@ private struct AssetListRow: View {
         Button("Open") { model.activateAsset(asset.id) }
             .disabled(asset.isMissing)
         Divider()
+        Button("Rename…") { onRename(asset) }
+        AssetMoveMenu(model: model, asset: asset)
+        Divider()
+        Button("Get Info") {
+            selectIfNeeded()
+            isInfoPresented = true
+        }
         if asset.isMissing {
             Button("Locate…", action: locate)
-            Divider()
         }
         Button("Reveal in Finder") {
             selectIfNeeded()
             model.revealSelectionInFinder()
         }
+        Divider()
         Button("Move to Trash", role: .destructive) {
             selectIfNeeded()
             AppCommandRouter.run("asset.delete", in: model)
@@ -413,6 +589,7 @@ private struct AssetListRow: View {
         case .image: "photo"
         case .audio: "waveform"
         case .document: "doc"
+        case .text: "doc.text"
         }
     }
 
@@ -434,7 +611,51 @@ private struct AssetListRow: View {
     }
 }
 
-private struct AssetThumbnail: View {
+private struct AssetMoveMenu: View {
+    @Bindable var model: AppModel
+    let asset: AssetRecord
+
+    var body: some View {
+        Menu("Move to Folder") {
+            ForEach(model.folderDestinations, id: \.self) { destination in
+                Button(folderLabel(destination)) {
+                    selectIfNeeded()
+                    model.moveSelectedAssets(to: destination)
+                }
+                .disabled(allEffectiveAssetsAreAlready(in: destination))
+            }
+        }
+    }
+
+    private var effectiveAssetIDs: Set<AssetID> {
+        model.selection.selected.contains(asset.id)
+            ? model.selection.selected : [asset.id]
+    }
+
+    private func allEffectiveAssetsAreAlready(in destination: String) -> Bool {
+        let records = model.assets.filter { effectiveAssetIDs.contains($0.id) }
+        return !records.isEmpty && records.allSatisfy { folderPath(for: $0) == destination }
+    }
+
+    private func folderPath(for asset: AssetRecord) -> String {
+        guard asset.relativePath.hasPrefix("Media/") else { return "" }
+        let relative = String(asset.relativePath.dropFirst("Media/".count))
+        let parent = (relative as NSString).deletingLastPathComponent
+        return parent == "." ? "" : parent
+    }
+
+    private func folderLabel(_ destination: String) -> String {
+        destination.isEmpty ? "Media" : destination
+    }
+
+    private func selectIfNeeded() {
+        if !model.selection.selected.contains(asset.id) {
+            model.selectAsset(asset.id)
+        }
+    }
+}
+
+struct AssetThumbnail: View {
     @Environment(\.theme) private var theme
     let asset: AssetRecord
     let libraryRoot: URL
@@ -467,6 +688,7 @@ private struct AssetThumbnail: View {
         case .image: "photo"
         case .audio: "waveform"
         case .document: "doc"
+        case .text: "doc.text"
         }
     }
 }

@@ -16,6 +16,8 @@ let package = Package(
         .package(path: "../../Packages/ConvertKit"),
         .package(path: "../../Packages/MediaEngine"),
         .package(path: "../../Packages/PDFEngine"),
+        .package(path: "../../Packages/TextEngine"),
+        .package(path: "../../Packages/SearchEngine"),
         .package(path: "../../Packages/AIKit"),
         .package(path: "../../Packages/DesignSystem"),
     ],
@@ -29,6 +31,8 @@ let package = Package(
                 "ConvertKit",
                 "MediaEngine",
                 "PDFEngine",
+                "TextEngine",
+                "SearchEngine",
                 "AIKit",
                 "DesignSystem",
             ]
@@ -43,6 +47,8 @@ let package = Package(
                 "ConvertKit",
                 "MediaEngine",
                 "PDFEngine",
+                "TextEngine",
+                "SearchEngine",
                 "AIKit",
             ],
             resources: [
@@ -54,9 +60,16 @@ let package = Package(
         .testTarget(
             name: "ReelAppCoreTests",
             dependencies: [
-                "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine", "PDFEngine",
+                "ReelAppCore", "CoreModel", "LibraryStore", "ConvertKit", "MediaEngine",
+                "PDFEngine",
                 "AIKit",
+                "TextEngine",
+                "SearchEngine",
             ]
+        ),
+        .testTarget(
+            name: "ReelTests",
+            dependencies: ["Reel", "CoreModel", "DesignSystem", "TextEngine"]
         ),
     ],
     swiftLanguageModes: [.v6]

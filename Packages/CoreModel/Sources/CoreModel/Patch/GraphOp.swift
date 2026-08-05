@@ -16,6 +16,10 @@ public enum GraphOp: Codable, Sendable, Equatable {
     /// this operation so adjacent changes validate and undo as one unit.
     case setTrackItems(TrackID, [TimelineItem])
     case setTrack(Track)
+    /// Atomically replaces the complete ordered video or audio track list.
+    /// Track creation/removal uses these operations so it remains exactly undoable.
+    case setVideoTracks([Track])
+    case setAudioTracks([Track])
     case setMarkers([Marker])
     case setCaptions([CaptionSegment])
     case setCanvas(CanvasSpec)

@@ -9,9 +9,15 @@ struct MainWindow: View {
     @Environment(\.colorScheme) private var colorScheme
     @Bindable var model: AppModel
 
+    private var theme: Theme { model.appearance.theme(matching: colorScheme) }
+
     var body: some View {
         content
-            .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+            .environment(\.theme, theme)
+            // Keeps stock controls (sliders, toggles, pickers) on Clip's neutral
+            // accent instead of the system blue.
+            .tint(theme.palette.accent)
+            .preferredColorScheme(model.appearance.colorScheme)
             .alert(
                 "Move to Trash?",
                 isPresented: Binding(
@@ -34,7 +40,13 @@ struct MainWindow: View {
             }
             .sheet(isPresented: $model.isCommandPalettePresented) {
                 CommandPaletteView(model: model)
-                    .environment(\.theme, colorScheme == .dark ? Theme.dark : Theme.light)
+                    .environment(\.theme, theme)
+                    .tint(theme.palette.accent)
+            }
+            .sheet(isPresented: $model.isCaptureHistoryPresented) {
+                CaptureHistoryView(model: model)
+                    .environment(\.theme, theme)
+                    .tint(theme.palette.accent)
             }
     }
 
@@ -111,50 +123,114 @@ private struct ThemedMainWindow: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                Titlebar(model: model)
-                Divider().overlay(theme.palette.line)
-                HStack(spacing: 0) {
-                    if model.imageEditor == nil {
-                        LibrarySidebar(model: model)
-                        Divider().overlay(theme.palette.line)
-                    }
-                    if (model.selectedWorkspace == .video && model.editor != nil)
-                        || (model.selectedWorkspace == .photo && model.imageEditor != nil)
-                        || (model.selectedWorkspace == .pdf && model.pdfEditor != nil)
-                    {
-                        WorkspaceContent(model: model)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        ScrollView {
-                            WorkspaceContent(model: model)
-                                .frame(maxWidth: 1100, alignment: .leading)
-                                .padding(.horizontal, 32)
-                                .padding(.top, 24)
-                                .padding(.bottom, 32)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .scrollIndicators(.visible)
-                    }
-                    if model.isInspectorVisible {
-                        Divider().overlay(theme.palette.line)
-                        UnifiedInspector(model: model)
-                    }
-                }
-            }
-            if let message = model.lastMessage {
-                Toast(message)
-                    .padding(.bottom, 38)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: message) {
-                        try? await Task.sleep(for: .seconds(2.1))
-                        model.clearMessage()
-                    }
-            }
+        GeometryReader { proxy in
+            windowContent(availableSize: proxy.size)
+                // Several editor inspectors are taller than a typical window.
+                // Pin the shell to the GeometryReader's proposal so their ideal
+                // content height cannot make the workspace grow below the window.
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .topLeading
+                )
+                .clipped()
         }
         .background(theme.palette.surfaceBase)
         .foregroundStyle(theme.palette.textPrimary)
+    }
+
+    private func windowContent(availableSize: CGSize) -> some View {
+        let displayedInspectorWidth = InspectorLayout.displayedWidth(
+            requestedWidth: model.inspectorWidth,
+            availableWindowWidth: availableSize.width
+        )
+
+        return
+            ZStack(alignment: .bottom) {
+                // The sidebar runs the full height of the window and the title bar
+                // spans only what is to its right. That leaves one hairline in the
+                // shell instead of a horizontal rule crossing a vertical one.
+                HStack(spacing: 0) {
+                    if !isEditing {
+                        LibrarySidebar(model: model)
+                        shellDivider
+                    }
+                    VStack(spacing: 0) {
+                        Titlebar(model: model)
+                        HStack(spacing: 0) {
+                            workspace
+                                .layoutPriority(1)
+                            if model.showsEditorInspector && model.isInspectorVisible {
+                                InspectorResizeDivider(
+                                    model: model,
+                                    displayedWidth: displayedInspectorWidth
+                                )
+                                UnifiedInspector(model: model, width: displayedInspectorWidth)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let message = model.lastMessage {
+                    Toast(message)
+                        .padding(.bottom, 38)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .task(id: message) {
+                            try? await Task.sleep(for: .seconds(2.1))
+                            model.clearMessage()
+                        }
+                }
+            }
+            .frame(
+                width: availableSize.width,
+                height: availableSize.height,
+                alignment: .topLeading
+            )
+    }
+
+    private var isEditing: Bool {
+        model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
+            || model.textEditor != nil
+    }
+
+    /// Carries on past the title bar and behind the traffic lights so the
+    /// sidebar reads as one column from the very top of the window.
+    private var shellDivider: some View {
+        Rectangle()
+            .fill(theme.palette.line)
+            .frame(width: theme.metrics.hairline)
+            .ignoresSafeArea(.container, edges: .top)
+    }
+
+    @ViewBuilder private var workspace: some View {
+        if model.isSearching {
+            ScrollView {
+                SearchResultsView(model: model)
+                    .frame(maxWidth: 1_100, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .scrollIndicators(.visible)
+        } else if (model.selectedWorkspace == .video && model.editor != nil)
+            || (model.selectedWorkspace == .photo && model.imageEditor != nil)
+            || (model.selectedWorkspace == .pdf && model.pdfEditor != nil)
+            || (model.selectedWorkspace == .text && model.textEditor != nil)
+        {
+            WorkspaceContent(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                WorkspaceContent(model: model)
+                    .frame(maxWidth: 1100, alignment: .leading)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 24)
+                    .padding(.bottom, 32)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.visible)
+        }
     }
 }
 
@@ -168,9 +244,11 @@ private struct WorkspaceContent: View {
             case .video: VideoView(model: model)
             case .photo: PhotoView(model: model)
             case .pdf: PDFView(model: model)
+            case .text: TextView(model: model)
             case .convert: ConvertView(model: model)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-content-\(model.selectedWorkspace.rawValue)")
     }
 }

@@ -22,15 +22,14 @@ public struct KbdChip: View {
             .foregroundStyle(
                 state == .active ? theme.palette.textSecondary : theme.palette.textTertiary
             )
-            .strikethrough(state == .disabled)
             .padding(.vertical, 2)
-            .padding(.horizontal, 7)
-            .background(theme.palette.surfacePanel)
+            .padding(.horizontal, 6)
+            .background(theme.palette.surfaceRaised)
             .clipShape(
-                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
+                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
                     .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
             }
             .accessibilityValue(accessibilityValue)

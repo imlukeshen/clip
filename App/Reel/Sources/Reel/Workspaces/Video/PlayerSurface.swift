@@ -14,6 +14,10 @@ struct PlayerSurface: NSViewRepresentable {
     func updateNSView(_ view: PlayerView, context: Context) {
         view.playerLayer.player = player
     }
+
+    static func dismantleNSView(_ view: PlayerView, coordinator: ()) {
+        view.playerLayer.player = nil
+    }
 }
 
 final class PlayerView: NSView {

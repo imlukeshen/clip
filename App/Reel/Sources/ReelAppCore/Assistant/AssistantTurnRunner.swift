@@ -21,10 +21,12 @@ public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
     public var id: String { result.callID }
     public var name: String
     public var result: ToolResult
+    public var invocation: ToolInvocation?
 
-    public init(name: String, result: ToolResult) {
+    public init(name: String, result: ToolResult, invocation: ToolInvocation? = nil) {
         self.name = name
         self.result = result
+        self.invocation = invocation
     }
 }
 
@@ -48,8 +50,12 @@ public struct AssistantTurn: Sendable, Equatable {
     }
 }
 
-/// Runs one bounded provider request and resolves all returned tools in order.
+/// Runs one bounded assistant turn, feeding read-tool results back to the model
+/// so it can decompose discovery into a later edit. All writes are still
+/// coalesced into one graph patch and therefore one undo entry.
 public struct AssistantTurnRunner: Sendable {
+    private static let maximumToolCalls = 25
+    private static let maximumReadRounds = 8
     private let executor: ToolExecutor
 
     public init(executor: ToolExecutor = ToolExecutor()) { self.executor = executor }
@@ -63,44 +69,93 @@ public struct AssistantTurnRunner: Sendable {
         context initialContext: ToolExecutionContext
     ) async throws -> AssistantTurn {
         let contextJSON = try digest.encodedString()
-        let request = ChatRequest(
-            model: provider.defaultModel,
-            system: Self.systemPrompt,
-            messages: [
-                .init(
-                    role: .user,
-                    content: "Project context:\n\(contextJSON)\n\nRequest:\n\(prompt)"
-                )
-            ],
-            tools: provider.supportsTools ? ToolCatalog.all : [],
-            purpose: .chat
-        )
+        var messages: [ChatMessage] = [
+            .init(
+                role: .user,
+                content: "Project context:\n\(contextJSON)\n\nRequest:\n\(prompt)"
+            )
+        ]
         var text = ""
         var invocations: [ToolInvocation] = []
-        for try await chunk in provider.send(request) {
-            switch chunk {
-            case .text(let value): text += value
-            case .toolCall(let invocation): invocations.append(invocation)
-            case .usage, .done: break
-            }
-        }
-
-        if invocations.count > 25 {
-            invocations = Array(invocations.prefix(25))
-            text += " I reached the 25-command turn limit. Ask me to continue for the remainder."
-        }
-
         var context = initialContext
         var results: [ToolResult] = []
-        for invocation in invocations {
-            let result = try await executor.execute(
-                invocation, turnID: turnID, policy: policy, context: context)
-            results.append(result)
-            if let patch = result.patch {
-                var candidate = context.document
-                _ = try candidate.apply(patch)
-                context.document = candidate
+        var reachedToolLimit = false
+
+        for round in 0..<Self.maximumReadRounds {
+            let request = ChatRequest(
+                model: provider.defaultModel,
+                system: Self.systemPrompt,
+                messages: messages,
+                tools: provider.supportsTools ? ToolCatalog.all : [],
+                purpose: .chat
+            )
+            var roundText = ""
+            var roundInvocations: [ToolInvocation] = []
+            for try await chunk in provider.send(request) {
+                switch chunk {
+                case .text(let value): roundText += value
+                case .toolCall(let invocation): roundInvocations.append(invocation)
+                case .usage, .done: break
+                }
             }
+            if !roundText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !text.isEmpty { text += "\n" }
+                text += roundText
+            }
+
+            let remaining = Self.maximumToolCalls - invocations.count
+            if roundInvocations.count > remaining {
+                roundInvocations = Array(roundInvocations.prefix(max(remaining, 0)))
+                reachedToolLimit = true
+            }
+            invocations.append(contentsOf: roundInvocations)
+
+            var roundResults: [ToolResult] = []
+            for invocation in roundInvocations {
+                let result = try await executor.execute(
+                    invocation, turnID: turnID, policy: policy, context: context)
+                roundResults.append(result)
+                results.append(result)
+                if let patch = result.patch {
+                    var candidate = context.document
+                    _ = try candidate.apply(patch)
+                    context.document = candidate
+                }
+            }
+
+            guard !roundInvocations.isEmpty, !reachedToolLimit else { break }
+            let canContinueTextRepair = roundInvocations.allSatisfy { invocation in
+                ["tex.compile", "tex.diagnostics", "text.format"].contains(invocation.name)
+            }
+            let containsWrite = roundInvocations.contains { invocation in
+                ToolCatalog.schema(named: invocation.name)?.kind != .read
+            }
+            let awaitsConfirmation = roundResults.contains(where: \.requiresConfirmation)
+            guard !containsWrite || canContinueTextRepair, !awaitsConfirmation,
+                round + 1 < Self.maximumReadRounds
+            else { break }
+
+            let called = roundInvocations.map(\.name).joined(separator: ", ")
+            messages.append(
+                .init(
+                    role: .assistant,
+                    content: roundText.isEmpty ? "Called tools: \(called)" : roundText
+                )
+            )
+            let feedback = zip(roundInvocations, roundResults).map { invocation, result in
+                "[\(invocation.callID) \(invocation.name)] \(result.message)"
+            }.joined(separator: "\n")
+            messages.append(
+                .init(
+                    role: .user,
+                    content:
+                        "Tool results:\n\(feedback)\n\nContinue the original request. Use another tool when needed; do not repeat a completed search."
+                )
+            )
+        }
+
+        if reachedToolLimit {
+            text += " I reached the 25-command turn limit. Ask me to continue for the remainder."
         }
         let patches = results.compactMap(\.patch)
         let combinedPatch: GraphPatch? =
@@ -120,9 +175,19 @@ public struct AssistantTurnRunner: Sendable {
     }
 
     private static let systemPrompt = """
-        You are Clip's editing assistant. Use the supplied tools for timeline edits. Keep each
-        requested operation as a separate tool call. Clip coalesces the completed turn into one undo.
+        You are Clip's editing assistant. Use the supplied tools for timeline edits, library search,
+        and file conversion. Keep each requested operation as a separate tool call. Clip coalesces
+        completed timeline edits into one undo.
         Never invent audio or click availability; trust hasAudio and alignment in the context.
-        Ask before actions represented by confirm tools.
+        For requests that refer to visible or spoken content, decompose the task: search the library,
+        search within the chosen asset for an exact source timestamp, then edit the corresponding
+        timeline item. Search results include timestamps and item IDs. Quoted search text is exact.
+        For conversion requests, discover or use asset IDs, call convert.listTargets when the target
+        is uncertain, call convert.plan to report quality and size tradeoffs, and only then call
+        convert.run. Ask before actions represented by confirm tools.
+        In a text workspace, use tex.compile before tex.diagnostics. To repair LaTeX, read the
+        structured diagnostics and source context, apply the smallest non-overlapping line edits
+        with text.format, then compile again to verify. Never invent source that diagnostics did not
+        expose. Use text.export only after the user approves the destination write.
         """
 }

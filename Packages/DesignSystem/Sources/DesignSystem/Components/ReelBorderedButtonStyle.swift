@@ -23,8 +23,8 @@ private struct ReelBorderedButtonBody: View {
             .foregroundStyle(
                 isHovered && isEnabled ? theme.palette.textPrimary : theme.palette.textSecondary
             )
-            .padding(.vertical, theme.metrics.spacing.xs)
-            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
             .background(backgroundColor)
             .clipShape(
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
@@ -37,14 +37,7 @@ private struct ReelBorderedButtonBody: View {
                     )
             }
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.38)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.965 : 1))
-            .offset(y: reduceMotion ? 0 : (configuration.isPressed ? 1 : 0))
-            .shadow(
-                color: isHovered && isEnabled && !configuration.isPressed
-                    ? .black.opacity(0.12) : .clear,
-                radius: configuration.isPressed ? 1 : 5,
-                y: configuration.isPressed ? 0 : 1
-            )
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
             .animation(ReelMotion.buttonHover, value: isHovered)
             .onHover { isHovered = $0 }
@@ -57,6 +50,6 @@ private struct ReelBorderedButtonBody: View {
     }
 
     private var borderColor: Color {
-        isHovered && isEnabled ? theme.palette.accentLine : theme.palette.lineStrong
+        isHovered && isEnabled ? theme.palette.lineStrong : theme.palette.line
     }
 }

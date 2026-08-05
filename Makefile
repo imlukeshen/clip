@@ -23,6 +23,8 @@ test-packages:
 	swift test --package-path Packages/ConvertKit
 	swift test --package-path Packages/MediaEngine
 	swift test --package-path Packages/PDFEngine
+	swift test --package-path Packages/TextEngine
+	swift test --package-path Packages/SearchEngine
 	swift test --package-path Packages/AIKit
 	swift test --package-path Packages/DesignSystem
 	swift test --package-path App/Reel
@@ -40,10 +42,10 @@ distribution-check:
 	Scripts/check-distribution.sh
 
 lint:
-	xcrun swift-format lint --strict --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/AIKit/Sources Packages/AIKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
+	xcrun swift-format lint --strict --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/TextEngine/Sources Packages/TextEngine/Tests Packages/SearchEngine/Sources Packages/SearchEngine/Tests Packages/AIKit/Sources Packages/AIKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests App/Reel/UITests
 
 format:
-	xcrun swift-format format --in-place --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/AIKit/Sources Packages/AIKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests
+	xcrun swift-format format --in-place --recursive Packages/CoreModel/Sources Packages/CoreModel/Tests Packages/LibraryStore/Sources Packages/LibraryStore/Tests Packages/CaptureKit/Sources Packages/CaptureKit/Tests Packages/ConvertKit/Sources Packages/ConvertKit/Tests Packages/MediaEngine/Sources Packages/MediaEngine/Tests Packages/TextEngine/Sources Packages/TextEngine/Tests Packages/SearchEngine/Sources Packages/SearchEngine/Tests Packages/AIKit/Sources Packages/AIKit/Tests Packages/DesignSystem/Sources Packages/DesignSystem/Tests App/Reel/Sources App/Reel/Tests App/Reel/UITests
 
 ffmpeg:
 	Scripts/build-ffmpeg.sh

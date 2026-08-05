@@ -9,7 +9,7 @@ public struct CommandID: RawRepresentable, Codable, Sendable, Hashable, Expressi
 }
 
 public enum CommandCategory: String, Codable, Sendable, CaseIterable {
-    case asset, clip, effect, audio, timeline, image, pdf, file, view, app
+    case asset, clip, effect, audio, timeline, image, pdf, text, file, view, app
 }
 
 public enum AgentExposure: String, Codable, Sendable {
@@ -84,7 +84,15 @@ public enum CommandRegistry {
             "navigation.photo", "Open Photo Editor", .view, kind: .confirm, exposure: .onDemand),
         command("navigation.pdf", "Open PDF Workspace", .view, kind: .confirm, exposure: .onDemand),
         command(
+            "navigation.text", "Open Text Workspace", .view, kind: .confirm, exposure: .onDemand),
+        command(
             "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
+        command(
+            "capture.history", "Open Clip Clipboard", .app,
+            shortcut: .init("c", modifiers: ["command", "shift"]), kind: .read, exposure: .never),
+        command(
+            "capture.clearHistory", "Clear Clip Clipboard", .app, destructive: true,
+            kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
@@ -94,6 +102,130 @@ public enum CommandRegistry {
         command(
             "asset.search", "Search Library", .asset,
             shortcut: .init("f"), kind: .confirm, exposure: .onDemand),
+        command(
+            "search.library", "Search Library Content", .asset,
+            description:
+                "Search the full local library with optional filters. Results include asset IDs, timeline item IDs when open, timestamped moments, and snippets. Quoted text forces exact matching.",
+            kind: .read,
+            exposure: .always,
+            required: ["text"],
+            properties: [
+                "text": string, "kind": string, "after": string, "before": string,
+                "folder": string, "minimumDuration": number, "maximumDuration": number,
+                "hasAudio": boolean, "mode": string, "limit": number,
+            ]),
+        command(
+            "search.withinAsset", "Search Within Asset", .asset,
+            description:
+                "Find exact timestamped moments inside one asset. Results include source timestamps and the corresponding open timeline item IDs. Quoted text forces exact matching.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID", "text"],
+            properties: ["assetID": string, "text": string]),
+        command(
+            "search.textAt", "Read Text at Timestamp", .asset,
+            description:
+                "Return OCR text spans and bounding boxes visible at a source timestamp in an asset. Use this to copy or reason about exact on-screen text.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID", "time"],
+            properties: ["assetID": string, "time": number]),
+        command(
+            "search.similar", "Find Similar Assets", .asset,
+            description:
+                "Find semantic nearest neighbours to an asset. Results include asset IDs, timestamped moments, and snippets; quoted search text is exact in the other search tools.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetID"],
+            properties: ["assetID": string, "limit": number]),
+        command(
+            "convert.listTargets", "List Conversion Targets", .file,
+            description:
+                "List the conversion formats that every supplied library asset can reach. Use asset IDs returned by library search.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetIDs"],
+            properties: ["assetIDs": array(string)]),
+        command(
+            "convert.plan", "Plan Conversion", .file,
+            description:
+                "Plan a conversion without writing files. Reports the backend route, lossy or lossless tradeoff, warnings, and size or resize constraints.",
+            kind: .read,
+            exposure: .always,
+            required: ["assetIDs", "target"],
+            properties: [
+                "assetIDs": array(string), "target": string, "preset": string,
+                "quality": number, "longestSide": number, "maximumBytes": number,
+                "stripMetadata": boolean,
+            ]),
+        command(
+            "convert.presets", "List Conversion Presets", .file,
+            description:
+                "List built-in conversion presets with their target format and important tradeoffs.",
+            kind: .read,
+            exposure: .always),
+        command(
+            "convert.run", "Run Conversion", .file,
+            description:
+                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise Clip uses the configured export folder.",
+            kind: .confirm,
+            exposure: .always,
+            required: ["assetIDs", "target"],
+            properties: [
+                "assetIDs": array(string), "target": string, "preset": string,
+                "quality": number, "longestSide": number, "maximumBytes": number,
+                "stripMetadata": boolean, "destination": string,
+                "filenameTemplate": string, "conflictPolicy": string,
+            ]),
+        command(
+            "text.create", "Create Text Buffer", .text,
+            description:
+                "Create and open a persistent scratch text buffer, optionally with initial content, a safe filename, and an explicit language.",
+            exposure: .always,
+            properties: ["name": string, "language": string, "contents": string]),
+        command(
+            "text.setLanguage", "Set Text Language", .text,
+            description:
+                "Set the explicit syntax language for the active text file. Use a LanguageID such as markdown, latex, swift, json, or plainText.",
+            exposure: .always,
+            required: ["language"],
+            properties: ["language": string]),
+        command(
+            "text.format", "Format Text", .text,
+            description:
+                "Apply deterministic edits to the active text file. Supply complete contents or non-overlapping one-based inclusive line edits; optional cleanup trims trailing whitespace or normalizes line endings.",
+            exposure: .always,
+            properties: [
+                "file": string,
+                "contents": string,
+                "edits": array(
+                    typedObject(
+                        ["startLine": number, "endLine": number, "replacement": string],
+                        required: ["startLine", "endLine", "replacement"]
+                    )
+                ),
+                "trimTrailingWhitespace": boolean,
+                "lineEnding": string,
+            ]),
+        command(
+            "tex.compile", "Compile LaTeX", .text,
+            description:
+                "Compile the active LaTeX project in Clip's confined TeX workspace and wait for success or diagnostics.",
+            exposure: .always),
+        command(
+            "tex.diagnostics", "Read LaTeX Diagnostics", .text,
+            description:
+                "Read structured diagnostics and bounded source context from the most recent LaTeX compile.",
+            kind: .read,
+            exposure: .always),
+        command(
+            "text.export", "Export Text", .text,
+            description:
+                "Write the active file as a self-contained syntax-colored HTML, RTF, or plain-text file. destination must be an absolute file path.",
+            kind: .confirm,
+            exposure: .always,
+            required: ["format", "destination"],
+            properties: ["format": string, "destination": string]),
         command(
             "asset.delete", "Move to Trash", .asset, shortcut: .init("delete"),
             destructive: true, kind: .confirm, exposure: .onDemand,
@@ -304,7 +436,8 @@ public enum CommandRegistry {
 
     /// Deliberately non-agent commands require a documented entry here.
     public static let explicitlyExcluded: [CommandID: String] = [
-        "app.commandPalette": "Opening UI chrome has no useful assistant-side effect."
+        "app.commandPalette": "Opening UI chrome has no useful assistant-side effect.",
+        "capture.history": "Opening UI chrome has no useful assistant-side effect.",
     ]
 
     public static func command(id: CommandID) -> CommandDefinition? {
@@ -369,6 +502,7 @@ public enum CommandRegistry {
         _ category: CommandCategory,
         shortcut: CommandShortcut? = nil,
         destructive: Bool = false,
+        description: String? = nil,
         kind: ToolKind = .write,
         exposure: AgentExposure,
         required: [String] = [],
@@ -383,7 +517,7 @@ public enum CommandRegistry {
             agentExposure: exposure,
             schema: ToolSchema(
                 name: id.rawValue,
-                description: title,
+                description: description ?? title,
                 kind: kind,
                 parameters: typedObject(properties, required: required)
             )

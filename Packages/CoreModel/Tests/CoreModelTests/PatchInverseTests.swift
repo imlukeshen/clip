@@ -92,6 +92,57 @@ import Testing
     #expect(document == original)
 }
 
+@Test func replacingTrackListsIsExactlyUndoable() throws {
+    var random = DeterministicRandom(seed: 19)
+    var document = try makeDocument(sequence: 19, random: &random)
+    let original = document
+    let overlay = Track(
+        id: TrackID(rawValue: "v2"),
+        name: "V2",
+        items: [
+            TimelineItem(
+                id: ItemID(rawValue: "overlay"),
+                assetID: AssetID(rawValue: "overlay-asset"),
+                sourceRange: TimeRange(
+                    start: .zero,
+                    duration: RationalTime(seconds: 1)
+                )
+            )
+        ],
+        isLocked: true
+    )
+    let audio = Track(
+        id: TrackID(rawValue: "a2"),
+        name: "A2",
+        items: [
+            TimelineItem(
+                id: ItemID(rawValue: "detached-audio"),
+                assetID: AssetID(rawValue: "overlay-asset"),
+                sourceRange: TimeRange(
+                    start: .zero,
+                    duration: RationalTime(seconds: 1)
+                )
+            )
+        ]
+    )
+
+    let inverse = try document.apply(
+        GraphPatch(
+            ops: [
+                .setVideoTracks(document.timeline.videoTracks + [overlay]),
+                .setAudioTracks(document.timeline.audioTracks + [audio]),
+            ],
+            label: "Add Tracks",
+            origin: .user
+        )
+    )
+
+    #expect(document.timeline.videoTracks.last == overlay)
+    #expect(document.timeline.audioTracks.last == audio)
+    _ = try document.apply(inverse)
+    #expect(document == original)
+}
+
 private func makeDocument(
     sequence: Int,
     random: inout DeterministicRandom

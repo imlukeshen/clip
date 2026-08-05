@@ -6,7 +6,8 @@ enum AVExport {
         input: URL,
         output: URL,
         preset: String,
-        fileType: AVFileType
+        fileType: AVFileType,
+        options: ConversionOptions = ConversionOptions()
     ) async throws {
         let asset = AVURLAsset(url: input)
         guard let session = AVAssetExportSession(asset: asset, presetName: preset) else {
@@ -14,6 +15,17 @@ enum AVExport {
         }
         let temporary = try AtomicOutput.prepareTemporaryURL(for: output)
         defer { try? FileManager.default.removeItem(at: temporary) }
+
+        if options.removesMetadata { session.metadata = [] }
+        if let trim = options.video?.trim {
+            guard trim.startSeconds >= 0, trim.endSeconds > trim.startSeconds else {
+                throw ConversionError.invalidInput
+            }
+            session.timeRange = CMTimeRange(
+                start: CMTime(seconds: trim.startSeconds, preferredTimescale: 600),
+                end: CMTime(seconds: trim.endSeconds, preferredTimescale: 600)
+            )
+        }
 
         if #available(macOS 15.0, *) {
             do {

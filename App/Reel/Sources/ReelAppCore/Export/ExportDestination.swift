@@ -127,12 +127,15 @@ public enum ExportDestinationError: Error, Sendable, Equatable, LocalizedError {
     case invalidToken(String)
     case unclosedToken
     case invalidPath
+    case conflictingBatchOutput
 
     public var errorDescription: String? {
         switch self {
         case .invalidToken(let token): "Unknown template token {\(token)}."
         case .unclosedToken: "A template token is missing its closing brace."
         case .invalidPath: "The export template does not form a safe path."
+        case .conflictingBatchOutput:
+            "Two files resolve to the same output path. Add {index} to the filename template."
         }
     }
 }

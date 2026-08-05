@@ -41,6 +41,9 @@ struct WorkspaceRoutingTests {
         AppCommandRouter.run("navigation.pdf", in: model)
         #expect(model.selectedWorkspace == .pdf)
 
+        AppCommandRouter.run("navigation.video", in: model)
+        #expect(model.selectedWorkspace == .video)
+
         AppCommandRouter.run("navigation.convert", in: model)
         #expect(model.selectedWorkspace == .convert)
         #expect(model.searchQuery.isEmpty)
@@ -52,6 +55,19 @@ struct WorkspaceRoutingTests {
         #expect(AssetActivationRoute(kind: .image) == .photoEditor)
         #expect(AssetActivationRoute(kind: .document) == .pdfEditor)
         #expect(AssetActivationRoute(kind: .audio) == .none)
+        let office = AssetRecord(
+            id: AssetID(rawValue: "office"),
+            relativePath: "Media/Proposal.docx",
+            displayName: "Proposal.docx",
+            kind: .document,
+            container: "docx",
+            createdAt: Date(timeIntervalSince1970: 1),
+            importedAt: Date(timeIntervalSince1970: 1),
+            byteSize: 1,
+            contentHash: "office",
+            ingestState: .ready
+        )
+        #expect(AssetActivationRoute(asset: office) == .conversion)
     }
 
     @Test("Search matches names, folders, types, formats, and codecs")

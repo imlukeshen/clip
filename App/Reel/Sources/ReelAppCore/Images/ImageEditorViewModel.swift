@@ -2,8 +2,10 @@ import AIKit
 import CoreGraphics
 import CoreModel
 import Foundation
+import ImageIO
 import MediaEngine
 import Observation
+import UniformTypeIdentifiers
 
 public enum ImageEditorTool: String, CaseIterable, Sendable, Identifiable {
     case select
@@ -69,25 +71,41 @@ public enum ImageRedactionMode: String, CaseIterable, Sendable, Identifiable {
 public final class ImageEditorViewModel {
     public private(set) var document: ImageDocument
     public private(set) var renderedImage: CGImage?
+    public private(set) var renderedImageWithoutSelectedLayer: CGImage?
+    public private(set) var renderedSelectedLayer: CGImage?
     public private(set) var isRendering = false
     public private(set) var notice: String?
     public private(set) var redactionSuggestions: [RedactionSuggestion] = []
     public private(set) var altText: String?
     public var pendingCrop: CGRect?
-    public var selectedLayerID: LayerID?
+    public var selectedLayerID: LayerID? {
+        didSet {
+            if selectedLayerID != oldValue {
+                renderedImageWithoutSelectedLayer = nil
+                renderedSelectedLayer = nil
+                rebuildSelectedLayerSurfaces()
+            }
+        }
+    }
     public var activeTool: ImageEditorTool = .select
     public var activeColor = RGBA(r: 0.96, g: 0.29, b: 0.25, a: 1)
     public var strokeWidth = 4.0
     public var textFontSize = 28.0
     public var blurRadius = 18.0
     public var redactionMode: ImageRedactionMode = .pixelate
-    public let sourceURL: URL
+    /// Current library location for the source image.
+    public private(set) var sourceURL: URL
+    /// Canonical library filename after collision and extension handling.
+    public private(set) var sourceDisplayName: String
+    /// Durable, editor-owned copies of images imported or pasted as raster layers.
+    public let layerStorageDirectory: URL
     public let undoManager = UndoManager()
 
     private let renderer: ImageDocumentRenderer
     private let sourceCanvas: ImageCanvas
     private let persistence: @Sendable (ImageDocument) async throws -> Void
     private var renderTask: Task<Void, Never>?
+    private var selectedLayerRenderTask: Task<Void, Never>?
     private var persistenceTask: Task<Void, Never>?
 
     public init(
@@ -95,12 +113,17 @@ public final class ImageEditorViewModel {
         sourceURL: URL,
         sourceCanvas: ImageCanvas? = nil,
         renderer: ImageDocumentRenderer = ImageDocumentRenderer(),
+        layerStorageDirectory: URL? = nil,
         persisting: @escaping @Sendable (ImageDocument) async throws -> Void
     ) {
         self.document = document
         self.sourceURL = sourceURL
+        self.sourceDisplayName = sourceURL.lastPathComponent
         self.sourceCanvas = sourceCanvas ?? document.canvas
         self.renderer = renderer
+        self.layerStorageDirectory =
+            layerStorageDirectory
+            ?? Self.defaultLayerStorageDirectory(documentID: document.id)
         self.persistence = persisting
         undoManager.groupsByEvent = false
     }
@@ -109,7 +132,22 @@ public final class ImageEditorViewModel {
 
     public func stop() {
         renderTask?.cancel()
+        selectedLayerRenderTask?.cancel()
         persistenceTask?.cancel()
+    }
+
+    /// Rebinds the editor after the library moves its source asset.
+    ///
+    /// Library assets keep a stable identifier when renamed, but image renders
+    /// read from the source URL on every rebuild. Updating the URL and starting
+    /// a fresh render together prevents the next edit from reading the old,
+    /// now-missing path.
+    public func relocateSource(to url: URL, displayName: String) {
+        let relocatedURL = url.standardizedFileURL
+        let didMove = relocatedURL != sourceURL.standardizedFileURL
+        sourceURL = relocatedURL
+        sourceDisplayName = displayName
+        if didMove { rebuild() }
     }
 
     public func activate(_ tool: ImageEditorTool) {
@@ -147,6 +185,32 @@ public final class ImageEditorViewModel {
 
     public func undo() { undoManager.undo() }
     public func redo() { undoManager.redo() }
+
+    /// Adds OCR-derived regions through the same undoable layer path as a manual redaction.
+    /// Regions use Clip's top-left normalized canvas coordinates.
+    public func addRedaction(regions: [NormalizedRect]) {
+        let rects = regions.compactMap { region -> CGRect? in
+            let rect = CGRect(
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height
+            ).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            return isUsable(rect) ? rect : nil
+        }
+        guard !rects.isEmpty else { return }
+        let layer = Layer.redaction(RedactionLayer(regions: rects, style: redactionStyle))
+        do {
+            try perform(
+                .addLayer(layer, atIndex: document.layers.count),
+                actionName: "Redact Live Text"
+            )
+            selectedLayerID = layer.id
+            notice = rects.count == 1 ? "Redaction added." : "Redactions added."
+        } catch {
+            notice = "The redaction could not be added."
+        }
+    }
 
     public func commitGesture(from start: CGPoint, to end: CGPoint) {
         commitGesture(points: [start, end])
@@ -371,6 +435,126 @@ public final class ImageEditorViewModel {
         }
     }
 
+    /// Copies an image into durable editor storage and adds it at the top of the canvas stack.
+    /// The original selection may therefore be moved or deleted without breaking this document.
+    @discardableResult
+    public func addRasterLayer(
+        from sourceURL: URL,
+        preferredFrame: CGRect? = nil
+    ) throws -> LayerID {
+        let didAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        let dimensions = try imageDimensions(at: sourceURL)
+        let id = LayerID.generate()
+        let fileExtension = durableExtension(
+            preferred: sourceURL.pathExtension,
+            imageType: imageType(at: sourceURL)
+        )
+        let durableURL = layerStorageDirectory.appendingPathComponent(
+            "\(id.rawValue).\(fileExtension)"
+        )
+        try prepareLayerStorage()
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: durableURL)
+            let layer = RasterLayer(
+                id: id,
+                name: rasterLayerName(from: sourceURL.lastPathComponent),
+                sourceURL: durableURL,
+                frame: try rasterFrame(preferredFrame, imageSize: dimensions)
+            )
+            try perform(
+                .addLayer(.raster(layer), atIndex: document.layers.count),
+                actionName: "Add Image Layer"
+            )
+            selectedLayerID = id
+            notice = "Image added as a new layer."
+            return id
+        } catch {
+            try? FileManager.default.removeItem(at: durableURL)
+            throw error
+        }
+    }
+
+    /// Persists pasted image bytes before adding the raster layer so clipboard-temporary data
+    /// remains editable after the app is relaunched.
+    @discardableResult
+    public func addRasterLayer(
+        data: Data,
+        suggestedName: String = "Pasted Image.png",
+        preferredFrame: CGRect? = nil
+    ) throws -> LayerID {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw ImageRasterImportError.unreadableImage
+        }
+        let dimensions = try imageDimensions(in: source)
+        let id = LayerID.generate()
+        let type = CGImageSourceGetType(source) as String?
+        let fileExtension = durableExtension(
+            preferred: URL(fileURLWithPath: suggestedName).pathExtension,
+            imageType: type
+        )
+        let durableURL = layerStorageDirectory.appendingPathComponent(
+            "\(id.rawValue).\(fileExtension)"
+        )
+        try prepareLayerStorage()
+        do {
+            try data.write(to: durableURL, options: .atomic)
+            let layer = RasterLayer(
+                id: id,
+                name: rasterLayerName(from: suggestedName),
+                sourceURL: durableURL,
+                frame: try rasterFrame(preferredFrame, imageSize: dimensions)
+            )
+            try perform(
+                .addLayer(.raster(layer), atIndex: document.layers.count),
+                actionName: "Paste Image Layer"
+            )
+            selectedLayerID = id
+            notice = "Image pasted as a new layer."
+            return id
+        } catch {
+            try? FileManager.default.removeItem(at: durableURL)
+            throw error
+        }
+    }
+
+    /// Applies one undoable Photoshop-style transform/property edit to the selected bitmap.
+    public func updateSelectedRasterTransform(
+        frame: CGRect? = nil,
+        rotationDegrees: Double? = nil,
+        opacity: Double? = nil,
+        blendMode: RasterBlendMode? = nil
+    ) {
+        guard case .raster(var layer) = selectedLayer, !layer.isLocked else {
+            if selectedLayer?.isLocked == true { notice = "Unlock the layer before editing it." }
+            return
+        }
+        if let frame {
+            guard isNormalizedRasterFrame(frame) else {
+                notice = "Keep the layer inside the canvas."
+                return
+            }
+            layer.frame = frame.standardized
+        }
+        if let rotationDegrees {
+            guard rotationDegrees.isFinite else { return }
+            layer.rotationDegrees = rotationDegrees.truncatingRemainder(dividingBy: 360)
+        }
+        if let opacity { layer.opacity = min(max(opacity, 0), 1) }
+        if let blendMode { layer.blendMode = blendMode }
+        try? perform(.updateLayer(.raster(layer)), actionName: "Transform Image Layer")
+    }
+
+    public func renameSelectedRasterLayer(to name: String) {
+        guard case .raster(var layer) = selectedLayer else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != layer.name else { return }
+        layer.name = trimmed
+        try? perform(.updateLayer(.raster(layer)), actionName: "Rename Image Layer")
+    }
+
     public func selectLayer(_ id: LayerID?) { selectedLayerID = id }
 
     public func selectLayer(at point: CGPoint) {
@@ -392,6 +576,8 @@ public final class ImageEditorViewModel {
         guard let layer = selectedLayer else { return }
         let updated: Layer
         switch layer {
+        case .raster:
+            return
         case .annotation(var value):
             value.strokeColor = color
             updated = .annotation(value)
@@ -459,6 +645,37 @@ public final class ImageEditorViewModel {
         guard abs(translation.x) > 0.0001 || abs(translation.y) > 0.0001 else { return }
         let updated = translating(layer, by: translation)
         try? perform(.updateLayer(updated), actionName: "Move Layer")
+    }
+
+    /// Commits one normalized move/resize/rotation after the canvas has shown
+    /// transient transform feedback. All layer kinds resize through the same
+    /// geometry path, while rotation remains a raster-layer property.
+    public func transformSelectedLayer(
+        frame: CGRect,
+        rotationDegrees: Double? = nil
+    ) {
+        guard let selectedLayer, !selectedLayer.isLocked else {
+            if selectedLayer?.isLocked == true {
+                notice = "Unlock the layer before transforming it."
+            }
+            return
+        }
+        let frame = frame.standardized
+        guard isNormalizedRasterFrame(frame) else {
+            notice = "Keep the layer inside the canvas."
+            return
+        }
+
+        let previousBounds = layerBounds(for: selectedLayer)
+        guard previousBounds.width > 0, previousBounds.height > 0 else { return }
+        let updated = remapping(
+            selectedLayer,
+            from: previousBounds,
+            to: frame,
+            rotationDegrees: rotationDegrees
+        )
+        guard updated != selectedLayer else { return }
+        try? perform(.updateLayer(updated), actionName: "Transform Layer")
     }
 
     public func duplicateSelectedLayer() {
@@ -644,6 +861,7 @@ public final class ImageEditorViewModel {
     private func layerBounds(for layer: Layer) -> CGRect {
         let bounds: CGRect
         switch layer {
+        case .raster(let value): bounds = value.frame
         case .annotation(let value): bounds = value.bounds
         case .text(let value): bounds = value.frame
         case .highlight(let value): bounds = union(value.regions)
@@ -651,14 +869,13 @@ public final class ImageEditorViewModel {
         case .blur(let value): bounds = union(value.regions)
         case .padding: bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
         case .step(let value):
-            let diameter =
-                CGFloat(value.diameter)
-                / CGFloat(min(document.canvas.width, document.canvas.height))
+            let width = CGFloat(value.diameter) / CGFloat(document.canvas.width)
+            let height = CGFloat(value.diameter) / CGFloat(document.canvas.height)
             bounds = CGRect(
-                x: value.position.x - diameter / 2,
-                y: value.position.y - diameter / 2,
-                width: diameter,
-                height: diameter
+                x: value.position.x - width / 2,
+                y: value.position.y - height / 2,
+                width: width,
+                height: height
             )
         }
         return bounds
@@ -671,6 +888,9 @@ public final class ImageEditorViewModel {
 
     private func translating(_ layer: Layer, by delta: CGPoint) -> Layer {
         switch layer {
+        case .raster(var value):
+            value.frame = value.frame.offsetBy(dx: delta.x, dy: delta.y)
+            return .raster(value)
         case .annotation(var value):
             value.bounds = value.bounds.offsetBy(dx: delta.x, dy: delta.y)
             value.points = value.points.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
@@ -698,8 +918,95 @@ public final class ImageEditorViewModel {
         }
     }
 
+    private func remapping(
+        _ layer: Layer,
+        from source: CGRect,
+        to destination: CGRect,
+        rotationDegrees: Double?
+    ) -> Layer {
+        switch layer {
+        case .raster(var value):
+            value.frame = destination
+            if let rotationDegrees, rotationDegrees.isFinite {
+                value.rotationDegrees =
+                    rotationDegrees.truncatingRemainder(dividingBy: 360)
+            }
+            return .raster(value)
+        case .annotation(var value):
+            value.bounds = destination
+            value.points = value.points.map {
+                remapping($0, from: source, to: destination)
+            }
+            return .annotation(value)
+        case .text(var value):
+            value.frame = destination
+            return .text(value)
+        case .highlight(var value):
+            value.regions = value.regions.map {
+                remapping($0, from: source, to: destination)
+            }
+            return .highlight(value)
+        case .redaction(var value):
+            value.regions = value.regions.map {
+                remapping($0, from: source, to: destination)
+            }
+            return .redaction(value)
+        case .blur(var value):
+            value.regions = value.regions.map {
+                remapping($0, from: source, to: destination)
+            }
+            return .blur(value)
+        case .padding:
+            return layer
+        case .step(var value):
+            let oldPixelSize = CGSize(
+                width: source.width * CGFloat(document.canvas.width),
+                height: source.height * CGFloat(document.canvas.height)
+            )
+            let newPixelSize = CGSize(
+                width: destination.width * CGFloat(document.canvas.width),
+                height: destination.height * CGFloat(document.canvas.height)
+            )
+            let scale = min(
+                newPixelSize.width / max(oldPixelSize.width, 0.000_001),
+                newPixelSize.height / max(oldPixelSize.height, 0.000_001)
+            )
+            value.position = CGPoint(x: destination.midX, y: destination.midY)
+            value.diameter = min(max(value.diameter * scale, 8), 320)
+            return .step(value)
+        }
+    }
+
+    private func remapping(_ point: CGPoint, from source: CGRect, to destination: CGRect)
+        -> CGPoint
+    {
+        CGPoint(
+            x: destination.minX + (point.x - source.minX) / source.width * destination.width,
+            y: destination.minY + (point.y - source.minY) / source.height * destination.height
+        )
+    }
+
+    private func remapping(_ rect: CGRect, from source: CGRect, to destination: CGRect) -> CGRect {
+        let first = remapping(rect.origin, from: source, to: destination)
+        let last = remapping(
+            CGPoint(x: rect.maxX, y: rect.maxY),
+            from: source,
+            to: destination
+        )
+        return CGRect(
+            x: first.x,
+            y: first.y,
+            width: last.x - first.x,
+            height: last.y - first.y
+        ).standardized
+    }
+
     private func duplicating(_ layer: Layer, offset: CGPoint) -> Layer {
         switch translating(layer, by: offset) {
+        case .raster(var value):
+            value.id = .generate()
+            value.name += " copy"
+            return .raster(value)
         case .annotation(var value):
             value.id = .generate()
             return .annotation(value)
@@ -812,5 +1119,153 @@ public final class ImageEditorViewModel {
                 self?.notice = "The image preview could not be rendered."
             }
         }
+        rebuildSelectedLayerSurfaces()
     }
+
+    private func rebuildSelectedLayerSurfaces() {
+        selectedLayerRenderTask?.cancel()
+        guard let selectedLayerID,
+            let layer = document.layers.first(where: { $0.id == selectedLayerID }),
+            layer.isVisible,
+            ifCasePadding(layer) == false
+        else {
+            renderedImageWithoutSelectedLayer = nil
+            renderedSelectedLayer = nil
+            return
+        }
+
+        var backgroundSnapshot = document
+        backgroundSnapshot.layers.removeAll { $0.id == selectedLayerID }
+        let backgroundDocument = backgroundSnapshot
+        let sourceURL = sourceURL
+        let renderer = renderer
+        let canvas = document.canvas
+        selectedLayerRenderTask = Task { [weak self] in
+            do {
+                let surfaces = try await Task.detached(priority: .userInitiated) {
+                    [renderer, backgroundDocument, sourceURL, layer, canvas] in
+                    let background = try renderer.renderPreview(
+                        backgroundDocument,
+                        sourceURL: sourceURL
+                    )
+                    let foreground = try renderer.renderLayerPreview(layer, canvas: canvas)
+                    return (background, foreground)
+                }.value
+                try Task.checkCancellation()
+                guard self?.selectedLayerID == selectedLayerID else { return }
+                self?.renderedImageWithoutSelectedLayer = surfaces.0
+                self?.renderedSelectedLayer = surfaces.1
+            } catch is CancellationError {
+                // The selected layer or graph changed while surfaces rendered.
+            } catch {
+                guard self?.selectedLayerID == selectedLayerID else { return }
+                self?.renderedImageWithoutSelectedLayer = nil
+                self?.renderedSelectedLayer = nil
+            }
+        }
+    }
+
+    private func ifCasePadding(_ layer: Layer) -> Bool {
+        if case .padding = layer { return true }
+        return false
+    }
+
+    private static func defaultLayerStorageDirectory(documentID: DocumentID) -> URL {
+        let root =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return
+            root
+            .appendingPathComponent("Clip", isDirectory: true)
+            .appendingPathComponent("Image Layers", isDirectory: true)
+            .appendingPathComponent(documentID.rawValue, isDirectory: true)
+    }
+
+    private func prepareLayerStorage() throws {
+        do {
+            try FileManager.default.createDirectory(
+                at: layerStorageDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            throw ImageRasterImportError.cannotPersistLayer
+        }
+    }
+
+    private func imageDimensions(at url: URL) throws -> CGSize {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw ImageRasterImportError.unreadableImage
+        }
+        return try imageDimensions(in: source)
+    }
+
+    private func imageDimensions(in source: CGImageSource) throws -> CGSize {
+        guard
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+            let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+            width.doubleValue > 0,
+            height.doubleValue > 0
+        else { throw ImageRasterImportError.unreadableImage }
+        return CGSize(width: width.doubleValue, height: height.doubleValue)
+    }
+
+    private func imageType(at url: URL) -> String? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceGetType(source) as String?
+    }
+
+    private func durableExtension(preferred: String, imageType: String?) -> String {
+        let cleaned = preferred.lowercased().filter { $0.isLetter || $0.isNumber }
+        if !cleaned.isEmpty { return cleaned }
+        if let imageType,
+            let type = UTType(imageType),
+            let preferredFilenameExtension = type.preferredFilenameExtension
+        {
+            return preferredFilenameExtension
+        }
+        return "png"
+    }
+
+    private func rasterLayerName(from filename: String) -> String {
+        let value = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "Image" : value
+    }
+
+    private func rasterFrame(_ preferred: CGRect?, imageSize: CGSize) throws -> CGRect {
+        if let preferred {
+            guard isNormalizedRasterFrame(preferred) else {
+                throw ImageRasterImportError.invalidFrame
+            }
+            return preferred.standardized
+        }
+        let canvasAspect = CGFloat(document.canvas.width) / CGFloat(document.canvas.height)
+        let normalizedAspect = (imageSize.width / imageSize.height) / canvasAspect
+        let maximum: CGFloat = 0.68
+        let width = normalizedAspect >= 1 ? maximum : maximum * normalizedAspect
+        let height = normalizedAspect >= 1 ? maximum / normalizedAspect : maximum
+        return CGRect(
+            x: (1 - width) / 2,
+            y: (1 - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func isNormalizedRasterFrame(_ frame: CGRect) -> Bool {
+        let frame = frame.standardized
+        return frame.minX.isFinite && frame.minY.isFinite
+            && frame.width.isFinite && frame.height.isFinite
+            && frame.width > 0 && frame.height > 0
+            && frame.minX >= 0 && frame.minY >= 0
+            && frame.maxX <= 1 && frame.maxY <= 1
+    }
+}
+
+public enum ImageRasterImportError: Error, Sendable, Equatable {
+    case unreadableImage
+    case cannotPersistLayer
+    case invalidFrame
 }

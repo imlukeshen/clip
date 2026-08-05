@@ -15,6 +15,7 @@ enum ReelFFmpegRecipe {
     ReelFFmpegRecipeAnimatedGIF = 2,
     ReelFFmpegRecipeMatroska = 3,
     ReelFFmpegRecipeFLAC = 4,
+    ReelFFmpegRecipeWebP = 5,
 };
 
 /// Returns zero on success and a negative value on failure.

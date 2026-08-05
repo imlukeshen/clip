@@ -12,6 +12,7 @@ final class WorkspaceTabTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: libraryRoot) }
         app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         app.launch()
 
         let routes = [
@@ -19,6 +20,7 @@ final class WorkspaceTabTests: XCTestCase {
             (button: "sidebar-route-videos", workspace: "video"),
             (button: "sidebar-route-photos", workspace: "photo"),
             (button: "sidebar-route-pdfs", workspace: "pdf"),
+            (button: "sidebar-route-text", workspace: "text"),
             (button: "sidebar-route-convert", workspace: "convert"),
         ]
         XCTAssertTrue(
@@ -30,8 +32,7 @@ final class WorkspaceTabTests: XCTestCase {
             for route in routes {
                 app.buttons[route.button].click()
                 XCTAssertTrue(
-                    app.descendants(matching: .any)["workspace-content-\(route.workspace)"]
-                        .waitForExistence(timeout: 1),
+                    app.descendants(matching: .any)["workspace-content-\(route.workspace)"].exists,
                     "\(route.workspace) content did not appear on iteration \(iteration)"
                 )
             }

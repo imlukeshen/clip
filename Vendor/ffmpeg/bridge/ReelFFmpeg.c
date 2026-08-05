@@ -70,6 +70,8 @@ static const char *reel_format_name(enum ReelFFmpegRecipe recipe) {
             return "matroska";
         case ReelFFmpegRecipeFLAC:
             return "flac";
+        case ReelFFmpegRecipeWebP:
+            return "webp";
     }
     return NULL;
 }
@@ -85,6 +87,8 @@ static const char *reel_video_encoder_name(enum ReelFFmpegRecipe recipe) {
             return "gif";
         case ReelFFmpegRecipeFLAC:
             return NULL;
+        case ReelFFmpegRecipeWebP:
+            return "libwebp";
     }
     return NULL;
 }
@@ -307,6 +311,9 @@ static int reel_open_video_pipeline(
     } else if (recipe == ReelFFmpegRecipeWebMAV1) {
         av_dict_set(&options, "cpu-used", "6", 0);
         av_dict_set(&options, "crf", "34", 0);
+    } else if (recipe == ReelFFmpegRecipeWebP) {
+        av_dict_set(&options, "quality", "86", 0);
+        av_dict_set(&options, "compression_level", "4", 0);
     }
     result = avcodec_open2(pipeline->encoder, encoder, &options);
     av_dict_free(&options);

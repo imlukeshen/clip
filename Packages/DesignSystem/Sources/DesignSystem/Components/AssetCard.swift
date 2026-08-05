@@ -17,6 +17,7 @@ public struct AssetCard<Thumbnail: View>: View {
     private let state: AssetCardState
     private let action: () -> Void
     private let openAction: (() -> Void)?
+    private let renameAction: (() -> Void)?
     private let retry: (() -> Void)?
     private let thumbnail: Thumbnail
 
@@ -27,6 +28,7 @@ public struct AssetCard<Thumbnail: View>: View {
         state: AssetCardState = .normal,
         action: @escaping () -> Void,
         openAction: (() -> Void)? = nil,
+        renameAction: (() -> Void)? = nil,
         retry: (() -> Void)? = nil,
         @ViewBuilder thumbnail: () -> Thumbnail
     ) {
@@ -36,6 +38,7 @@ public struct AssetCard<Thumbnail: View>: View {
         self.state = state
         self.action = action
         self.openAction = openAction
+        self.renameAction = renameAction
         self.retry = retry
         self.thumbnail = thumbnail()
     }
@@ -51,7 +54,10 @@ public struct AssetCard<Thumbnail: View>: View {
                                 if case .selected = state {
                                     Image(systemName: "checkmark.circle.fill")
                                         .symbolRenderingMode(.palette)
-                                        .foregroundStyle(.white, theme.palette.accent)
+                                        .foregroundStyle(
+                                            theme.palette.accentOn,
+                                            theme.palette.accent
+                                        )
                                         .font(.system(size: 17))
                                         .padding(7)
                                 }
@@ -76,7 +82,12 @@ public struct AssetCard<Thumbnail: View>: View {
                                 .padding(.vertical, 1)
                                 .padding(.horizontal, 4)
                                 .background(theme.palette.surfaceSunken.opacity(0.8))
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: theme.metrics.radius.small,
+                                        style: .continuous
+                                    )
+                                )
                                 .padding(5)
                         }
                         if case .ingesting(let progress) = state {
@@ -134,11 +145,23 @@ public struct AssetCard<Thumbnail: View>: View {
             RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: theme.metrics.hairline)
         }
-        .shadow(
-            color: .black.opacity(isHovered ? 0.14 : 0.05),
-            radius: isHovered ? 10 : 4,
-            y: isHovered ? 4 : 2
-        )
+        .overlay(alignment: .bottomTrailing) {
+            if isHovered || state.isSelected, let renameAction {
+                Button(action: renameAction) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(ReelPlainButtonStyle())
+                .foregroundStyle(theme.palette.textSecondary)
+                .background(theme.palette.surfaceRaised)
+                .clipShape(Circle())
+                .padding(.trailing, 7)
+                .padding(.bottom, 31)
+                .help("Rename file")
+                .accessibilityLabel("Rename \(title)")
+            }
+        }
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .accessibilityElement(children: .contain)
@@ -149,7 +172,7 @@ public struct AssetCard<Thumbnail: View>: View {
         switch state {
         case .selected: theme.palette.accentLine
         case .failed: theme.palette.danger
-        case .normal, .ingesting: theme.palette.line
+        case .normal, .ingesting: isHovered ? theme.palette.lineStrong : theme.palette.line
         }
     }
 }

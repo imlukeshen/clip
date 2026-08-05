@@ -10,24 +10,16 @@ struct InboxView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceHeader(
-                title: model.isSearching ? "Search" : model.currentFolderName,
-                subtitle: model.isSearching
-                    ? "\(model.searchResultDescription) matching “\(model.searchQuery)”."
-                    : "Captures are added automatically while Clip is open. Pre-session files aren’t imported."
-            )
             if model.isSearching {
                 searchResults
             } else {
                 WorkspaceDropZone(model: model, workspace: .inbox)
                 WatcherStatusStrip(model: model)
-                    .padding(.top, 16)
+                    .padding(.top, 10)
                 ShortcutRow(model: model)
-                    .padding(.top, 12)
-                SectionLabel("Media")
-                    .padding(.top, 28)
-                    .padding(.bottom, 11)
+                    .padding(.top, 10)
                 AssetGrid(model: model, assets: model.visibleAssets)
+                    .padding(.top, 24)
             }
         }
     }
@@ -84,10 +76,8 @@ struct InboxView: View {
                 }
             }
             .scrollIndicators(.hidden)
-            .padding(.bottom, 24)
+            .padding(.bottom, 20)
         }
-        SectionLabel("Media")
-            .padding(.bottom, 11)
         AssetGrid(model: model, assets: model.visibleAssets)
     }
 }
@@ -98,29 +88,41 @@ private struct WatcherStatusStrip: View {
     var body: some View {
         StatusStrip {
             captureStatus
-            StatusItem("Clipboard", state: model.isWatching ? .ok : .pending)
+            historyStatus
             clickTrackingStatus
         }
     }
 
     @ViewBuilder private var captureStatus: some View {
         if !model.isWatching {
-            StatusItem("Opening library", detail: "Capture folder", state: .pending)
+            StatusItem("Opening library", state: .pending)
         } else if model.isCaptureDirectoryWatched {
             StatusItem(
-                "Watching captures",
-                detail: "\(model.captureDirectory.lastPathComponent) · this session",
+                "Watching",
+                detail: model.captureDirectory.lastPathComponent,
                 state: .ok
             )
         } else {
             StatusItem(
                 "Capture access",
-                detail: model.captureDirectory.lastPathComponent,
                 state: .pending,
                 actionTitle: "Choose folder",
                 action: chooseCaptureFolder
             )
         }
+    }
+
+    /// Captures land here rather than in the library, so the count is the honest
+    /// thing to show: it says where they went and that they are temporary.
+    private var historyStatus: some View {
+        StatusItem(
+            "History",
+            detail: model.captureHistory.isEmpty
+                ? "Empty" : "\(model.captureHistory.count)",
+            state: .ok,
+            actionTitle: "Open",
+            action: { AppCommandRouter.run("capture.history", in: model) }
+        )
     }
 
     private func chooseCaptureFolder() {
@@ -141,15 +143,14 @@ private struct WatcherStatusStrip: View {
     @ViewBuilder private var clickTrackingStatus: some View {
         switch model.clickTrackingState {
         case .checking:
-            StatusItem("Checking click track", state: .pending)
+            StatusItem("Click tracking", state: .pending)
         case .enabled(let seconds):
-            StatusItem("Click track", detail: "\(seconds)s buffer", state: .ok)
+            StatusItem("Click tracking", detail: "\(seconds)s", state: .ok)
         case .disabled:
             StatusItem(
                 "Click tracking",
-                detail: "Accessibility required",
                 state: .pending,
-                actionTitle: "Grant access",
+                actionTitle: "Enable",
                 action: model.requestClickTrackingAccess
             )
         }

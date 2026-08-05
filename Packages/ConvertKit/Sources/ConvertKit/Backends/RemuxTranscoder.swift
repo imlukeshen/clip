@@ -1,10 +1,55 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-public actor RemuxTranscoder: Remuxing {
+public actor RemuxTranscoder: Remuxing, ConversionBackend {
     public init() {}
 
+    nonisolated public var id: BackendID { .passthrough }
+    nonisolated public var isAvailable: Bool { true }
+
+    nonisolated public func edges() -> [ConversionEdge] {
+        [
+            ConversionEdge(
+                from: .exact(ConversionFormats.movH264),
+                to: ConversionFormats.mp4H264,
+                backend: id,
+                implementation: .remux,
+                cost: .passthrough,
+                isLossless: true,
+                supportedOptions: [.stripMetadata]
+            ),
+            ConversionEdge(
+                from: .exact(ConversionFormats.mp4H264),
+                to: ConversionFormats.movH264,
+                backend: id,
+                implementation: .remux,
+                cost: .passthrough,
+                isLossless: true,
+                supportedOptions: [.stripMetadata]
+            ),
+        ]
+    }
+
+    public func run(
+        _ step: PlannedStep,
+        input: URL,
+        output: URL
+    ) async -> AsyncThrowingStream<Double, Error> {
+        guard step.backend == id else {
+            return failedStream(ConversionError.invalidInput)
+        }
+        return await remux(input: input, output: output, options: step.options)
+    }
+
     func remux(input: URL, output: URL) async -> AsyncThrowingStream<Double, Error> {
+        await remux(input: input, output: output, options: ConversionOptions())
+    }
+
+    func remux(
+        input: URL,
+        output: URL,
+        options: ConversionOptions
+    ) async -> AsyncThrowingStream<Double, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -13,7 +58,8 @@ public actor RemuxTranscoder: Remuxing {
                         input: input,
                         output: output,
                         preset: AVAssetExportPresetPassthrough,
-                        fileType: AVExport.fileType(for: output)
+                        fileType: AVExport.fileType(for: output),
+                        options: options
                     )
                     continuation.yield(1)
                     continuation.finish()

@@ -19,10 +19,11 @@ public enum FFmpegRecipe: String, Sendable, Equatable, CaseIterable {
     case animatedGIF
     case matroska
     case flac
+    case webP
 }
 
 /// Formats exposed by the conversion queue.
-public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiable {
+public enum TargetFormat: String, Codable, Sendable, Equatable, CaseIterable, Identifiable {
     case mp4H264
     case mp4HEVC
     case movH264
@@ -36,6 +37,15 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
     case jpeg
     case heic
     case tiff
+    case webP
+    case pdf
+    case html
+    case markdown
+    case rtf
+    case plainText
+    case docx
+    case xlsx
+    case pptx
 
     public var id: Self { self }
 
@@ -54,6 +64,15 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .jpeg: "JPEG"
         case .heic: "HEIC"
         case .tiff: "TIFF"
+        case .webP: "WebP"
+        case .pdf: "PDF"
+        case .html: "HTML"
+        case .markdown: "Markdown"
+        case .rtf: "Rich Text"
+        case .plainText: "Plain Text"
+        case .docx: "Word Document"
+        case .xlsx: "Excel Workbook"
+        case .pptx: "PowerPoint Presentation"
         }
     }
 
@@ -69,6 +88,42 @@ public enum TargetFormat: String, Sendable, Equatable, CaseIterable, Identifiabl
         case .jpeg: "jpg"
         case .heic: "heic"
         case .tiff: "tiff"
+        case .webP: "webp"
+        case .pdf: "pdf"
+        case .html: "html"
+        case .markdown: "md"
+        case .rtf: "rtf"
+        case .plainText: "txt"
+        case .docx: "docx"
+        case .xlsx: "xlsx"
+        case .pptx: "pptx"
+        }
+    }
+
+    public var formatID: FormatID {
+        switch self {
+        case .mp4H264: ConversionFormats.mp4H264
+        case .mp4HEVC: ConversionFormats.mp4HEVC
+        case .movH264: ConversionFormats.movH264
+        case .movProRes422: ConversionFormats.movProRes422
+        case .webMVP9: ConversionFormats.webMVP9
+        case .webMAV1: ConversionFormats.webMAV1
+        case .animatedGIF: ConversionFormats.animatedGIF
+        case .matroska: ConversionFormats.matroska
+        case .flac: ConversionFormats.flac
+        case .png: ConversionFormats.png
+        case .jpeg: ConversionFormats.jpeg
+        case .heic: ConversionFormats.heic
+        case .tiff: ConversionFormats.tiff
+        case .webP: ConversionFormats.webP
+        case .pdf: ConversionFormats.pdf
+        case .html: ConversionFormats.html
+        case .markdown: ConversionFormats.markdown
+        case .rtf: ConversionFormats.rtf
+        case .plainText: ConversionFormats.plainText
+        case .docx: ConversionFormats.docx
+        case .xlsx: ConversionFormats.xlsx
+        case .pptx: ConversionFormats.pptx
         }
     }
 }

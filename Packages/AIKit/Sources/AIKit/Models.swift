@@ -13,6 +13,7 @@ public struct ProviderID: RawRepresentable, Codable, Sendable, Hashable, Express
     public static let openAI: Self = "openai"
     public static let google: Self = "google"
     public static let openAICompatible: Self = "openai-compatible"
+    public static let tectonic: Self = "tectonic"
 }
 
 /// The portable interface implemented by every hosted or local model adapter.

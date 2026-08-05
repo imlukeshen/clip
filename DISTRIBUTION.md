@@ -9,6 +9,17 @@ Clip has two generated macOS release channels:
   App Sandbox, user-selected file access, app-scoped bookmarks, and outbound
   network access. Its export destination is App Store Connect upload.
 
+The direct-download build detects an existing LibreOffice installation and can
+write DOCX, XLSX, and PPTX through it. Clip never bundles, downloads, or installs
+LibreOffice. The sandboxed Mac App Store build never exposes those external-tool
+conversion routes, even when LibreOffice is installed on the Mac. App Store
+listing copy must state that Office files can be read, while Office-format output
+is available only in the direct build with LibreOffice installed.
+
+Both channels bundle the same pinned Tree-sitter runtime and 19 syntax grammars.
+The acknowledgements resource contains their permissive-license notices, and
+the release checks reject any Swift package URL outside the reviewed allowlist.
+
 Run `make distribution-check` without credentials to validate both configurations
 and their export plists. `make release` performs the real release and requires:
 

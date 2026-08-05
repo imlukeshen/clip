@@ -1,3 +1,4 @@
+import AppKit
 import DesignSystem
 import ReelAppCore
 import SwiftUI
@@ -23,9 +24,6 @@ struct Titlebar: View {
                 .disabled(!model.canNavigateForward)
 
                 breadcrumb
-                    .font(theme.type.label.font)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
                     .frame(maxWidth: isBrowsing ? 260 : .infinity, alignment: .leading)
 
                 Spacer(minLength: isBrowsing ? 488 : 16)
@@ -58,14 +56,16 @@ struct Titlebar: View {
                 }
                 .help("Command Palette")
 
-                Button {
-                    model.isInspectorVisible.toggle()
-                } label: {
-                    Image(systemName: "sidebar.trailing")
-                        .frame(width: 26, height: 26)
+                if model.showsEditorInspector {
+                    Button {
+                        model.isInspectorVisible.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.trailing")
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(ReelIconButtonStyle(isActive: model.isInspectorVisible))
+                    .help("Toggle Inspector")
                 }
-                .buttonStyle(ReelIconButtonStyle(isActive: model.isInspectorVisible))
-                .help("Toggle Inspector")
             }
 
             if isBrowsing {
@@ -76,6 +76,7 @@ struct Titlebar: View {
         .padding(.horizontal, 16)
         .frame(height: 42)
         .background(theme.palette.surfaceBase)
+        .titlebarDoubleClick()
         .onChange(of: model.searchFocusRequest) { _, _ in
             if isBrowsing { isSearchFocused = true }
         }
@@ -83,7 +84,7 @@ struct Titlebar: View {
 
     private var isBrowsing: Bool {
         model.selectedWorkspace != .convert && model.editor == nil && model.imageEditor == nil
-            && model.pdfEditor == nil
+            && model.pdfEditor == nil && model.textEditor == nil
     }
 
     private var searchField: some View {
@@ -94,14 +95,15 @@ struct Titlebar: View {
                     isSearchFocused ? theme.palette.accent : theme.palette.textTertiary
                 )
                 .accessibilityHidden(true)
-            TextField("Search media and folders", text: $model.searchQuery)
+            TextField("Search", text: $model.searchQuery)
                 .textFieldStyle(.plain)
+                .accessibilityIdentifier("library-search-field")
                 .focused($isSearchFocused)
                 .onExitCommand {
                     if model.isSearching {
                         model.clearSearch()
                     } else {
-                        isSearchFocused = false
+                        dismissSearchFocus()
                     }
                 }
             Group {
@@ -137,25 +139,9 @@ struct Titlebar: View {
         .background {
             ZStack {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.input, style: .continuous)
-                    .fill(
-                        isSearchFocused || isSearchHovered
-                            ? theme.palette.surfacePanel : theme.palette.surfaceRaised
-                    )
-                    .overlay {
-                        LinearGradient(
-                            colors: [.white.opacity(0.035), .clear],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: theme.metrics.radius.input,
-                                style: .continuous
-                            )
-                        )
-                    }
+                    .fill(theme.palette.surfacePanel)
                 OutsideClickMonitor(isActive: isSearchFocused) {
-                    isSearchFocused = false
+                    dismissSearchFocus()
                 }
             }
         }
@@ -171,47 +157,98 @@ struct Titlebar: View {
                     lineWidth: isSearchFocused ? 1 : theme.metrics.hairline
                 )
         }
-        .shadow(
-            color: isSearchFocused
-                ? theme.palette.accent.opacity(0.14) : .black.opacity(0.08),
-            radius: isSearchFocused ? 10 : 4,
-            y: isSearchFocused ? 3 : 1
-        )
-        .animation(.easeInOut(duration: 0.2), value: isSearchFocused)
-        .animation(.easeOut(duration: 0.18), value: isSearchHovered)
+        .animation(.easeInOut(duration: 0.18), value: isSearchFocused)
+        .animation(.easeOut(duration: 0.16), value: isSearchHovered)
         .animation(.easeOut(duration: 0.16), value: model.isSearching)
         .onHover { isSearchHovered = $0 }
     }
 
-    @ViewBuilder private var breadcrumb: some View {
-        if model.selectedWorkspace == .inbox {
-            HStack(spacing: 5) {
-                Button("Media") { model.selectFolder("") }.buttonStyle(ReelPlainButtonStyle())
-                if let path = model.selectedFolderPath {
-                    let parts = path.split(separator: "/").map(String.init)
-                    ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(theme.palette.textTertiary)
-                        Button(part) {
-                            model.selectFolder(parts.prefix(index + 1).joined(separator: "/"))
-                        }
-                        .buttonStyle(ReelPlainButtonStyle())
-                    }
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                    Text("Recent")
-                }
-            }
-        } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
-            Text("Images  ›  \(editor.sourceURL.lastPathComponent)")
-        } else if model.selectedWorkspace == .video, let editor = model.editor {
-            Text("Projects  ›  \(editor.document.name)")
-        } else if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
-            Text("Documents  ›  \(editor.document.title)")
-        } else {
-            Text(model.selectedWorkspace.title)
+    private func dismissSearchFocus() {
+        isSearchFocused = false
+        // SwiftUI can immediately restore the field editor during the same
+        // mouse event. Resigning on the next main-loop turn makes an outside
+        // click reliably dismiss the caret as well as the focus styling.
+        Task { @MainActor in
+            await Task.yield()
+            NSApp.keyWindow?.makeFirstResponder(nil)
         }
+    }
+
+    private var breadcrumb: some View {
+        Breadcrumb(segments: breadcrumbSegments)
+    }
+
+    /// The bar is the only thing that says where you are — the workspaces used
+    /// to repeat it as a heading a few points below, which read as a stutter.
+    private var breadcrumbSegments: [Breadcrumb.Segment] {
+        guard !model.isSearching else {
+            return locationSegments + [Breadcrumb.Segment(title: "Search")]
+        }
+        return locationSegments
+    }
+
+    private var locationSegments: [Breadcrumb.Segment] {
+        if model.selectedWorkspace == .inbox {
+            var segments = [Breadcrumb.Segment(title: "Media") { model.selectFolder("") }]
+            guard let path = model.selectedFolderPath else {
+                return segments + [Breadcrumb.Segment(title: "Recent")]
+            }
+            let parts = path.split(separator: "/").map(String.init)
+            for (index, part) in parts.enumerated() {
+                segments.append(
+                    Breadcrumb.Segment(title: part) {
+                        model.selectFolder(parts.prefix(index + 1).joined(separator: "/"))
+                    }
+                )
+            }
+            return segments
+        }
+        if model.selectedWorkspace == .photo, let editor = model.imageEditor {
+            let name =
+                model.assets.first(where: { $0.id == editor.document.sourceAssetID })?.displayName
+                ?? editor.sourceURL.lastPathComponent
+            return [
+                Breadcrumb.Segment(title: "Images"),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                ),
+            ]
+        }
+        if model.selectedWorkspace == .video, let editor = model.editor {
+            return [
+                Breadcrumb.Segment(title: "Projects"),
+                Breadcrumb.Segment(
+                    title: editor.document.name,
+                    renameAction: { _ = editor.renameProject(to: $0) }
+                ),
+            ]
+        }
+        if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
+            let name =
+                model.assets.first(where: { $0.id == editor.document.sourceAssetID })?.displayName
+                ?? editor.sourceURL.lastPathComponent
+            return [
+                Breadcrumb.Segment(title: "Documents"),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                ),
+            ]
+        }
+        if model.selectedWorkspace == .text, let editor = model.textEditor {
+            let name =
+                editor.activeFile?.assetID.flatMap { assetID in
+                    model.assets.first(where: { $0.id == assetID })?.displayName
+                } ?? editor.activeFile?.relativePath ?? "Untitled"
+            return [
+                Breadcrumb.Segment(title: "Text"),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: model.renameOpenTextFile
+                ),
+            ]
+        }
+        return [Breadcrumb.Segment(title: model.selectedWorkspace.title)]
     }
 }

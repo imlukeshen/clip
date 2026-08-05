@@ -22,7 +22,7 @@ public struct Toast: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                     .stroke(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
             }
-            .shadow(color: .black.opacity(0.14), radius: 12, y: 4)
+            .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
             .accessibilityAddTraits(.isStaticText)
     }
 }

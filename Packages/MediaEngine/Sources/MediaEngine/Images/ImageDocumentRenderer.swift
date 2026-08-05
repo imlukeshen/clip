@@ -43,6 +43,7 @@ public enum ImageExportFormat: Sendable, Equatable {
 
 public enum ImageRenderError: Error, Sendable, Equatable {
     case unreadableSource
+    case unreadableLayer(LayerID)
     case invalidOutputSize
     case renderFailed
     case exportFailed
@@ -93,6 +94,70 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         source: CGImage
     ) throws -> CGImage {
         try renderPreview(document, source: source, pixelSize: document.canvas.size)
+    }
+
+    /// Renders one layer against transparency for responsive canvas transforms.
+    /// The editor can move and resize this lightweight surface while the full
+    /// document graph remains unchanged, then commit one undoable patch on drop.
+    public func renderLayerPreview(
+        _ layer: Layer,
+        canvas: ImageCanvas,
+        pixelSize requestedSize: CGSize? = nil
+    ) throws -> CGImage {
+        let size = requestedSize ?? canvas.size
+        guard size.width.isFinite, size.height.isFinite, size.width >= 1, size.height >= 1 else {
+            throw ImageRenderError.invalidOutputSize
+        }
+        let bounds = CGRect(origin: .zero, size: size.integralSize)
+        var image = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+            .cropped(to: bounds)
+        switch layer {
+        case .raster(var value):
+            // SwiftUI applies the live rotation and blend mode around the
+            // transform handles; keeping this surface axis-aligned avoids
+            // clipping rotated corners during resize.
+            value.rotationDegrees = 0
+            value.blendMode = .normal
+            image = try overlay(value, over: image, bounds: bounds)
+        case .annotation(let value):
+            image = try overlay(value, over: image, bounds: bounds)
+        case .text(let value):
+            image = try overlay(value, over: image, bounds: bounds)
+        case .highlight(let value):
+            image = overlay(value, over: image, bounds: bounds)
+        case .redaction(let value):
+            image = transformPlaceholder(
+                regions: value.regions,
+                color: CIColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.82),
+                over: image,
+                bounds: bounds
+            )
+        case .blur(let value):
+            image = transformPlaceholder(
+                regions: value.regions,
+                color: CIColor(red: 0.72, green: 0.78, blue: 0.9, alpha: 0.28),
+                over: image,
+                bounds: bounds
+            )
+        case .padding:
+            break
+        case .step(let value):
+            image = try overlay(value, over: image, bounds: bounds)
+        }
+
+        let layerBounds = previewBounds(for: layer, canvas: canvas)
+            .renderRect(in: bounds)
+            .integral
+            .intersection(bounds)
+        guard !layerBounds.isEmpty,
+            let rendered = context.createCGImage(
+                image.cropped(to: layerBounds),
+                from: layerBounds,
+                format: .RGBA8,
+                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+            )
+        else { throw ImageRenderError.renderFailed }
+        return rendered
     }
 
     /// Writes only flattened pixels. Source EXIF, GPS, thumbnails, and layer data are never copied.
@@ -152,6 +217,8 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
 
         for layer in document.layers where layer.isVisible {
             switch layer {
+            case .raster(let value):
+                image = try overlay(value, over: image, bounds: bounds)
             case .annotation(let value):
                 image = try overlay(value, over: image, bounds: bounds)
             case .text(let value):
@@ -178,6 +245,77 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
             )
         else { throw ImageRenderError.renderFailed }
         return rendered
+    }
+
+    private func overlay(
+        _ layer: RasterLayer,
+        over image: CIImage,
+        bounds: CGRect
+    ) throws -> CIImage {
+        guard
+            var foreground = CIImage(
+                contentsOf: layer.sourceURL,
+                options: [.applyOrientationProperty: true]
+            ),
+            !foreground.extent.isEmpty
+        else { throw ImageRenderError.unreadableLayer(layer.id) }
+
+        let target = layer.frame.renderRect(in: bounds)
+        foreground = foreground.transformed(
+            by: CGAffineTransform(
+                translationX: -foreground.extent.minX,
+                y: -foreground.extent.minY
+            )
+        )
+        foreground = foreground.transformed(
+            by: CGAffineTransform(
+                scaleX: target.width / foreground.extent.width,
+                y: target.height / foreground.extent.height
+            )
+        )
+
+        if layer.rotationDegrees != 0 {
+            let center = CGPoint(x: foreground.extent.midX, y: foreground.extent.midY)
+            foreground = foreground.transformed(
+                by: CGAffineTransform(translationX: center.x, y: center.y)
+                    .rotated(by: layer.rotationDegrees * .pi / 180)
+                    .translatedBy(x: -center.x, y: -center.y)
+            )
+        }
+        foreground = foreground.transformed(
+            by: CGAffineTransform(
+                translationX: target.midX - foreground.extent.midX,
+                y: target.midY - foreground.extent.midY
+            )
+        )
+
+        if layer.opacity < 1 {
+            foreground = foreground.applyingFilter(
+                "CIColorMatrix",
+                parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: layer.opacity)
+                ]
+            )
+        }
+
+        switch layer.blendMode {
+        case .normal:
+            return foreground.composited(over: image).cropped(to: bounds)
+        case .multiply, .screen, .overlay, .darken, .lighten:
+            let filterName: String
+            switch layer.blendMode {
+            case .multiply: filterName = "CIMultiplyBlendMode"
+            case .screen: filterName = "CIScreenBlendMode"
+            case .overlay: filterName = "CIOverlayBlendMode"
+            case .darken: filterName = "CIDarkenBlendMode"
+            case .lighten: filterName = "CILightenBlendMode"
+            case .normal: preconditionFailure("Handled above")
+            }
+            return foreground.applyingFilter(
+                filterName,
+                parameters: [kCIInputBackgroundImageKey: image]
+            ).cropped(to: bounds)
+        }
     }
 
     private func prepareSource(
@@ -288,23 +426,31 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         try vectorOverlay(bounds: bounds) { context in
             let frame = layer.frame.renderRect(in: bounds)
             let font = CTFontCreateWithName(layer.fontName as CFString, layer.fontSize, nil)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byWordWrapping
+            switch layer.alignment {
+            case .leading: paragraph.alignment = .left
+            case .center: paragraph.alignment = .center
+            case .trailing: paragraph.alignment = .right
+            }
             let attributed = NSAttributedString(
                 string: layer.text,
                 attributes: [
                     kCTFontAttributeName as NSAttributedString.Key: font,
                     kCTForegroundColorAttributeName as NSAttributedString.Key: layer.color.cgColor,
+                    .paragraphStyle: paragraph,
                 ]
             )
-            let line = CTLineCreateWithAttributedString(attributed)
-            let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-            let x: CGFloat
-            switch layer.alignment {
-            case .leading: x = frame.minX
-            case .center: x = frame.midX - width / 2
-            case .trailing: x = frame.maxX - width
-            }
-            context.textPosition = CGPoint(x: x, y: frame.midY - layer.fontSize / 2)
-            CTLineDraw(line, context)
+            let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+            let path = CGMutablePath()
+            path.addRect(frame)
+            let textFrame = CTFramesetterCreateFrame(
+                framesetter,
+                CFRange(location: 0, length: attributed.length),
+                path,
+                nil
+            )
+            CTFrameDraw(textFrame, context)
         }.composited(over: image)
     }
 
@@ -314,6 +460,45 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
                 .cropped(to: region.renderRect(in: bounds))
                 .composited(over: result)
         }
+    }
+
+    private func transformPlaceholder(
+        regions: [CGRect],
+        color: CIColor,
+        over image: CIImage,
+        bounds: CGRect
+    ) -> CIImage {
+        regions.reduce(image) { result, region in
+            CIImage(color: color)
+                .cropped(to: region.renderRect(in: bounds))
+                .composited(over: result)
+        }
+    }
+
+    private func previewBounds(for layer: Layer, canvas: ImageCanvas) -> CGRect {
+        switch layer {
+        case .raster(let value): return value.frame
+        case .annotation(let value): return value.bounds
+        case .text(let value): return value.frame
+        case .highlight(let value): return union(value.regions)
+        case .redaction(let value): return union(value.regions)
+        case .blur(let value): return union(value.regions)
+        case .padding: return CGRect(x: 0, y: 0, width: 1, height: 1)
+        case .step(let value):
+            let width = CGFloat(value.diameter) / CGFloat(canvas.width)
+            let height = CGFloat(value.diameter) / CGFloat(canvas.height)
+            return CGRect(
+                x: value.position.x - width / 2,
+                y: value.position.y - height / 2,
+                width: width,
+                height: height
+            )
+        }
+    }
+
+    private func union(_ rects: [CGRect]) -> CGRect {
+        guard let first = rects.first else { return .zero }
+        return rects.dropFirst().reduce(first) { $0.union($1) }
     }
 
     private func overlay(_ layer: StepLayer, over image: CIImage, bounds: CGRect) throws -> CIImage

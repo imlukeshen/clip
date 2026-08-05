@@ -77,6 +77,12 @@ public struct PDFTextLayer: Codable, Sendable, Equatable {
     public var font: PDFFontDescriptor
     public var fontSize: Double
     public var color: RGBA
+    /// Links this edit to a real text object in the immutable source PDF.
+    ///
+    /// When present, PDFEngine replaces that page object instead of painting a
+    /// second text box over the page. Keeping the original value makes the edit
+    /// deterministic across save, undo, and export without mutating the source.
+    public var sourceReference: PDFSourceTextReference?
 
     public init(
         id: PDFLayerID = .generate(),
@@ -84,7 +90,8 @@ public struct PDFTextLayer: Codable, Sendable, Equatable {
         frame: CGRect,
         font: PDFFontDescriptor = PDFFontDescriptor(postScriptName: "Helvetica"),
         fontSize: Double = 12,
-        color: RGBA = .black
+        color: RGBA = .black,
+        sourceReference: PDFSourceTextReference? = nil
     ) {
         self.id = id
         self.text = text
@@ -92,6 +99,24 @@ public struct PDFTextLayer: Codable, Sendable, Equatable {
         self.font = font
         self.fontSize = fontSize
         self.color = color
+        self.sourceReference = sourceReference
+    }
+}
+
+public struct PDFSourceTextReference: Codable, Sendable, Equatable {
+    /// Stable while the source PDF remains immutable, which is a document-model invariant.
+    public var pageObjectIndex: Int
+    public var originalText: String
+    public var originalFontPostScriptName: String
+
+    public init(
+        pageObjectIndex: Int,
+        originalText: String,
+        originalFontPostScriptName: String
+    ) {
+        self.pageObjectIndex = pageObjectIndex
+        self.originalText = originalText
+        self.originalFontPostScriptName = originalFontPostScriptName
     }
 }
 
@@ -325,8 +350,13 @@ public struct PDFEditDocument: EditableDocument {
         let regions: [CGRect]
         switch layer {
         case .text(let text):
-            guard !text.text.isEmpty, text.fontSize.isFinite, text.fontSize > 0 else {
+            guard !text.text.isEmpty || text.sourceReference != nil,
+                text.fontSize.isFinite, text.fontSize > 0
+            else {
                 throw PDFDocumentError.invalidTextLayer(text.id)
+            }
+            if let reference = text.sourceReference, reference.pageObjectIndex < 0 {
+                throw PDFDocumentError.invalidSourceTextReference(text.id)
             }
             try validateColor(text.color)
             regions = [text.frame]
@@ -368,6 +398,7 @@ public enum PDFDocumentError: Error, Sendable, Equatable {
     case invalidSourcePage(Int)
     case invalidPageSize(PDFPageID)
     case invalidTextLayer(PDFLayerID)
+    case invalidSourceTextReference(PDFLayerID)
     case invalidLayerGeometry(PDFLayerID)
     case invalidColor
 }

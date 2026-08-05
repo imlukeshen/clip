@@ -46,4 +46,21 @@ public enum SampledFileHasher {
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Fingerprints in-memory bytes with the identical scheme ``hash(_:)-6``
+    /// applies on disk, so a text file saved from the editor dedupes against the
+    /// same bytes ingested from a file. Used on the writable-text save path,
+    /// where the contents exist only in memory until they are written.
+    public static func hash(_ data: Data) -> String {
+        let size = UInt64(data.count)
+        var hasher = SHA256()
+        hasher.update(data: data.prefix(sampleSize))
+        let lastOffset = size > UInt64(sampleSize) ? Int(size) - sampleSize : 0
+        hasher.update(data: data.suffix(from: lastOffset).prefix(sampleSize))
+        var littleEndianSize = size.littleEndian
+        withUnsafeBytes(of: &littleEndianSize) { bytes in
+            hasher.update(bufferPointer: bytes)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }

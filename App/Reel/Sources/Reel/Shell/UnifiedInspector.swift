@@ -8,169 +8,294 @@ import SwiftUI
 struct UnifiedInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
+    let width: Double
 
     var body: some View {
         Group {
             if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
-                PDFLayerInspector(editor: editor)
+                PDFLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
                 ImageLayerInspector(editor: editor)
             } else if model.selectedWorkspace == .video, let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
+            } else if model.selectedWorkspace == .text, let editor = model.textEditor {
+                TextInspector(model: model, editor: editor)
             } else {
-                libraryInspector
+                // The library no longer has a persistent inspector — "Get Info"
+                // on an item replaces it — and `MainWindow` only mounts this rail
+                // when an editor is open, so this branch is unreachable in
+                // practice and renders nothing rather than an empty pane.
+                EmptyView()
             }
         }
-        .frame(width: model.imageEditor == nil ? 280 : 300)
+        .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipped()
         .background(theme.palette.surfacePanel)
     }
+}
 
-    @ViewBuilder private var libraryInspector: some View {
-        let selected = model.assets.filter { model.selection.selected.contains($0.id) }
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Inspector").font(theme.type.label.font)
+/// Shared inspector chat input, shaped like a compact standalone composer
+/// instead of a full-width toolbar. Keeping this in one component prevents the
+/// text and video inspectors from drifting by a pixel or a corner radius.
+struct AssistantChatComposer: View {
+    @Environment(\.theme) private var theme
+    @Binding var draft: String
+    let isWorking: Bool
+    let send: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+            TextField("Ask Clip anything…", text: $draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(theme.type.body.font)
+                .lineLimit(1...5)
+                .onSubmit(send)
+
+            HStack(spacing: theme.metrics.spacing.sm) {
+                Text("Return to send")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
                 Spacer()
-                Text("\(selected.count) selected")
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-            }
-            Divider().overlay(theme.palette.line)
-            if selected.count == 1, let asset = selected.first {
-                AssetThumbnailSummary(asset: asset, root: model.libraryRoot)
-                Text(asset.displayName)
-                    .font(theme.type.body.font)
-                    .lineLimit(3)
-                LabeledContent("Kind", value: asset.kind.rawValue.capitalized)
-                LabeledContent(
-                    "Size",
-                    value: ByteCountFormatter.string(
-                        fromByteCount: asset.byteSize, countStyle: .file)
-                )
-                if let duration = asset.duration {
-                    LabeledContent("Duration", value: String(format: "%.2fs", duration.seconds))
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.palette.accentOn)
+                        .frame(width: 28, height: 28)
+                        .background(theme.palette.accent)
+                        .clipShape(Circle())
                 }
-                if let width = asset.width, let height = asset.height {
-                    LabeledContent("Dimensions", value: "\(width) × \(height)")
-                }
-                LabeledContent("Modified", value: asset.createdAt.formatted())
-                Text(asset.relativePath)
-                    .font(theme.type.numeric.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .textSelection(.enabled)
-                Button("Reveal in Finder") { model.revealSelectionInFinder() }
-                    .buttonStyle(ReelBorderedButtonStyle())
-            } else if selected.count > 1 {
-                Text("\(selected.count) files")
-                    .font(theme.type.title.font)
-                LabeledContent(
-                    "Combined size",
-                    value: ByteCountFormatter.string(
-                        fromByteCount: selected.reduce(0) { $0 + $1.byteSize },
-                        countStyle: .file
-                    )
-                )
-                Button("Reveal in Finder") { model.revealSelectionInFinder() }
-                    .buttonStyle(ReelBorderedButtonStyle())
-            } else {
-                EmptyState(
-                    headline: "Nothing selected",
-                    body: "Select a file to inspect its metadata."
-                )
+                .buttonStyle(.plain)
+                .disabled(isDisabled)
+                .opacity(isDisabled ? 0.4 : 1)
+                .accessibilityIdentifier("assistant-chat-send")
             }
-            Spacer()
         }
-        .padding(14)
+        .padding(theme.metrics.spacing.md)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
+        .padding(theme.metrics.spacing.md)
+        .accessibilityIdentifier("assistant-chat-composer")
+    }
+
+    private var isDisabled: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking
+    }
+}
+
+struct AssistantChatBubble: View {
+    @Environment(\.theme) private var theme
+    let message: AssistantMessage
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            if message.role == .user { Spacer(minLength: 28) }
+            Text(message.text)
+                .font(theme.type.caption.font)
+                .foregroundStyle(
+                    message.role == .status ? theme.palette.textTertiary : theme.palette.textPrimary
+                )
+                .textSelection(.enabled)
+                .padding(.horizontal, theme.metrics.spacing.md)
+                .padding(.vertical, 9)
+                .background(background)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                )
+            if message.role != .user { Spacer(minLength: 28) }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var background: Color {
+        switch message.role {
+        case .user: theme.palette.accentDim
+        case .assistant: theme.palette.surfaceRaised
+        case .status: theme.palette.surfaceRaised.opacity(0.55)
+        }
     }
 }
 
 private struct PDFLayerInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("PDF Edits").font(theme.type.label.font)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("PDF Inspector")
+                    .font(theme.type.title.font)
                 Spacer()
-                Text("\(editor.selectedPage?.layers.count ?? 0)")
+                Text("Page \(editor.selectedPageNumber)")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(theme.palette.surfaceRaised)
+                    .clipShape(Capsule())
             }
-            if let layers = editor.selectedPage?.layers, !layers.isEmpty {
-                ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(Array(layers.reversed())) { layer in
-                            Button {
-                                editor.selectLayer(layer.id)
-                            } label: {
-                                HStack {
-                                    Image(systemName: symbol(for: layer))
-                                    Text(layer.name)
-                                    Spacer()
-                                }
-                                .padding(6)
-                                .background(
-                                    editor.selectedLayerID == layer.id
-                                        ? theme.palette.accentDim : Color.clear
-                                )
-                                .clipShape(
-                                    RoundedRectangle(
-                                        cornerRadius: theme.metrics.radius.control,
-                                        style: .continuous
-                                    )
-                                )
-                            }
-                            .buttonStyle(ReelPlainButtonStyle())
-                        }
-                    }
+            .padding(.horizontal, 14)
+            .frame(height: EditorChromeMetrics.headerHeight)
+
+            Divider().overlay(theme.palette.line)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    directTextCard
+                    editsCard
+                    fontsCard
+                    recognitionCard
                 }
-            } else {
-                EmptyState(
-                    headline: "No page edits",
-                    body: "Choose Text, Highlight, or Redact and drag on the page."
-                )
+                .padding(14)
             }
+            .scrollIndicators(.visible)
+        }
+    }
+
+    @ViewBuilder private var directTextCard: some View {
+        inspectorCard("Edit text", symbol: "character.cursor.ibeam") {
             if case .text(let text) = editor.selectedLayer {
-                Divider().overlay(theme.palette.line)
-                Text("Text").font(theme.type.label.font)
                 TextField(
-                    "Text",
+                    "PDF text",
                     text: Binding(
                         get: { text.text },
                         set: { editor.updateSelectedText($0) }
                     ),
                     axis: .vertical
                 )
-                LabeledContent("Font", value: text.font.postScriptName)
+                .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .padding(9)
+                .background(theme.palette.surfaceSunken)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.control,
+                        style: .continuous
+                    )
+                )
+                LabeledContent("Font", value: text.font.familyName ?? text.font.postScriptName)
                     .font(theme.type.caption.font)
-                if text.font.isEmbedded {
-                    Text(text.font.isSubset ? "Embedded subset" : "Embedded font")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(
-                            text.font.isSubset ? theme.palette.click : theme.palette.success
-                        )
+                HStack(spacing: 6) {
+                    Image(systemName: fontStatusSymbol(text.font))
+                    Text(fontStatus(text.font))
+                    if editor.isResolvingFont { ProgressView().controlSize(.mini) }
                 }
+                .font(theme.type.micro.font)
+                .foregroundStyle(
+                    text.font.isSubset ? theme.palette.click : theme.palette.textTertiary
+                )
+                if text.sourceReference != nil {
+                    Text(
+                        "This changes the original PDF text object and stays selectable on export."
+                    )
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                }
+                if text.font.isSubset || !text.font.isEmbedded {
+                    Button("Resolve font", action: editor.retrySelectedFontResolution)
+                        .buttonStyle(ReelBorderedButtonStyle())
+                        .disabled(editor.isResolvingFont)
+                }
+            } else if let block = editor.selectedSourceTextBlock {
+                Text(block.text)
+                    .font(theme.type.body.font)
+                    .textSelection(.enabled)
+                Text("Double-click the outlined text on the page to edit it in place.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            } else {
+                Text("Select text on the page, then double-click to type directly into the PDF.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
             }
-            if editor.selectedLayer != nil {
-                Button("Delete edit", role: .destructive) { editor.removeSelectedLayer() }
+        }
+    }
+
+    private var editsCard: some View {
+        inspectorCard("Page edits", symbol: "square.3.layers.3d") {
+            if let layers = editor.selectedPage?.layers, !layers.isEmpty {
+                LazyVStack(spacing: 4) {
+                    ForEach(Array(layers.reversed())) { layer in
+                        Button {
+                            editor.selectLayer(layer.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: symbol(for: layer))
+                                    .frame(width: 16)
+                                Text(layer.name)
+                                Spacer()
+                                if editor.selectedLayerID == layer.id {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(theme.palette.accent)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .frame(height: 32)
+                            .background(
+                                editor.selectedLayerID == layer.id
+                                    ? theme.palette.accentDim : Color.clear
+                            )
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: theme.metrics.radius.control,
+                                    style: .continuous
+                                )
+                            )
+                        }
+                        .buttonStyle(ReelPlainButtonStyle())
+                    }
+                }
+                if editor.selectedLayer != nil {
+                    Button("Delete selected edit", role: .destructive) {
+                        editor.removeSelectedLayer()
+                    }
                     .buttonStyle(ReelPlainButtonStyle())
+                }
+            } else {
+                Text("No edits on this page yet.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
             }
-            Divider().overlay(theme.palette.line)
-            Text("Fonts on source page").font(theme.type.label.font)
+        }
+    }
+
+    private var fontsCard: some View {
+        inspectorCard("Typography", symbol: "textformat") {
+            Toggle(
+                "Resolve missing fonts automatically",
+                isOn: Binding(
+                    get: { model.isPDFFontAutoDownloadEnabled },
+                    set: { model.setPDFFontAutoDownloadEnabled($0) }
+                )
+            )
+            .toggleStyle(.switch)
+            .controlSize(.small)
             if let fonts = editor.pageAnalysis?.fonts, !fonts.isEmpty {
                 ForEach(fonts, id: \.postScriptName) { font in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(font.postScriptName).font(theme.type.caption.font)
-                        Text(fontStatus(font))
-                            .font(theme.type.micro.font)
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: fontStatusSymbol(font))
                             .foregroundStyle(
                                 font.isSubset ? theme.palette.click : theme.palette.textTertiary
                             )
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(font.familyName ?? font.postScriptName)
+                                .font(theme.type.caption.font)
+                            Text(fontStatus(font))
+                                .font(theme.type.micro.font)
+                                .foregroundStyle(theme.palette.textTertiary)
+                        }
                     }
                 }
             } else {
-                Text("No embedded text fonts detected.")
+                Text("No editable text objects were detected. OCR can still recognize a scan.")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
@@ -179,14 +304,17 @@ private struct PDFLayerInspector: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.click)
             }
-            Divider().overlay(theme.palette.line)
-            Text("On-device text recognition").font(theme.type.label.font)
+        }
+    }
+
+    private var recognitionCard: some View {
+        inspectorCard("Scanned text", symbol: "doc.text.viewfinder") {
             if let text = editor.selectedPage?.ocrText {
-                Text(text.isEmpty ? "No text recognized" : "\(text.count) characters saved")
+                Text(text.isEmpty ? "No text recognized" : "\(text.count) characters recognized")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             } else {
-                Text("OCR has not been run for this page.")
+                Text("Run on-device OCR when the page is a scan instead of selectable text.")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
@@ -195,9 +323,25 @@ private struct PDFLayerInspector: View {
             }
             .buttonStyle(ReelBorderedButtonStyle())
             .disabled(editor.isRecognizingText)
-            Spacer()
         }
-        .padding(14)
+    }
+
+    private func inspectorCard<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol)
+                .font(theme.type.label.font)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+        )
     }
 
     private func symbol(for layer: PDFLayer) -> String {
@@ -212,6 +356,10 @@ private struct PDFLayerInspector: View {
         if font.isSubset { return "Embedded subset - new glyphs may be unavailable" }
         return font.isEmbedded ? "Embedded" : "Referenced"
     }
+
+    private func fontStatusSymbol(_ font: PDFFontDescriptor) -> String {
+        font.isSubset ? "exclamationmark.triangle" : "checkmark.circle"
+    }
 }
 
 private struct ImageLayerInspector: View {
@@ -224,6 +372,9 @@ private struct ImageLayerInspector: View {
     @State private var blurValue = 18.0
     @State private var paddingValue = 0.08
     @State private var radiusValue = 18.0
+    @State private var rasterNameDraft = ""
+    @State private var rasterOpacityValue = 1.0
+    @State private var rasterRotationValue = 0.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -240,7 +391,7 @@ private struct ImageLayerInspector: View {
                     .clipShape(Capsule())
             }
             .padding(.horizontal, 14)
-            .frame(height: 48)
+            .frame(height: EditorChromeMetrics.headerHeight)
 
             Divider().overlay(theme.palette.line)
 
@@ -256,11 +407,6 @@ private struct ImageLayerInspector: View {
 
                     layerListSection
                     smartActionsSection
-
-                    Text("Edits are non-destructive. Your original screenshot is never modified.")
-                        .font(theme.type.micro.font)
-                        .foregroundStyle(theme.palette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(14)
             }
@@ -304,19 +450,7 @@ private struct ImageLayerInspector: View {
     private var noSelectionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Properties", symbol: "slider.horizontal.3")
-            HStack(spacing: 9) {
-                Image(systemName: "cursorarrow.click")
-                    .foregroundStyle(theme.palette.textTertiary)
-                Text("Select a layer on the canvas or from the list to edit its properties.")
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(10)
-            .background(theme.palette.surfaceRaised.opacity(0.7))
-            .clipShape(
-                RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-            )
+            EmptyState(headline: "No layer selected")
         }
     }
 
@@ -372,6 +506,41 @@ private struct ImageLayerInspector: View {
 
     @ViewBuilder private func selectedProperties(_ layer: Layer) -> some View {
         switch layer {
+        case .raster(let value):
+            TextField("Layer name", text: $rasterNameDraft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { editor.renameSelectedRasterLayer(to: rasterNameDraft) }
+
+            valueSlider(
+                title: "Opacity",
+                value: $rasterOpacityValue,
+                range: 0...1,
+                step: 0.01,
+                suffix: "%",
+                displayValue: Int((rasterOpacityValue * 100).rounded())
+            ) { editor.updateSelectedRasterTransform(opacity: rasterOpacityValue) }
+
+            valueSlider(
+                title: "Rotate",
+                value: $rasterRotationValue,
+                range: -180...180,
+                step: 1,
+                suffix: "°"
+            ) { editor.updateSelectedRasterTransform(rotationDegrees: rasterRotationValue) }
+
+            Picker(
+                "Blend",
+                selection: Binding(
+                    get: { value.blendMode },
+                    set: { editor.updateSelectedRasterTransform(blendMode: $0) }
+                )
+            ) {
+                ForEach(RasterBlendMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
         case .annotation:
             colorRow(for: layer)
             valueSlider(
@@ -445,11 +614,7 @@ private struct ImageLayerInspector: View {
                     .foregroundStyle(theme.palette.textTertiary)
             }
             if editor.document.layers.isEmpty {
-                Text("Your annotations, text, redactions, and effects will appear here.")
-                    .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
+                EmptyState(headline: "No layers")
             } else {
                 LazyVStack(spacing: 3) {
                     ForEach(Array(editor.document.layers.reversed())) { layer in
@@ -516,12 +681,7 @@ private struct ImageLayerInspector: View {
                 editor.selectLayer(layer.id)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: layer.inspectorSymbol)
-                        .foregroundStyle(
-                            editor.selectedLayerID == layer.id
-                                ? theme.palette.accent : theme.palette.textTertiary
-                        )
-                        .frame(width: 16)
+                    layerThumbnail(layer)
                     Text(layer.kindName)
                         .lineLimit(1)
                     Spacer()
@@ -547,6 +707,44 @@ private struct ImageLayerInspector: View {
         .clipShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
         )
+        .draggable(layer.id.rawValue)
+        .dropDestination(for: String.self) { values, _ in
+            guard let rawID = values.first,
+                let source = editor.document.layers.first(where: { $0.id.rawValue == rawID }),
+                let sourceIndex = editor.document.layers.firstIndex(where: { $0.id == source.id }),
+                let destinationIndex = editor.document.layers.firstIndex(where: {
+                    $0.id == layer.id
+                })
+            else { return false }
+            editor.moveLayer(source.id, by: destinationIndex - sourceIndex)
+            editor.selectLayer(source.id)
+            return true
+        }
+    }
+
+    @ViewBuilder private func layerThumbnail(_ layer: Layer) -> some View {
+        if case .raster(let value) = layer, let image = NSImage(contentsOf: value.sourceURL) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 24, height: 24)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.small, style: .continuous
+                    )
+                    .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+                }
+        } else {
+            Image(systemName: layer.inspectorSymbol)
+                .foregroundStyle(
+                    editor.selectedLayerID == layer.id
+                        ? theme.palette.accent : theme.palette.textTertiary
+                )
+                .frame(width: 24)
+        }
     }
 
     private func sectionHeader(_ title: String, symbol: String) -> some View {
@@ -630,6 +828,10 @@ private struct ImageLayerInspector: View {
     private func loadSelectedValues() {
         guard let layer = editor.selectedLayer else { return }
         switch layer {
+        case .raster(let value):
+            rasterNameDraft = value.name
+            rasterOpacityValue = value.opacity
+            rasterRotationValue = value.rotationDegrees
         case .annotation(let value): strokeValue = value.strokeWidth
         case .text(let value):
             textDraft = value.text
@@ -646,6 +848,7 @@ private struct ImageLayerInspector: View {
 extension Layer {
     fileprivate var inspectorSymbol: String {
         switch self {
+        case .raster: "photo"
         case .annotation(let value):
             switch value.kind {
             case .arrow: "arrow.up.right"
@@ -665,11 +868,25 @@ extension Layer {
 
     fileprivate var inspectorColor: RGBA? {
         switch self {
+        case .raster: nil
         case .annotation(let value): value.strokeColor
         case .text(let value): value.color
         case .highlight(let value): value.color
         case .step(let value): value.fillColor
         case .redaction, .blur, .padding: nil
+        }
+    }
+}
+
+extension RasterBlendMode {
+    fileprivate var displayName: String {
+        switch self {
+        case .normal: "Normal"
+        case .multiply: "Multiply"
+        case .screen: "Screen"
+        case .overlay: "Overlay"
+        case .darken: "Darken"
+        case .lighten: "Lighten"
         }
     }
 }
@@ -688,31 +905,6 @@ extension Color {
             g: Double(color.greenComponent),
             b: Double(color.blueComponent),
             a: Double(color.alphaComponent)
-        )
-    }
-}
-
-private struct AssetThumbnailSummary: View {
-    @Environment(\.theme) private var theme
-    let asset: AssetRecord
-    let root: URL
-
-    var body: some View {
-        Group {
-            if let path = asset.thumbnailPath,
-                let image = NSImage(contentsOf: root.appendingPathComponent(path))
-            {
-                Image(nsImage: image).resizable().scaledToFill()
-            } else {
-                Image(systemName: "doc.richtext").font(.system(size: 32))
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 132)
-        .clipped()
-        .background(Color.black.opacity(0.2))
-        .clipShape(
-            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
         )
     }
 }

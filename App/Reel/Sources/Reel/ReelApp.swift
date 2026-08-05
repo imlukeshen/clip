@@ -1,5 +1,7 @@
 import AIKit
+import AppKit
 import CaptureKit
+import ConvertKit
 import Foundation
 import ReelAppCore
 import SwiftUI
@@ -7,14 +9,17 @@ import SwiftUI
 @main
 struct ClipApp: App {
     @State private var model: AppModel
+    @NSApplicationDelegateAdaptor(ClipAppDelegate.self) private var appDelegate
 
     init() {
         #if APPSTORE_BUILD
             let shortcutReader = ShortcutReader(sandboxed: true)
             let defaultLibraryRoot = AppModel.sandboxLibraryRoot
+            let conversionCapabilities = ConversionCapabilities.appStore
         #else
             let shortcutReader = ShortcutReader(sandboxed: false)
             let defaultLibraryRoot = AppModel.defaultLibraryRoot
+            let conversionCapabilities = ConversionCapabilities.direct()
         #endif
         #if DEBUG
             let libraryRoot =
@@ -24,15 +29,24 @@ struct ClipApp: App {
         #else
             let libraryRoot = defaultLibraryRoot
         #endif
-        _model = State(
-            initialValue: AppModel(libraryRoot: libraryRoot, shortcutReader: shortcutReader)
+        let model = AppModel(
+            libraryRoot: libraryRoot,
+            shortcutReader: shortcutReader,
+            conversionCapabilities: conversionCapabilities
         )
+        _model = State(initialValue: model)
+        ClipAppDelegate.prepare(model: model)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            ClipAppDelegate.ensureMainWindow()
+        }
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("Clip", id: "main") {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
+                .onAppear { appDelegate.install(model: model) }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
@@ -55,9 +69,39 @@ struct ClipApp: App {
                 Button(commandTitle("navigation.pdf")) {
                     AppCommandRouter.run("navigation.pdf", in: model)
                 }
+                Button(commandTitle("navigation.text")) {
+                    AppCommandRouter.run("navigation.text", in: model)
+                }
                 Button(commandTitle("navigation.convert")) {
                     AppCommandRouter.run("navigation.convert", in: model)
                 }
+            }
+            CaptureCommands(model: model)
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") {
+                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("x", modifiers: .command)
+                .disabled(model.editor != nil)
+                Button("Copy") {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: .command)
+                .disabled(model.editor != nil)
+                Button(
+                    model.editor != nil
+                        ? "Paste into Timeline"
+                        : (model.imageEditor != nil ? "Paste as Image Layer" : "Paste")
+                ) {
+                    if model.editor != nil {
+                        model.pasteMediaIntoTimeline()
+                    } else if model.imageEditor != nil {
+                        model.pasteImageIntoCanvas()
+                    } else {
+                        NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                    }
+                }
+                .keyboardShortcut("v", modifiers: .command)
             }
             CommandGroup(replacing: .undoRedo) {
                 Button(commandTitle("edit.undo")) {
@@ -65,16 +109,20 @@ struct ClipApp: App {
                 }
                 .keyboardShortcut("z", modifiers: .command)
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil
-                        && !model.undoManager.canUndo
+                    !model.renamingAssetIDs.isEmpty
+                        || (model.editor == nil && model.imageEditor == nil
+                            && model.pdfEditor == nil && model.textEditor == nil
+                            && !model.undoManager.canUndo)
                 )
                 Button(commandTitle("edit.redo")) {
                     AppCommandRouter.run("edit.redo", in: model)
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil
-                        && !model.undoManager.canRedo
+                    !model.renamingAssetIDs.isEmpty
+                        || (model.editor == nil && model.imageEditor == nil
+                            && model.pdfEditor == nil && model.textEditor == nil
+                            && !model.undoManager.canRedo)
                 )
             }
             CommandMenu("Assets") {
@@ -84,10 +132,15 @@ struct ClipApp: App {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(
                     model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
+                        || model.textEditor != nil
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {
-                    AppCommandRouter.run("asset.selectAll", in: model)
+                    if model.textEditor != nil {
+                        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                    } else {
+                        AppCommandRouter.run("asset.selectAll", in: model)
+                    }
                 }
                 .keyboardShortcut("a", modifiers: .command)
                 Button(commandTitle("asset.deselectAll")) {

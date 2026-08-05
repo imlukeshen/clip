@@ -17,8 +17,14 @@ let package = Package(
             name: "PDFEngine",
             dependencies: [
                 "CoreModel",
+                "PDFiumSupport",
                 .product(name: "PDFium", package: "pdfium"),
             ]
+        ),
+        .target(
+            name: "PDFiumSupport",
+            dependencies: [.product(name: "PDFium", package: "pdfium")],
+            publicHeadersPath: "include"
         ),
         .testTarget(name: "PDFEngineTests", dependencies: ["PDFEngine", "CoreModel"]),
     ],

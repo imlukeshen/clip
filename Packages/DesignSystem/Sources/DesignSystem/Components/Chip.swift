@@ -22,12 +22,7 @@ public struct Chip: View {
             .padding(.horizontal, 11)
             .background(isHovered ? theme.palette.surfaceRaised : theme.palette.surfacePanel)
             .clipShape(Capsule())
-            .shadow(
-                color: isHovered && isEnabled ? .black.opacity(0.1) : .clear,
-                radius: 4,
-                y: 1
-            )
-            .animation(.easeOut(duration: 0.18), value: isHovered)
+            .animation(.easeOut(duration: 0.16), value: isHovered)
             .onHover { isHovered = $0 }
     }
 

@@ -6,7 +6,13 @@ let package = Package(
     name: "AIKit",
     platforms: [.macOS(.v14)],
     products: [.library(name: "AIKit", targets: ["AIKit"])],
-    dependencies: [.package(path: "../CoreModel")],
+    dependencies: [
+        .package(path: "../CoreModel"),
+        .package(
+            url: "https://github.com/swiftlang/swift-docc-plugin",
+            from: "1.5.0"
+        ),
+    ],
     targets: [
         .target(
             name: "AIKit",

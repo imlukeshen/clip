@@ -52,7 +52,7 @@ struct ConversionQueueItemTests {
         #expect(item.status == .converting)
     }
 
-    @Test("Images expose ImageIO targets and PDFs route to their workspace")
+    @Test("Images and PDFs expose their native graph backends")
     func mediaFamiliesStayTruthful() {
         let image = ConversionQueueItem(
             asset: record(kind: .image, container: "png", codec: nil),
@@ -66,10 +66,42 @@ struct ConversionQueueItemTests {
         #expect(image.plan.backend == .imageIO(.jpeg))
         #expect(image.plan.estimate == .instant)
         #expect(!image.availableTargets.contains(.mp4H264))
-        #expect(
-            document.plan.backend
-                == .unsupported("Use the PDF workspace to export Markdown or an edited PDF")
+        #expect(document.plan.backend == .pdfKit)
+    }
+
+    @Test("Multi-step plans stay visible and failed rows are retryable")
+    func visiblePlanAndRetry() {
+        var item = ConversionQueueItem(
+            asset: record(kind: .document, container: "docx", codec: nil),
+            inputURL: URL(fileURLWithPath: "/tmp/Proposal.docx"),
+            target: .pdf,
+            status: .failed("The document is password protected.")
         )
+
+        #expect(item.planDescription.contains("DOCX → HTML → PDF"))
+        #expect(item.planDescription.contains("2 steps"))
+        #expect(item.planDescription.contains("Rich Text + WebKit"))
+        item.retry()
+        #expect(item.status == .waiting)
+    }
+
+    @Test("Office targets are present only for direct builds with LibreOffice")
+    func officeTargetsFollowDistributionCapabilities() {
+        let asset = record(kind: .document, container: "pdf", codec: nil)
+        let input = URL(fileURLWithPath: "/tmp/Notes.pdf")
+        let appStore = ConversionQueueItem(asset: asset, inputURL: input)
+        let direct = ConversionQueueItem(
+            asset: asset,
+            inputURL: input,
+            capabilities: .direct(
+                libreOfficeExecutable: URL(fileURLWithPath: "/usr/bin/true")
+            )
+        )
+
+        #expect(!appStore.availableTargets.contains(.docx))
+        #expect(!appStore.availableTargets.contains(.pptx))
+        #expect(direct.availableTargets.contains(.docx))
+        #expect(direct.availableTargets.contains(.pptx))
     }
 
     private func record(

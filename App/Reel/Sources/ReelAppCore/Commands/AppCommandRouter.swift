@@ -11,7 +11,9 @@ public enum AppCommandOutcome: Sendable, Equatable {
 public enum AppCommandRouter {
     public static let menuCommandIDs: [CommandID] = [
         "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
-        "navigation.pdf", "navigation.convert", "edit.undo", "edit.redo", "asset.selectAll",
+        "navigation.pdf", "navigation.text", "navigation.convert", "capture.history",
+        "capture.clearHistory",
+        "edit.undo", "edit.redo", "asset.selectAll",
         "asset.deselectAll", "asset.search", "asset.quickLook", "asset.reveal", "asset.delete",
         "timeline.toggleSnapping", "timeline.rippleDelete", "timeline.roll", "timeline.slip",
         "timeline.slide", "timeline.razorTool", "timeline.shuttleBackward",
@@ -27,14 +29,28 @@ public enum AppCommandRouter {
     ) -> Availability {
         switch id.rawValue {
         case "app.commandPalette", "navigation.inbox", "navigation.video", "navigation.photo",
-            "navigation.pdf", "navigation.convert":
+            "navigation.pdf", "navigation.text", "navigation.convert", "capture.history":
             return .available
+        case "capture.clearHistory":
+            return model.captureHistory.isEmpty
+                ? .unavailable(reason: "The capture history is already empty.")
+                : .available
         case "edit.undo":
-            return model.imageEditor?.undoManager.canUndo == true
+            guard model.renamingAssetIDs.isEmpty else {
+                return .unavailable(reason: "Wait for the file rename to finish.")
+            }
+            return model.textEditor?.undoManager.canUndo == true
+                || model.imageEditor?.undoManager.canUndo == true
+                || model.pdfEditor?.undoManager.canUndo == true
                 || model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
                 ? .available : .unavailable(reason: "There is nothing to undo.")
         case "edit.redo":
-            return model.imageEditor?.undoManager.canRedo == true
+            guard model.renamingAssetIDs.isEmpty else {
+                return .unavailable(reason: "Wait for the file rename to finish.")
+            }
+            return model.textEditor?.undoManager.canRedo == true
+                || model.imageEditor?.undoManager.canRedo == true
+                || model.pdfEditor?.undoManager.canRedo == true
                 || model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
                 ? .available : .unavailable(reason: "There is nothing to redo.")
         case "asset.selectAll":
@@ -42,6 +58,7 @@ public enum AppCommandRouter {
                 ? .unavailable(reason: "This view contains no assets.") : .available
         case "asset.search":
             return model.editor == nil && model.imageEditor == nil && model.pdfEditor == nil
+                && model.textEditor == nil
                 ? .available
                 : .unavailable(reason: "Close the editor before searching the library.")
         case "asset.deselectAll", "asset.quickLook", "asset.reveal", "asset.delete":
@@ -79,7 +96,7 @@ public enum AppCommandRouter {
             model.showWorkspace(.inbox)
             return .completed
         case "navigation.video":
-            model.showWorkspace(.video)
+            model.openVideoEditorFromCommandPalette()
             return .completed
         case "navigation.photo":
             model.showWorkspace(.photo)
@@ -87,11 +104,25 @@ public enum AppCommandRouter {
         case "navigation.pdf":
             model.showWorkspace(.pdf)
             return .completed
+        case "navigation.text":
+            model.showWorkspace(.text)
+            return .completed
         case "navigation.convert":
             model.showWorkspace(.convert)
             return .completed
+        case "capture.history":
+            model.isCaptureHistoryPresented = true
+            Task { await model.refreshCaptureHistory() }
+            return .completed
+        case "capture.clearHistory":
+            model.clearCaptureHistory()
+            return .completed
         case "edit.undo":
-            if let editor = model.imageEditor {
+            if let editor = model.textEditor {
+                editor.undo()
+            } else if let editor = model.imageEditor {
+                editor.undo()
+            } else if let editor = model.pdfEditor {
                 editor.undo()
             } else if let editor = model.editor {
                 editor.undo()
@@ -100,7 +131,11 @@ public enum AppCommandRouter {
             }
             return .completed
         case "edit.redo":
-            if let editor = model.imageEditor {
+            if let editor = model.textEditor {
+                editor.redo()
+            } else if let editor = model.imageEditor {
+                editor.redo()
+            } else if let editor = model.pdfEditor {
                 editor.redo()
             } else if let editor = model.editor {
                 editor.redo()

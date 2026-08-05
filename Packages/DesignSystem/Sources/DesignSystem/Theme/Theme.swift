@@ -12,7 +12,11 @@ public struct Theme: Sendable {
         public let textPrimary: Color
         public let textSecondary: Color
         public let textTertiary: Color
+        /// Neutral emphasis colour. Clip keeps its accent monochrome, so
+        /// emphasis reads as contrast rather than hue.
         public let accent: Color
+        /// Content drawn on top of an `accent` fill.
+        public let accentOn: Color
         public let accentDim: Color
         public let accentLine: Color
         public let click: Color
@@ -32,12 +36,16 @@ public struct Theme: Sendable {
             public init() {}
         }
 
+        /// A single nested scale: anything drawn inside something else takes the
+        /// next step down, so corners stay concentric instead of fighting.
         public struct Radius: Sendable, Equatable {
-            public let timeline: CGFloat = 4
-            public let input: CGFloat = 10
+            /// Badges, thumbnails, timeline clips — anything that sits on top of
+            /// another surface and would look bloated at the control radius.
+            public let small: CGFloat = 5
             public let control: CGFloat = 8
+            public let input: CGFloat = 10
             public let card: CGFloat = 12
-            public let dropZone: CGFloat = 14
+            public let dropZone: CGFloat = 12
             public let sheet: CGFloat = 16
 
             public init() {}
@@ -105,41 +113,43 @@ public struct Theme: Sendable {
 
     public static let dark = Theme(
         palette: Palette(
-            surfaceBase: Color(hex: 0x0D0E10),
-            surfacePanel: Color(hex: 0x141619),
-            surfaceRaised: Color(hex: 0x1B1E22),
-            surfaceSunken: Color(hex: 0x0A0B0D),
-            line: .white.opacity(0.07),
-            lineStrong: .white.opacity(0.13),
-            textPrimary: Color(hex: 0xE4E6E8),
-            textSecondary: Color(hex: 0x9AA0A6),
-            textTertiary: Color(hex: 0x5E646C),
-            accent: Color(hex: 0x6F9DE0),
-            accentDim: Color(hex: 0x6F9DE0).opacity(0.13),
-            accentLine: Color(hex: 0x6F9DE0).opacity(0.4),
-            click: Color(hex: 0xD69A45),
-            success: Color(hex: 0x6FAE7C),
-            danger: Color(hex: 0xD4574E)
+            surfaceBase: Color(hex: 0x0B0B0C),
+            surfacePanel: Color(hex: 0x121213),
+            surfaceRaised: Color(hex: 0x1C1C1E),
+            surfaceSunken: Color(hex: 0x08080A),
+            line: .white.opacity(0.06),
+            lineStrong: .white.opacity(0.12),
+            textPrimary: Color(hex: 0xEDEDEF),
+            textSecondary: Color(hex: 0x9B9BA3),
+            textTertiary: Color(hex: 0x6A6A72),
+            accent: Color(hex: 0xF2F2F5),
+            accentOn: Color(hex: 0x0B0B0C),
+            accentDim: .white.opacity(0.10),
+            accentLine: .white.opacity(0.30),
+            click: Color(hex: 0xD99B4A),
+            success: Color(hex: 0x4FAF77),
+            danger: Color(hex: 0xE5534B)
         )
     )
 
     public static let light = Theme(
         palette: Palette(
-            surfaceBase: Color(hex: 0xF5F5F4),
+            surfaceBase: Color(hex: 0xF7F7F8),
             surfacePanel: Color(hex: 0xFFFFFF),
-            surfaceRaised: Color(hex: 0xEFEFED),
-            surfaceSunken: Color(hex: 0x1B1E22),
-            line: .black.opacity(0.09),
-            lineStrong: .black.opacity(0.16),
-            textPrimary: Color(hex: 0x1C1D1F),
-            textSecondary: Color(hex: 0x5F656C),
-            textTertiary: Color(hex: 0x8A9099),
-            accent: Color(hex: 0x3B72C4),
-            accentDim: Color(hex: 0x3B72C4).opacity(0.13),
-            accentLine: Color(hex: 0x3B72C4).opacity(0.4),
-            click: Color(hex: 0xB87B22),
-            success: Color(hex: 0x3F7F52),
-            danger: Color(hex: 0xC0392F)
+            surfaceRaised: Color(hex: 0xF0F0F2),
+            surfaceSunken: Color(hex: 0x1B1B1E),
+            line: .black.opacity(0.08),
+            lineStrong: .black.opacity(0.14),
+            textPrimary: Color(hex: 0x18181B),
+            textSecondary: Color(hex: 0x5C5C66),
+            textTertiary: Color(hex: 0x8A8A94),
+            accent: Color(hex: 0x1A1A1E),
+            accentOn: Color(hex: 0xFFFFFF),
+            accentDim: .black.opacity(0.06),
+            accentLine: .black.opacity(0.22),
+            click: Color(hex: 0xB0761F),
+            success: Color(hex: 0x2F7D50),
+            danger: Color(hex: 0xC8372D)
         )
     )
 }

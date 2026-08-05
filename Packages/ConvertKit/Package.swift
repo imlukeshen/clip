@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(path: "../CoreModel"),
         .package(path: "../LibraryStore"),
+        .package(path: "../TextEngine"),
         .package(path: "../../Vendor/ffmpeg"),
     ],
     targets: [
@@ -19,6 +20,7 @@ let package = Package(
             dependencies: [
                 "CoreModel",
                 "LibraryStore",
+                "TextEngine",
                 .product(name: "ReelFFmpeg", package: "ffmpeg"),
             ]
         ),
