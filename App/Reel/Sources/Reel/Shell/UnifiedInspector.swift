@@ -372,6 +372,9 @@ private struct ImageLayerInspector: View {
     @State private var blurValue = 18.0
     @State private var paddingValue = 0.08
     @State private var radiusValue = 18.0
+    @State private var rasterNameDraft = ""
+    @State private var rasterOpacityValue = 1.0
+    @State private var rasterRotationValue = 0.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -503,6 +506,41 @@ private struct ImageLayerInspector: View {
 
     @ViewBuilder private func selectedProperties(_ layer: Layer) -> some View {
         switch layer {
+        case .raster(let value):
+            TextField("Layer name", text: $rasterNameDraft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { editor.renameSelectedRasterLayer(to: rasterNameDraft) }
+
+            valueSlider(
+                title: "Opacity",
+                value: $rasterOpacityValue,
+                range: 0...1,
+                step: 0.01,
+                suffix: "%",
+                displayValue: Int((rasterOpacityValue * 100).rounded())
+            ) { editor.updateSelectedRasterTransform(opacity: rasterOpacityValue) }
+
+            valueSlider(
+                title: "Rotate",
+                value: $rasterRotationValue,
+                range: -180...180,
+                step: 1,
+                suffix: "°"
+            ) { editor.updateSelectedRasterTransform(rotationDegrees: rasterRotationValue) }
+
+            Picker(
+                "Blend",
+                selection: Binding(
+                    get: { value.blendMode },
+                    set: { editor.updateSelectedRasterTransform(blendMode: $0) }
+                )
+            ) {
+                ForEach(RasterBlendMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
         case .annotation:
             colorRow(for: layer)
             valueSlider(
@@ -643,12 +681,7 @@ private struct ImageLayerInspector: View {
                 editor.selectLayer(layer.id)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: layer.inspectorSymbol)
-                        .foregroundStyle(
-                            editor.selectedLayerID == layer.id
-                                ? theme.palette.accent : theme.palette.textTertiary
-                        )
-                        .frame(width: 16)
+                    layerThumbnail(layer)
                     Text(layer.kindName)
                         .lineLimit(1)
                     Spacer()
@@ -674,6 +707,44 @@ private struct ImageLayerInspector: View {
         .clipShape(
             RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
         )
+        .draggable(layer.id.rawValue)
+        .dropDestination(for: String.self) { values, _ in
+            guard let rawID = values.first,
+                let source = editor.document.layers.first(where: { $0.id.rawValue == rawID }),
+                let sourceIndex = editor.document.layers.firstIndex(where: { $0.id == source.id }),
+                let destinationIndex = editor.document.layers.firstIndex(where: {
+                    $0.id == layer.id
+                })
+            else { return false }
+            editor.moveLayer(source.id, by: destinationIndex - sourceIndex)
+            editor.selectLayer(source.id)
+            return true
+        }
+    }
+
+    @ViewBuilder private func layerThumbnail(_ layer: Layer) -> some View {
+        if case .raster(let value) = layer, let image = NSImage(contentsOf: value.sourceURL) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 24, height: 24)
+                .clipShape(
+                    RoundedRectangle(cornerRadius: theme.metrics.radius.small, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: theme.metrics.radius.small, style: .continuous
+                    )
+                    .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+                }
+        } else {
+            Image(systemName: layer.inspectorSymbol)
+                .foregroundStyle(
+                    editor.selectedLayerID == layer.id
+                        ? theme.palette.accent : theme.palette.textTertiary
+                )
+                .frame(width: 24)
+        }
     }
 
     private func sectionHeader(_ title: String, symbol: String) -> some View {
@@ -757,6 +828,10 @@ private struct ImageLayerInspector: View {
     private func loadSelectedValues() {
         guard let layer = editor.selectedLayer else { return }
         switch layer {
+        case .raster(let value):
+            rasterNameDraft = value.name
+            rasterOpacityValue = value.opacity
+            rasterRotationValue = value.rotationDegrees
         case .annotation(let value): strokeValue = value.strokeWidth
         case .text(let value):
             textDraft = value.text
@@ -773,6 +848,7 @@ private struct ImageLayerInspector: View {
 extension Layer {
     fileprivate var inspectorSymbol: String {
         switch self {
+        case .raster: "photo"
         case .annotation(let value):
             switch value.kind {
             case .arrow: "arrow.up.right"
@@ -792,11 +868,25 @@ extension Layer {
 
     fileprivate var inspectorColor: RGBA? {
         switch self {
+        case .raster: nil
         case .annotation(let value): value.strokeColor
         case .text(let value): value.color
         case .highlight(let value): value.color
         case .step(let value): value.fillColor
         case .redaction, .blur, .padding: nil
+        }
+    }
+}
+
+extension RasterBlendMode {
+    fileprivate var displayName: String {
+        switch self {
+        case .normal: "Normal"
+        case .multiply: "Multiply"
+        case .screen: "Screen"
+        case .overlay: "Overlay"
+        case .darken: "Darken"
+        case .lighten: "Lighten"
         }
     }
 }

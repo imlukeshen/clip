@@ -51,6 +51,9 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     /// Ensures a foreground library window exists even when macOS restores an
     /// empty SwiftUI scene session.
     static func ensureMainWindow() {
+        if activeDelegate?.model == nil, let preparedModel {
+            activeDelegate?.install(model: preparedModel)
+        }
         activeDelegate?.showOrCreateMainWindow(in: NSApp)
     }
 
@@ -83,6 +86,9 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         // restoration did not create a window.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
+            if self.model == nil, let preparedModel = Self.preparedModel {
+                self.install(model: preparedModel)
+            }
             showOrCreateMainWindow(in: NSApp)
         }
     }

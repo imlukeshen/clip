@@ -88,9 +88,15 @@ struct ClipApp: App {
                 }
                 .keyboardShortcut("c", modifiers: .command)
                 .disabled(model.editor != nil)
-                Button(model.editor == nil ? "Paste" : "Paste into Timeline") {
+                Button(
+                    model.editor != nil
+                        ? "Paste into Timeline"
+                        : (model.imageEditor != nil ? "Paste as Image Layer" : "Paste")
+                ) {
                     if model.editor != nil {
                         model.pasteMediaIntoTimeline()
+                    } else if model.imageEditor != nil {
+                        model.pasteImageIntoCanvas()
                     } else {
                         NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
                     }

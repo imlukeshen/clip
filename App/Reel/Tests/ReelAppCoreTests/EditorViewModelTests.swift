@@ -254,6 +254,126 @@ struct EditorViewModelTests {
         #expect(editor.document.item(detachedID) != nil)
     }
 
+    @Test("Timeline media moves across tracks and time in one exact undo")
+    func timelineMediaMovement() throws {
+        let overlayID = ItemID(rawValue: "overlay-item")
+        let audioID = ItemID(rawValue: "linked-audio-item")
+        let nestID = "nested-overlay"
+        let base = TimelineItem(
+            id: ItemID(rawValue: "base-item"),
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 6))
+        )
+        let overlay = TimelineItem(
+            id: overlayID,
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+            timelineStart: RationalTime(seconds: 1),
+            nestID: nestID
+        )
+        let linkedAudio = TimelineItem(
+            id: audioID,
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 1)),
+            timelineStart: RationalTime(seconds: 1),
+            nestID: nestID
+        )
+        let original = try ProjectDocument(
+            id: ProjectID(rawValue: "move-project"),
+            name: "Move",
+            timeline: Timeline(
+                videoTracks: [
+                    Track(id: TrackID(rawValue: "v1"), name: "V1", items: [base]),
+                    Track(id: TrackID(rawValue: "v2"), name: "V2", items: [overlay]),
+                    Track(id: TrackID(rawValue: "v3"), name: "V3"),
+                ],
+                audioTracks: [
+                    Track(id: TrackID(rawValue: "a1"), name: "A1", items: [linkedAudio])
+                ]
+            ),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let editor = makeEditor(document: original)
+        let destination = TrackID(rawValue: "v3")
+        let nextStart = RationalTime(seconds: 3.25)
+
+        #expect(editor.canMoveTimelineItem(overlayID, to: destination, at: nextStart))
+        editor.moveTimelineItem(overlayID, to: destination, at: nextStart)
+
+        #expect(editor.document.timeline.videoTracks[1].items.isEmpty)
+        #expect(editor.document.timeline.videoTracks[2].items.first?.id == overlayID)
+        #expect(editor.document.item(overlayID)?.timelineStart == nextStart)
+        #expect(editor.document.item(audioID)?.timelineStart == nextStart)
+        #expect(editor.selection == [overlayID, audioID])
+        #expect(editor.targetedVideoTrackID == destination)
+
+        editor.undo()
+        #expect(editor.document == original)
+        editor.redo()
+        #expect(editor.document.item(overlayID)?.timelineStart == nextStart)
+        #expect(editor.document.item(audioID)?.timelineStart == nextStart)
+    }
+
+    @Test("Timeline movement rejects overlaps and moves detached audio independently")
+    func timelineMovementValidationAndAudio() throws {
+        var original = try document()
+        let audioID = ItemID(rawValue: "audio-item")
+        original.timeline.audioTracks = [
+            Track(
+                id: TrackID(rawValue: "a1"),
+                name: "A1",
+                items: [
+                    TimelineItem(
+                        id: audioID,
+                        assetID: AssetID(rawValue: "asset"),
+                        sourceRange: TimeRange(
+                            start: .zero,
+                            duration: RationalTime(seconds: 2)
+                        )
+                    )
+                ]
+            ),
+            Track(id: TrackID(rawValue: "a2"), name: "A2"),
+            Track(id: TrackID(rawValue: "a3"), name: "A3", isLocked: true),
+        ]
+        let editor = makeEditor(document: original)
+        let videoID = try #require(original.timeline.video.first?.id)
+
+        #expect(
+            !editor.canMoveTimelineItem(
+                videoID,
+                to: TrackID(rawValue: "a2"),
+                at: .zero
+            ))
+        #expect(
+            !editor.canMoveTimelineItem(
+                audioID,
+                to: TrackID(rawValue: "a3"),
+                at: RationalTime(seconds: 3)
+            ))
+
+        let audioStart = RationalTime(seconds: 2.5)
+        #expect(
+            editor.canMoveTimelineItem(
+                audioID,
+                to: TrackID(rawValue: "a2"),
+                at: audioStart
+            ))
+        editor.moveTimelineItem(
+            audioID,
+            to: TrackID(rawValue: "a2"),
+            at: audioStart
+        )
+
+        #expect(editor.document.timeline.audioTracks[0].items.isEmpty)
+        #expect(editor.document.timeline.audioTracks[1].items.first?.id == audioID)
+        #expect(editor.document.item(audioID)?.timelineStart == audioStart)
+        #expect(editor.selectedTrackKind == .audio)
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
     @Test("Nested media selects and deletes as one undoable group")
     func nestedMedia() throws {
         let editor = makeEditor(document: try document())

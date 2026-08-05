@@ -773,17 +773,19 @@ struct EditorView: View {
             onSeek: editor.seek,
             onScrubbing: editor.setScrubbing,
             onReorder: editor.reorder,
+            canMove: editor.canMoveTimelineItem,
+            onMove: editor.moveTimelineItem,
             onTrim: editor.trim,
             onRazor: editor.split,
             onZoom: zoomTimeline
         )
         .accessibilityIdentifier("video-timeline")
         .help(
-            "Three-finger drag clips to reorder or trim. Scroll to pan; pinch or Option-scroll to zoom."
+            "Drag clips in time or between video and audio lanes. Drag an edge to trim; pinch or Option-scroll to zoom."
         )
         .accessibilityLabel("Project timeline")
         .accessibilityHint(
-            "Drag clips or their edges to reorder and trim. Scroll to pan and pinch to zoom."
+            "Drag clips in time or between compatible tracks. Drag clip edges to trim, scroll to pan, and pinch to zoom."
         )
     }
 

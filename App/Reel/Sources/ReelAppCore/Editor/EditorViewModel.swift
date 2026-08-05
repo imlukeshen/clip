@@ -1030,6 +1030,55 @@ public final class EditorViewModel {
         }
     }
 
+    /// Returns whether a timeline item (and any media nested with it) can be
+    /// placed on `trackID` at an explicit project time. The timeline canvas uses
+    /// this while dragging so an invalid overlap or locked lane is visible
+    /// before the user releases the pointer.
+    public func canMoveTimelineItem(
+        _ itemID: ItemID,
+        to trackID: TrackID,
+        at timelineStart: RationalTime
+    ) -> Bool {
+        (try? movedTimeline(itemID, to: trackID, at: timelineStart)) != nil
+    }
+
+    /// Moves clips in project time without rippling neighbouring media. Moving
+    /// between V tracks creates an overlay edit; moving between A tracks keeps
+    /// detached audio independently editable. Nested media follows the anchor
+    /// by the same time delta and the entire operation is one exact undo step.
+    public func moveTimelineItem(
+        _ itemID: ItemID,
+        to trackID: TrackID,
+        at timelineStart: RationalTime
+    ) {
+        do {
+            let moved = try movedTimeline(itemID, to: trackID, at: timelineStart)
+            var operations: [GraphOp] = []
+            if moved.videoTracks != document.timeline.videoTracks {
+                operations.append(.setVideoTracks(moved.videoTracks))
+            }
+            if moved.audioTracks != document.timeline.audioTracks {
+                operations.append(.setAudioTracks(moved.audioTracks))
+            }
+            guard !operations.isEmpty else { return }
+            try perform(GraphPatch(ops: operations, label: "Move Media", origin: .user))
+            if moved.kind == .video {
+                targetedVideoTrackID = trackID
+            }
+            selection = nestedItemIDs(containing: itemID)
+            let trackName =
+                (document.timeline.videoTracks + document.timeline.audioTracks)
+                .first(where: { $0.id == trackID })?.name ?? "track"
+            notice = "Moved media to \(trackName) at \(formatTimelineTime(timelineStart))."
+        } catch ModelError.trackLocked {
+            notice = "Unlock the source and destination tracks before moving media."
+        } catch ModelError.overlappingItems {
+            notice = "That position overlaps media already on the track."
+        } catch {
+            notice = "The media could not be moved there."
+        }
+    }
+
     public func trim(_ itemID: ItemID, to range: TimeRange) {
         guard let item = document.item(itemID),
             let duration = assets[item.assetID]?.duration
@@ -1454,6 +1503,140 @@ public final class EditorViewModel {
 
     private func removingUnusedTracks(_ tracks: [Track], primaryName: String) -> [Track] {
         tracks.filter { !$0.items.isEmpty || $0.name == primaryName || $0.isLocked }
+    }
+
+    private func movedTimeline(
+        _ itemID: ItemID,
+        to destinationTrackID: TrackID,
+        at requestedStart: RationalTime
+    ) throws -> (
+        videoTracks: [Track],
+        audioTracks: [Track],
+        kind: TrackKind
+    ) {
+        guard requestedStart >= .zero else {
+            throw ModelError.invalidTimelineStart(itemID, requestedStart)
+        }
+
+        let videoDestinationIndex = document.timeline.videoTracks.firstIndex {
+            $0.id == destinationTrackID
+        }
+        let audioDestinationIndex = document.timeline.audioTracks.firstIndex {
+            $0.id == destinationTrackID
+        }
+        let kind: TrackKind
+        let destinationTrack: Track
+        switch (videoDestinationIndex, audioDestinationIndex) {
+        case (let videoIndex?, .none):
+            kind = .video
+            destinationTrack = document.timeline.videoTracks[videoIndex]
+        case (.none, let audioIndex?):
+            kind = .audio
+            destinationTrack = document.timeline.audioTracks[audioIndex]
+        default: throw ModelError.trackNotFound(destinationTrackID)
+        }
+
+        let allTracks = document.timeline.videoTracks + document.timeline.audioTracks
+        guard
+            let sourceTrack = allTracks.first(where: { track in
+                track.items.contains(where: { $0.id == itemID })
+            }), let anchor = sourceTrack.items.first(where: { $0.id == itemID })
+        else {
+            throw ModelError.itemNotFound(itemID)
+        }
+        let sourceKind: TrackKind =
+            document.timeline.videoTracks.contains(where: { $0.id == sourceTrack.id })
+            ? .video : .audio
+        guard sourceKind == kind else {
+            throw ModelError.invalidEdit("Media cannot move between video and audio lanes.")
+        }
+
+        let movingIDs = nestedItemIDs(containing: itemID)
+        let movingTracks = allTracks.filter { track in
+            track.items.contains(where: { movingIDs.contains($0.id) })
+        }
+        guard !sourceTrack.isLocked,
+            movingTracks.allSatisfy({ !$0.isLocked })
+        else {
+            throw ModelError.trackLocked(sourceTrack.id)
+        }
+        guard !destinationTrack.isLocked else {
+            throw ModelError.trackLocked(destinationTrackID)
+        }
+
+        let delta = requestedStart - anchor.timelineStart
+        var videoTracks = document.timeline.videoTracks
+        var audioTracks = document.timeline.audioTracks
+        var movingItems: [(item: TimelineItem, trackID: TrackID)] = []
+        for track in allTracks {
+            for item in track.items where movingIDs.contains(item.id) {
+                movingItems.append((item, track.id))
+            }
+        }
+        for index in videoTracks.indices {
+            videoTracks[index].items.removeAll { movingIDs.contains($0.id) }
+        }
+        for index in audioTracks.indices {
+            audioTracks[index].items.removeAll { movingIDs.contains($0.id) }
+        }
+
+        for moving in movingItems {
+            var item = moving.item
+            item.timelineStart = item.timelineStart + delta
+            guard item.timelineStart >= .zero else {
+                throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
+            }
+            let targetID = item.id == itemID ? destinationTrackID : moving.trackID
+            if let index = videoTracks.firstIndex(where: { $0.id == targetID }) {
+                videoTracks[index].items.append(item)
+            } else if let index = audioTracks.firstIndex(where: { $0.id == targetID }) {
+                audioTracks[index].items.append(item)
+            } else {
+                throw ModelError.trackNotFound(targetID)
+            }
+        }
+
+        for index in videoTracks.indices {
+            videoTracks[index].items.sort(by: timelineItemOrder)
+        }
+        for index in audioTracks.indices {
+            audioTracks[index].items.sort(by: timelineItemOrder)
+        }
+        try validateTimelinePlacement(videoTracks + audioTracks)
+        return (videoTracks, audioTracks, kind)
+    }
+
+    /// Drag validation runs on every pointer update. The document was already
+    /// valid and movement changes only project starts and owning tracks, so a
+    /// focused adjacency check keeps large timelines responsive while the final
+    /// graph patch still receives full model validation on drop.
+    private func validateTimelinePlacement(_ tracks: [Track]) throws {
+        for track in tracks {
+            for item in track.items where item.timelineStart < .zero {
+                throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
+            }
+            for (left, right) in zip(track.items, track.items.dropFirst())
+            where right.timelineStart < left.timelineEnd {
+                throw ModelError.overlappingItems(track.id)
+            }
+        }
+    }
+
+    private func timelineItemOrder(_ left: TimelineItem, _ right: TimelineItem) -> Bool {
+        if left.timelineStart != right.timelineStart {
+            return left.timelineStart < right.timelineStart
+        }
+        return left.id.rawValue < right.id.rawValue
+    }
+
+    private func formatTimelineTime(_ time: RationalTime) -> String {
+        let seconds = max(time.seconds, 0)
+        return String(
+            format: "%02d:%02d.%03d",
+            Int(seconds) / 60,
+            Int(seconds) % 60,
+            Int((seconds * 1_000).rounded()) % 1_000
+        )
     }
 
     private func nestedItemIDs(containing itemID: ItemID) -> Set<ItemID> {

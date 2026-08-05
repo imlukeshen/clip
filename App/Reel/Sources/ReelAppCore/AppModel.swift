@@ -549,6 +549,56 @@ public final class AppModel {
         lastMessage = "Copy a video, photo, or audio file, then paste it into the timeline."
     }
 
+    /// Adds the richest image representation on the system pasteboard to the
+    /// open photo document as a durable, independently editable layer.
+    public func pasteImageIntoCanvas() {
+        guard let imageEditor else {
+            lastMessage = "Open a photo before pasting an image."
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] {
+            let imageURLs = urls.filter(Self.isImageURL)
+            if !imageURLs.isEmpty {
+                let inserted = imageURLs.reduce(into: 0) { count, url in
+                    if (try? imageEditor.addRasterLayer(from: url)) != nil { count += 1 }
+                }
+                if inserted > 0 {
+                    lastMessage =
+                        inserted == 1
+                        ? "Pasted image as a new layer."
+                        : "Pasted \(inserted) images as new layers."
+                    return
+                }
+            }
+        }
+
+        if let data = pasteboard.data(forType: .png) {
+            do {
+                try imageEditor.addRasterLayer(data: data, suggestedName: "Pasted Image.png")
+                lastMessage = "Pasted image as a new layer."
+            } catch {
+                lastMessage = "The pasted image could not be added to the canvas."
+            }
+            return
+        }
+        if let data = pasteboard.data(forType: .tiff) {
+            do {
+                try imageEditor.addRasterLayer(data: data, suggestedName: "Pasted Image.tiff")
+                lastMessage = "Pasted image as a new layer."
+            } catch {
+                lastMessage = "The pasted image could not be added to the canvas."
+            }
+            return
+        }
+
+        lastMessage = "Copy an image or image file, then paste it onto the canvas."
+    }
+
     public func addMediaToOpenTimeline(_ urls: [URL], source: IngestSource) {
         guard !urls.isEmpty, !isAddingTimelineMedia, let activeEditor = editor,
             let runtime

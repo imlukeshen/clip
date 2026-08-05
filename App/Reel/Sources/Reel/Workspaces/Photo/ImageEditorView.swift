@@ -99,6 +99,27 @@ struct ImageEditorView: View {
 
             Spacer(minLength: 12)
 
+            Menu {
+                Button {
+                    importImages()
+                } label: {
+                    Label("Import Images…", systemImage: "folder")
+                }
+                Button {
+                    model.pasteImageIntoCanvas()
+                } label: {
+                    Label("Paste Image", systemImage: "doc.on.clipboard")
+                }
+                .keyboardShortcut("v", modifiers: .command)
+            } label: {
+                Label("Add image", systemImage: "photo.badge.plus")
+                    .frame(height: 30)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Import or paste another image as a new canvas layer")
+            .accessibilityIdentifier("photo-add-image")
+
             HStack(spacing: 2) {
                 Button {
                     editor.undo()
@@ -334,6 +355,21 @@ struct ImageEditorView: View {
             editor.export(to: url, format: format)
         }
     }
+
+    private func importImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Add to Canvas"
+        panel.message = "Each image becomes an independent, non-destructive layer."
+        panel.begin { response in
+            guard response == .OK else { return }
+            for url in panel.urls {
+                _ = try? editor.addRasterLayer(from: url)
+            }
+        }
+    }
 }
 
 private struct ImageCanvasView: View {
@@ -344,9 +380,10 @@ private struct ImageCanvasView: View {
     let onSearch: (String) -> Void
     let onRedact: ([NormalizedRect]) -> Void
     @State private var draftPoints: [CGPoint] = []
-    @State private var movingLayerID: LayerID?
-    @State private var selectionTranslation = CGPoint.zero
+    @State private var selectionGestureDidBegin = false
+    @State private var transientTransform: ImageLayerTransformState?
     @State private var magnificationStart = 1.0
+    @State private var isDropTargeted = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -417,14 +454,71 @@ private struct ImageCanvasView: View {
             @unknown default: break
             }
         }
+        .onChange(of: editor.selectedLayerID) { _, _ in
+            transientTransform = nil
+            selectionGestureDidBegin = false
+        }
+        .onChange(of: editor.isRendering) { wasRendering, isRendering in
+            if wasRendering, !isRendering {
+                withAnimation(.smooth(duration: 0.14)) {
+                    transientTransform = nil
+                }
+            }
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                    .strokeBorder(
+                        theme.palette.accent,
+                        style: StrokeStyle(lineWidth: 2, dash: [7, 5])
+                    )
+                    .padding(18)
+                    .allowsHitTesting(false)
+                Label("Drop to add image layers", systemImage: "photo.stack")
+                    .font(theme.type.label.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(theme.palette.surfacePanel.opacity(0.96))
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let imported = urls.reduce(into: 0) { count, url in
+                if (try? editor.addRasterLayer(from: url)) != nil { count += 1 }
+            }
+            return imported > 0
+        } isTargeted: { isTargeted in
+            withAnimation(.smooth(duration: 0.16)) {
+                isDropTargeted = isTargeted
+            }
+        }
     }
 
     private func artboard(_ image: CGImage, size: CGSize) -> some View {
         ZStack {
             Checkerboard()
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .interpolation(.high)
+            if let transientTransform,
+                let background = editor.renderedImageWithoutSelectedLayer,
+                let selectedSurface = editor.renderedSelectedLayer,
+                let selectedLayer = editor.selectedLayer
+            {
+                Image(decorative: background, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+                liveLayerSurface(
+                    selectedSurface,
+                    layer: selectedLayer,
+                    transform: transientTransform,
+                    canvasSize: size
+                )
+            } else {
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .interpolation(.high)
+            }
 
             if editor.activeTool == .select, !liveTextSpans.isEmpty {
                 LiveTextOverlay(
@@ -536,43 +630,34 @@ private struct ImageCanvasView: View {
 
     @ViewBuilder private var selectionOverlay: some View {
         if editor.activeTool == .select, let layer = editor.selectedLayer {
+            let rotation = layer.editorRotationDegrees
             GeometryReader { proxy in
-                let normalized = layer.editorBounds(canvas: editor.document.canvas)
-                let rect = CGRect(
-                    x: normalized.minX * proxy.size.width + selectionTranslation.x
-                        * proxy.size.width,
-                    y: normalized.minY * proxy.size.height + selectionTranslation.y
-                        * proxy.size.height,
-                    width: max(normalized.width * proxy.size.width, 12),
-                    height: max(normalized.height * proxy.size.height, 12)
-                ).insetBy(dx: -4, dy: -4)
-
-                ZStack {
-                    // Marching ants rather than a tinted outline: the artwork
-                    // underneath can be any colour, so the marker carries its
-                    // own contrast instead of relying on the theme.
-                    RoundedRectangle(
-                        cornerRadius: theme.metrics.radius.small, style: .continuous
-                    )
-                    .stroke(.black.opacity(0.5), lineWidth: 2)
-                    .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
-                    RoundedRectangle(
-                        cornerRadius: theme.metrics.radius.small, style: .continuous
-                    )
-                    .stroke(.white, style: StrokeStyle(lineWidth: 1.25, dash: [5, 3]))
-                    .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
-                    ForEach(Array(rect.handlePoints.enumerated()), id: \.offset) { _, point in
-                        Circle()
-                            .fill(.white)
-                            .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
-                            .frame(width: 7, height: 7)
-                            .position(point)
+                ImageLayerTransformOverlay(
+                    normalizedFrame: layer.editorBounds(canvas: editor.document.canvas),
+                    rotationDegrees: rotation,
+                    canvasSize: proxy.size,
+                    isLocked: layer.isLocked || !layer.supportsCanvasTransform,
+                    allowsRotation: layer.supportsCanvasRotation,
+                    preservesAspectRatio: layer.preservesAspectRatioDuringTransform,
+                    onChange: { transientTransform = $0 },
+                    onCommit: { state in
+                        let original = ImageLayerTransformState(
+                            frame: layer.editorBounds(canvas: editor.document.canvas),
+                            rotationDegrees: rotation
+                        )
+                        guard state != original else {
+                            transientTransform = nil
+                            return
+                        }
+                        transientTransform = state
+                        editor.transformSelectedLayer(
+                            frame: state.frame,
+                            rotationDegrees: state.rotationDegrees
+                        )
+                        if !editor.isRendering { transientTransform = nil }
                     }
-                }
+                )
             }
-            .allowsHitTesting(false)
         }
     }
 
@@ -585,14 +670,10 @@ private struct ImageCanvasView: View {
                 case .pan:
                     break
                 case .select:
-                    if movingLayerID == nil {
+                    if !selectionGestureDidBegin {
                         editor.selectLayer(at: start)
-                        movingLayerID = editor.selectedLayerID
+                        selectionGestureDidBegin = true
                     }
-                    selectionTranslation = CGPoint(
-                        x: value.translation.width / size.width,
-                        y: value.translation.height / size.height
-                    )
                 case .crop:
                     editor.stageCrop(normalizedRect(from: start, to: current))
                 case .freehand:
@@ -614,8 +695,7 @@ private struct ImageCanvasView: View {
             .onEnded { value in
                 defer {
                     draftPoints = []
-                    movingLayerID = nil
-                    selectionTranslation = .zero
+                    selectionGestureDidBegin = false
                 }
                 let start = normalized(value.startLocation, in: size)
                 let end = normalized(value.location, in: size)
@@ -623,15 +703,7 @@ private struct ImageCanvasView: View {
                 case .pan:
                     break
                 case .select:
-                    guard movingLayerID != nil,
-                        hypot(value.translation.width, value.translation.height) > 2
-                    else { return }
-                    editor.moveSelectedLayer(
-                        by: CGPoint(
-                            x: value.translation.width / size.width,
-                            y: value.translation.height / size.height
-                        )
-                    )
+                    break
                 case .crop, .padding:
                     break
                 case .eyedropper:
@@ -642,6 +714,26 @@ private struct ImageCanvasView: View {
                     editor.commitGesture(points: [start, end])
                 }
             }
+    }
+
+    private func liveLayerSurface(
+        _ image: CGImage,
+        layer: Layer,
+        transform: ImageLayerTransformState,
+        canvasSize: CGSize
+    ) -> some View {
+        let rect = ImageLayerTransformGeometry.displayRect(
+            for: transform.frame,
+            canvasSize: canvasSize
+        )
+        return Image(decorative: image, scale: 1)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: rect.width, height: rect.height)
+            .rotationEffect(.degrees(transform.rotationDegrees))
+            .position(x: rect.midX, y: rect.midY)
+            .blendMode(layer.editorBlendMode)
+            .allowsHitTesting(false)
     }
 
     private var magnificationGesture: some Gesture {
@@ -759,9 +851,10 @@ private struct ImageCanvasView: View {
 
     private func fittedSize(imageSize: CGSize, in container: CGSize) -> CGSize {
         guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let margin = min(max(min(container.width, container.height) * 0.09, 40), 112)
         let available = CGSize(
-            width: max(container.width - 112, 120),
-            height: max(container.height - 112, 120)
+            width: max(container.width - margin, 120),
+            height: max(container.height - margin, 120)
         )
         let scale = min(available.width / imageSize.width, available.height / imageSize.height)
         return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
@@ -1001,9 +1094,44 @@ extension ImageEditorTool {
 }
 
 extension Layer {
+    fileprivate var editorRotationDegrees: Double {
+        if case .raster(let value) = self { return value.rotationDegrees }
+        return 0
+    }
+
+    fileprivate var preservesAspectRatioDuringTransform: Bool {
+        switch self {
+        case .raster, .step: return true
+        default: return false
+        }
+    }
+
+    fileprivate var supportsCanvasTransform: Bool {
+        if case .padding = self { return false }
+        return true
+    }
+
+    fileprivate var supportsCanvasRotation: Bool {
+        if case .raster = self { return true }
+        return false
+    }
+
+    fileprivate var editorBlendMode: SwiftUI.BlendMode {
+        guard case .raster(let value) = self else { return .normal }
+        switch value.blendMode {
+        case .normal: return .normal
+        case .multiply: return .multiply
+        case .screen: return .screen
+        case .overlay: return .overlay
+        case .darken: return .darken
+        case .lighten: return .lighten
+        }
+    }
+
     fileprivate func editorBounds(canvas: ImageCanvas) -> CGRect {
         let bounds: CGRect
         switch self {
+        case .raster(let value): bounds = value.frame
         case .annotation(let value): bounds = value.bounds
         case .text(let value): bounds = value.frame
         case .highlight(let value): bounds = value.regions.editorUnion
@@ -1011,12 +1139,13 @@ extension Layer {
         case .blur(let value): bounds = value.regions.editorUnion
         case .padding: bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
         case .step(let value):
-            let diameter = CGFloat(value.diameter) / CGFloat(min(canvas.width, canvas.height))
+            let width = CGFloat(value.diameter) / CGFloat(canvas.width)
+            let height = CGFloat(value.diameter) / CGFloat(canvas.height)
             bounds = CGRect(
-                x: value.position.x - diameter / 2,
-                y: value.position.y - diameter / 2,
-                width: diameter,
-                height: diameter
+                x: value.position.x - width / 2,
+                y: value.position.y - height / 2,
+                width: width,
+                height: height
             )
         }
         return bounds.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))

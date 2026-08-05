@@ -32,6 +32,8 @@ struct EditorTimeline: NSViewRepresentable {
     let onSeek: (RationalTime, Bool) -> Void
     let onScrubbing: (Bool) -> Void
     let onReorder: (ItemID, Int) -> Void
+    let canMove: (ItemID, TrackID, RationalTime) -> Bool
+    let onMove: (ItemID, TrackID, RationalTime) -> Void
     let onTrim: (ItemID, TimeRange) -> Void
     let onRazor: (ItemID, RationalTime) -> Void
     let onZoom: (CGFloat) -> Void
@@ -72,6 +74,8 @@ struct EditorTimeline: NSViewRepresentable {
         view.onSeek = onSeek
         view.onScrubbing = onScrubbing
         view.onReorder = onReorder
+        view.canMove = canMove
+        view.onMove = onMove
         view.onTrim = onTrim
         view.onRazor = onRazor
         view.onZoom = onZoom
@@ -110,6 +114,8 @@ final class TimelineCanvas: NSView {
     var onSeek: ((RationalTime, Bool) -> Void)?
     var onScrubbing: ((Bool) -> Void)?
     var onReorder: ((ItemID, Int) -> Void)?
+    var canMove: ((ItemID, TrackID, RationalTime) -> Bool)?
+    var onMove: ((ItemID, TrackID, RationalTime) -> Void)?
     var onTrim: ((ItemID, TimeRange) -> Void)?
     var onRazor: ((ItemID, RationalTime) -> Void)?
     var onZoom: ((CGFloat) -> Void)?
@@ -122,7 +128,7 @@ final class TimelineCanvas: NSView {
     private let laneGap: CGFloat = 6
     private var gesture: Gesture?
     private var previewRange: (ItemID, TimeRange)?
-    private var dropIndex: Int?
+    private var movePreview: MovePreview?
     private var snapIndicator: RationalTime?
     private var hoveredItemID: ItemID?
     private var hoveredEdge: Edge?
@@ -133,7 +139,14 @@ final class TimelineCanvas: NSView {
 
     private enum Gesture {
         case scrub
-        case move(itemID: ItemID, kind: TrackKind, originalIndex: Int)
+        case move(
+            itemID: ItemID,
+            kind: TrackKind,
+            sourceTrackIndex: Int,
+            originalIndex: Int,
+            originalStart: RationalTime,
+            grabOffset: RationalTime
+        )
         case trim(
             itemID: ItemID,
             edge: Edge,
@@ -150,6 +163,17 @@ final class TimelineCanvas: NSView {
         var kind: TrackKind
         var trackName: String
         var rect: NSRect
+    }
+
+    private struct MovePreview {
+        var itemID: ItemID
+        var kind: TrackKind
+        var trackIndex: Int
+        var trackID: TrackID
+        var timelineStart: RationalTime
+        var duration: RationalTime
+        var isValid: Bool
+        var reorderIndex: Int?
     }
 
     private enum Edge: Equatable { case leading, trailing }
@@ -181,7 +205,7 @@ final class TimelineCanvas: NSView {
         drawCaptions()
         drawProjectMarkers()
         drawInOutPoints()
-        drawDropMarker()
+        drawMovePreview()
         drawSnapGuide()
         drawHoverGuide()
         drawPlayhead()
@@ -213,13 +237,27 @@ final class TimelineCanvas: NSView {
                     speed: hit.item.speed,
                     originX: point.x
                 )
-            } else if hit.trackIndex == 0 {
+            } else {
                 gesture = .move(
                     itemID: hit.item.id,
                     kind: hit.kind,
-                    originalIndex: hit.index
+                    sourceTrackIndex: hit.trackIndex,
+                    originalIndex: hit.index,
+                    originalStart: hit.item.timelineStart,
+                    grabOffset: RationalTime(
+                        seconds: max((point.x - hit.rect.minX) / pointsPerSecond, 0)
+                    )
                 )
-                dropIndex = hit.index
+                movePreview = MovePreview(
+                    itemID: hit.item.id,
+                    kind: hit.kind,
+                    trackIndex: hit.trackIndex,
+                    trackID: track(for: hit.kind, at: hit.trackIndex).id,
+                    timelineStart: hit.item.timelineStart,
+                    duration: hit.item.timelineDuration,
+                    isValid: true,
+                    reorderIndex: nil
+                )
                 NSCursor.closedHand.set()
             }
         } else {
@@ -236,9 +274,16 @@ final class TimelineCanvas: NSView {
         switch gesture {
         case .scrub:
             scheduleSeek(to: time(at: point.x))
-        case .move(_, let kind, _):
+        case .move(let itemID, let kind, let sourceTrackIndex, _, _, let grabOffset):
             autoscroll(with: event)
-            dropIndex = insertionIndex(at: point.x, kind: kind)
+            let currentPoint = convert(event.locationInWindow, from: nil)
+            movePreview = proposedMove(
+                itemID: itemID,
+                kind: kind,
+                sourceTrackIndex: sourceTrackIndex,
+                point: currentPoint,
+                grabOffset: grabOffset
+            )
             needsDisplay = true
         case .trim(let itemID, let edge, let original, let speed, let originX):
             var sourceDelta = RationalTime(
@@ -306,7 +351,7 @@ final class TimelineCanvas: NSView {
         defer {
             gesture = nil
             previewRange = nil
-            dropIndex = nil
+            movePreview = nil
             snapIndicator = nil
             NSCursor.arrow.set()
             needsDisplay = true
@@ -318,9 +363,24 @@ final class TimelineCanvas: NSView {
             pendingSeek = nil
             onSeek?(time(at: point.x), true)
             onScrubbing?(false)
-        case .move(let itemID, _, let originalIndex):
-            if let dropIndex, dropIndex != originalIndex {
-                onReorder?(itemID, dropIndex)
+        case .move(
+            let itemID,
+            _,
+            let sourceTrackIndex,
+            let originalIndex,
+            let originalStart,
+            _
+        ):
+            if let movePreview, movePreview.isValid {
+                if let reorderIndex = movePreview.reorderIndex {
+                    if reorderIndex != originalIndex {
+                        onReorder?(itemID, reorderIndex)
+                    }
+                } else if movePreview.trackIndex != sourceTrackIndex
+                    || movePreview.timelineStart != originalStart
+                {
+                    onMove?(itemID, movePreview.trackID, movePreview.timelineStart)
+                }
             }
         case .trim(let itemID, _, let original, _, _):
             if let previewRange, previewRange.1 != original {
@@ -482,21 +542,130 @@ final class TimelineCanvas: NSView {
         }
     }
 
-    private func insertionIndex(at x: CGFloat, kind: TrackKind) -> Int {
-        let items = (kind == .video ? videoItemRects() : audioItemRects())
-            .filter { $0.trackIndex == 0 }
-        for item in items where x < item.rect.midX {
-            return item.index
-        }
-        return max(items.count - 1, 0)
-    }
-
     private func time(at x: CGFloat) -> RationalTime {
         let seconds = min(
             max((x - labelWidth) / pointsPerSecond, 0),
             CGFloat(duration.seconds)
         )
         return RationalTime(seconds: seconds)
+    }
+
+    private func proposedMove(
+        itemID: ItemID,
+        kind: TrackKind,
+        sourceTrackIndex: Int,
+        point: NSPoint,
+        grabOffset: RationalTime
+    ) -> MovePreview? {
+        guard
+            let item = (timeline.videoTracks + timeline.audioTracks)
+                .lazy.flatMap(\.items).first(where: { $0.id == itemID })
+        else { return nil }
+        let trackIndex = nearestTrackIndex(to: point.y, kind: kind)
+        let destination = track(for: kind, at: trackIndex)
+        let rawTime = RationalTime(
+            seconds: max(Double((point.x - labelWidth) / pointsPerSecond), 0)
+        )
+        var proposedStart = max(rawTime - grabOffset, .zero)
+        snapIndicator = nil
+        let reorderIndex =
+            sourceTrackIndex == 0 && trackIndex == 0
+            ? primaryInsertionIndex(at: point.x, kind: kind, excluding: itemID)
+            : nil
+        if isSnappingEnabled, reorderIndex == nil {
+            let points = SnapEngine.points(
+                in: timeline,
+                playhead: playhead,
+                clickTimes: clickMarkers.map(\.timelineTime)
+            )
+            var excludedIDs = Set(
+                selection.flatMap { id in
+                    ["\(id.rawValue)-start", "\(id.rawValue)-end"]
+                })
+            excludedIDs.insert("\(itemID.rawValue)-start")
+            excludedIDs.insert("\(itemID.rawValue)-end")
+            if let nestID = item.nestID {
+                for nested in (timeline.videoTracks + timeline.audioTracks).flatMap(\.items)
+                where nested.nestID == nestID {
+                    excludedIDs.insert("\(nested.id.rawValue)-start")
+                    excludedIDs.insert("\(nested.id.rawValue)-end")
+                }
+            }
+            let threshold = RationalTime(seconds: Double(8 / pointsPerSecond))
+            let leading = SnapEngine.snap(
+                proposedStart,
+                to: points,
+                threshold: threshold,
+                excludingIDs: excludedIDs
+            )
+            let proposedEnd = proposedStart + item.timelineDuration
+            let trailing = SnapEngine.snap(
+                proposedEnd,
+                to: points,
+                threshold: threshold,
+                excludingIDs: excludedIDs
+            )
+            let leadingAdjustment = abs((leading.time - proposedStart).seconds)
+            let trailingAdjustment = abs((trailing.time - proposedEnd).seconds)
+            if leading.point != nil,
+                trailing.point == nil || leadingAdjustment <= trailingAdjustment
+            {
+                proposedStart = max(leading.time, .zero)
+                snapIndicator = leading.point?.time
+            } else if trailing.point != nil {
+                proposedStart = max(trailing.time - item.timelineDuration, .zero)
+                snapIndicator = trailing.point?.time
+            }
+        }
+        return MovePreview(
+            itemID: itemID,
+            kind: kind,
+            trackIndex: trackIndex,
+            trackID: destination.id,
+            timelineStart: proposedStart,
+            duration: item.timelineDuration,
+            isValid:
+                reorderIndex != nil
+                ? !destination.isLocked
+                : canMove?(itemID, destination.id, proposedStart) ?? false,
+            reorderIndex: reorderIndex
+        )
+    }
+
+    private func primaryInsertionIndex(
+        at x: CGFloat,
+        kind: TrackKind,
+        excluding itemID: ItemID
+    ) -> Int {
+        let items = (kind == .video ? videoItemRects() : audioItemRects())
+            .filter { $0.trackIndex == 0 && $0.item.id != itemID }
+        for (index, item) in items.enumerated() where x < item.rect.midX {
+            return index
+        }
+        return items.count
+    }
+
+    private func nearestTrackIndex(to y: CGFloat, kind: TrackKind) -> Int {
+        let count = kind == .video ? timeline.videoTracks.count : timeline.audioTracks.count
+        guard count > 1 else { return 0 }
+        return (0..<count).min { left, right in
+            let leftY =
+                kind == .video
+                ? videoY(for: left) + videoHeight / 2
+                : audioY(for: left) + audioHeight / 2
+            let rightY =
+                kind == .video
+                ? videoY(for: right) + videoHeight / 2
+                : audioY(for: right) + audioHeight / 2
+            return abs(leftY - y) < abs(rightY - y)
+        } ?? 0
+    }
+
+    private func track(for kind: TrackKind, at index: Int) -> Track {
+        switch kind {
+        case .video: timeline.videoTracks[index]
+        case .audio: timeline.audioTracks[index]
+        }
     }
 
     private func drawRuler() {
@@ -808,6 +977,21 @@ final class TimelineCanvas: NSView {
         let x = labelWidth + CGFloat(snapIndicator.seconds) * pointsPerSecond
         accent.withAlphaComponent(0.9).setFill()
         NSRect(x: x - 0.5, y: rulerHeight, width: 1, height: bounds.maxY - rulerHeight).fill()
+
+        let label = "Snap \(formatHoverTime(snapIndicator.seconds))"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .semibold),
+            .foregroundColor: surface,
+        ]
+        let size = (label as NSString).size(withAttributes: attributes)
+        let labelX = min(max(x - size.width / 2 - 5, labelWidth + 3), bounds.maxX - size.width - 13)
+        let rect = NSRect(x: labelX, y: rulerHeight + 3, width: size.width + 10, height: 17)
+        accent.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+        (label as NSString).draw(
+            at: NSPoint(x: rect.minX + 5, y: rect.minY + 2),
+            withAttributes: attributes
+        )
     }
 
     private func drawHoverGuide() {
@@ -837,22 +1021,78 @@ final class TimelineCanvas: NSView {
         )
     }
 
-    private func drawDropMarker() {
-        guard case .move(_, let kind, let originalIndex) = gesture,
-            let dropIndex,
-            !(kind == .video ? videoItemRects() : audioItemRects()).isEmpty
-        else { return }
-        let items = (kind == .video ? videoItemRects() : audioItemRects())
-            .filter { $0.trackIndex == 0 }
-        let target = items[min(dropIndex, items.count - 1)].rect
-        let x = dropIndex > originalIndex ? target.maxX : target.minX
-        accent.setFill()
+    private func drawMovePreview() {
+        guard let preview = movePreview else { return }
+        let color = preview.isValid ? accent : playheadColor
+        let laneY =
+            preview.kind == .video
+            ? videoY(for: preview.trackIndex) : audioY(for: preview.trackIndex)
+        let laneHeight = preview.kind == .video ? videoHeight : audioHeight
+        color.withAlphaComponent(0.06).setFill()
         NSRect(
-            x: x - 1,
-            y: target.minY - 3,
-            width: 2,
-            height: target.height + 6
+            x: labelWidth,
+            y: laneY - 2,
+            width: max(bounds.maxX - labelWidth, 0),
+            height: laneHeight + 4
         ).fill()
+
+        if let reorderIndex = preview.reorderIndex {
+            let items = (preview.kind == .video ? videoItemRects() : audioItemRects())
+                .filter { $0.trackIndex == 0 && $0.item.id != preview.itemID }
+            let markerX: CGFloat
+            if reorderIndex < items.count {
+                markerX = items[reorderIndex].rect.minX
+            } else {
+                markerX = items.last?.rect.maxX ?? labelWidth
+            }
+            color.setFill()
+            NSBezierPath(
+                roundedRect: NSRect(
+                    x: markerX - 2,
+                    y: laneY - 4,
+                    width: 4,
+                    height: laneHeight + 8
+                ),
+                xRadius: 2,
+                yRadius: 2
+            ).fill()
+        }
+
+        let rect = NSRect(
+            x: labelWidth + CGFloat(preview.timelineStart.seconds) * pointsPerSecond,
+            y: laneY,
+            width: max(CGFloat(preview.duration.seconds) * pointsPerSecond, 2),
+            height: laneHeight
+        ).insetBy(dx: 1, dy: 0)
+        color.withAlphaComponent(preview.isValid ? 0.28 : 0.16).setFill()
+        let path = NSBezierPath(
+            roundedRect: rect,
+            xRadius: clipCornerRadius,
+            yRadius: clipCornerRadius
+        )
+        path.fill()
+        color.setStroke()
+        path.lineWidth = 2
+        path.setLineDash([6, 3], count: 2, phase: 0)
+        path.stroke()
+
+        let trackName = track(for: preview.kind, at: preview.trackIndex).name
+        let status: String
+        if !preview.isValid {
+            status = "Can't place media here"
+        } else if preview.reorderIndex != nil {
+            status = "Reorder on \(trackName)"
+        } else {
+            status = "\(trackName)  \(formatHoverTime(preview.timelineStart.seconds))"
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: rect.insetBy(dx: 7, dy: 2)).addClip()
+        drawText(
+            status,
+            at: NSPoint(x: rect.minX + 8, y: rect.minY + max((rect.height - 12) / 2, 2)),
+            color: textPrimary
+        )
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawPlayhead() {

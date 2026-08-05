@@ -286,8 +286,59 @@ public struct StepLayer: Codable, Sendable, Equatable {
     }
 }
 
+/// Blend modes shared by raster layers and the flattened preview/export renderer.
+public enum RasterBlendMode: String, Codable, Sendable, Equatable, CaseIterable {
+    case normal
+    case multiply
+    case screen
+    case overlay
+    case darken
+    case lighten
+}
+
+/// A non-destructive bitmap placed above the source image.
+///
+/// `frame` uses Clip's top-left normalized canvas coordinate system. The URL points at a
+/// durable editor-owned copy rather than the transient file selected or pasted by the user.
+/// Keeping that source reference in the document makes the same ordered layer stack drive
+/// previews, reopening, undo/redo, and flattened exports.
+public struct RasterLayer: Codable, Sendable, Equatable {
+    public var id: LayerID
+    public var name: String
+    public var sourceURL: URL
+    public var frame: CGRect
+    public var rotationDegrees: Double
+    public var opacity: Double
+    public var blendMode: RasterBlendMode
+    public var isVisible: Bool
+    public var isLocked: Bool
+
+    public init(
+        id: LayerID = .generate(),
+        name: String,
+        sourceURL: URL,
+        frame: CGRect,
+        rotationDegrees: Double = 0,
+        opacity: Double = 1,
+        blendMode: RasterBlendMode = .normal,
+        isVisible: Bool = true,
+        isLocked: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.sourceURL = sourceURL
+        self.frame = frame
+        self.rotationDegrees = rotationDegrees
+        self.opacity = opacity
+        self.blendMode = blendMode
+        self.isVisible = isVisible
+        self.isLocked = isLocked
+    }
+}
+
 /// Ordered bottom-to-top image operations.
 public enum Layer: Codable, Sendable, Equatable, Identifiable {
+    case raster(RasterLayer)
     case annotation(AnnotationLayer)
     case text(TextLayer)
     case highlight(HighlightLayer)
@@ -298,6 +349,7 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public var id: LayerID {
         switch self {
+        case .raster(let layer): layer.id
         case .annotation(let layer): layer.id
         case .text(let layer): layer.id
         case .highlight(let layer): layer.id
@@ -310,6 +362,7 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public var isVisible: Bool {
         switch self {
+        case .raster(let layer): layer.isVisible
         case .annotation(let layer): layer.isVisible
         case .text(let layer): layer.isVisible
         case .highlight(let layer): layer.isVisible
@@ -322,6 +375,7 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public var isLocked: Bool {
         switch self {
+        case .raster(let layer): layer.isLocked
         case .annotation(let layer): layer.isLocked
         case .text(let layer): layer.isLocked
         case .highlight(let layer): layer.isLocked
@@ -334,6 +388,7 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public var kindName: String {
         switch self {
+        case .raster(let layer): layer.name
         case .annotation(let layer): layer.kind.rawValue.capitalized
         case .text: "Text"
         case .highlight: "Highlight"
@@ -346,6 +401,9 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public func settingVisibility(_ isVisible: Bool) -> Layer {
         switch self {
+        case .raster(var layer):
+            layer.isVisible = isVisible
+            return .raster(layer)
         case .annotation(var layer):
             layer.isVisible = isVisible
             return .annotation(layer)
@@ -372,6 +430,9 @@ public enum Layer: Codable, Sendable, Equatable, Identifiable {
 
     public func settingLocked(_ isLocked: Bool) -> Layer {
         switch self {
+        case .raster(var layer):
+            layer.isLocked = isLocked
+            return .raster(layer)
         case .annotation(var layer):
             layer.isLocked = isLocked
             return .annotation(layer)
@@ -520,6 +581,14 @@ public struct ImageDocument: EditableDocument {
 
     private func validate(_ layer: Layer) throws {
         switch layer {
+        case .raster(let value):
+            guard !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                value.sourceURL.isFileURL,
+                isNormalized(value.frame),
+                value.rotationDegrees.isFinite,
+                value.opacity.isFinite,
+                (0...1).contains(value.opacity)
+            else { throw ImageDocumentError.invalidLayer(value.id) }
         case .annotation(let value):
             guard isNormalized(value.bounds), value.points.allSatisfy(isNormalized),
                 value.strokeWidth.isFinite, value.strokeWidth > 0
