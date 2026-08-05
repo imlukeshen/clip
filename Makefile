@@ -1,10 +1,16 @@
-.PHONY: bootstrap generate build run test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
+.PHONY: bootstrap generate xcode build run test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
 
 generate:
+	@# Reel.xcodeproj predates the Clip rename. Keeping both projects open makes
+	@# Xcode load every local Swift package twice and report workspace conflicts.
+	@rm -rf Reel.xcodeproj
 	xcodegen generate
+
+xcode: generate
+	open Clip.xcodeproj
 
 build: generate
 	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug CODE_SIGNING_ALLOWED=NO build

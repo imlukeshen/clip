@@ -57,6 +57,16 @@ Build and launch a local Debug copy with:
 make run
 ```
 
+To work in Xcode, generate and open the canonical project with:
+
+```bash
+make xcode
+```
+
+Keep only `Clip.xcodeproj` open. The pre-rename `Reel.xcodeproj` and individual
+package workspaces refer to the same local Swift packages, so opening them beside
+Clip makes Xcode reject the duplicate package ownership.
+
 Clip opens a library picker on first launch. Choose a writable folder; Clip
 creates its managed `Media`, `Projects`, `Exports`, and `.reel` structure there.
 
