@@ -233,7 +233,10 @@ final class TextEditorTypingTests: XCTestCase {
                 "Missing accessible editor tool: \(identifier)"
             )
         }
-        XCTAssertTrue(app.staticTexts["0 clips"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForTimelineItemCount(0, in: app, timeout: 5),
+            "The empty timeline did not report zero items"
+        )
         let timeline = app.descendants(matching: .any)["video-timeline"]
         XCTAssertTrue(timeline.waitForExistence(timeout: 5))
         XCTAssertLessThanOrEqual(
@@ -257,14 +260,14 @@ final class TextEditorTypingTests: XCTestCase {
         app.activate()
         app.typeKey("v", modifierFlags: .command)
         XCTAssertTrue(
-            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            waitForTimelineItemCount(1, in: app, timeout: 20),
             "Command-V did not add the pasted video to the empty timeline"
         )
 
         let deleteTool = app.descendants(matching: .any)["video-tool-delete"]
         deleteTool.click()
         XCTAssertTrue(
-            app.staticTexts["0 clips"].waitForExistence(timeout: 5),
+            waitForTimelineItemCount(0, in: app, timeout: 5),
             "Deleting the selected final clip did not empty the timeline"
         )
         XCTAssertTrue(
@@ -277,7 +280,7 @@ final class TextEditorTypingTests: XCTestCase {
         app.activate()
         app.typeKey("v", modifierFlags: .command)
         XCTAssertTrue(
-            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            waitForTimelineItemCount(1, in: app, timeout: 20),
             "Command-V did not add media again after deleting the final clip"
         )
 
@@ -286,7 +289,7 @@ final class TextEditorTypingTests: XCTestCase {
         app.activate()
         app.typeKey("v", modifierFlags: .command)
         XCTAssertTrue(
-            app.staticTexts["2 clips"].waitForExistence(timeout: 20),
+            waitForTimelineItemCount(2, in: app, timeout: 20),
             "Command-V did not turn the pasted photo into a timeline clip"
         )
 
@@ -334,7 +337,7 @@ final class TextEditorTypingTests: XCTestCase {
         app.activate()
         app.typeKey("v", modifierFlags: .command)
         XCTAssertTrue(
-            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            waitForTimelineItemCount(1, in: app, timeout: 20),
             "The fixture image was not imported into the library-backed timeline"
         )
 
@@ -344,13 +347,15 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(mediaCommand.waitForExistence(timeout: 5))
         mediaCommand.click()
 
-        // AssetCard intentionally combines the visible name and metadata into
-        // the primary button's accessibility label. Query that actionable
-        // element instead of relying on an implementation-detail StaticText.
         let originalAsset = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Pasted Image.mov,")
+            NSPredicate(format: "identifier BEGINSWITH %@", "asset-card-")
         ).firstMatch
         XCTAssertTrue(originalAsset.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForLabelPrefix("Pasted Image.mov,", on: originalAsset, timeout: 5),
+            "The imported asset did not publish its canonical filename"
+        )
+        let assetIdentifier = originalAsset.identifier
         originalAsset.click()
         let renameButton = app.buttons["asset-rename-button"]
         XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
@@ -364,11 +369,9 @@ final class TextEditorTypingTests: XCTestCase {
         renameField.typeText("Renamed Still")
         renameAlert.buttons["Rename"].click()
 
-        let renamedAsset = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Renamed Still.mov,")
-        ).firstMatch
+        let renamedAsset = app.buttons[assetIdentifier]
         XCTAssertTrue(
-            renamedAsset.waitForExistence(timeout: 10),
+            waitForLabelPrefix("Renamed Still.mov,", on: renamedAsset, timeout: 10),
             "The library did not publish the canonical renamed filename"
         )
         let originalURL = libraryRoot.appendingPathComponent("Media/Inbox/Pasted Image.mov")
@@ -514,7 +517,10 @@ final class TextEditorTypingTests: XCTestCase {
     func testLaTeXSourceBuildsAndDisplaysAPDF() throws {
         let (app, libraryRoot) = launchClip(
             named: "latex-pdf",
-            arguments: ["-clip.tex.packageAccess", "allowNetwork"]
+            arguments: [
+                "-clip.tex.packageAccess", "allowNetwork",
+                "-clip.tex.compileMode", "manual",
+            ]
         )
         defer { try? FileManager.default.removeItem(at: libraryRoot) }
 
@@ -530,11 +536,26 @@ final class TextEditorTypingTests: XCTestCase {
             "\\documentclass{article}\n\\begin{document}\nClip PDF\n\\end{document}"
         )
 
-        let languageMenu = app.popUpButtons["text-language-menu"]
+        // Scratch buffers detect LaTeX from their contents before the explicit
+        // language choice promotes the default filename to a TeX main file.
+        XCTAssertTrue(
+            app.descendants(matching: .any)["latex-split-editor"]
+                .waitForExistence(timeout: 5)
+        )
+
+        // Choosing LaTeX explicitly promotes the default scratch filename from
+        // Untitled.txt to Untitled.tex, which makes it the project main file.
+        // SwiftUI exposes Menu as different accessibility roles across macOS
+        // versions, so query by identifier instead of assuming PopUpButton.
+        let languageMenu = app.descendants(matching: .any)["text-language-menu"]
         XCTAssertTrue(languageMenu.waitForExistence(timeout: 5))
         languageMenu.click()
         XCTAssertTrue(app.menuItems["LaTeX"].waitForExistence(timeout: 5))
         app.menuItems["LaTeX"].click()
+
+        let buildButton = app.buttons["latex-compile"]
+        XCTAssertTrue(buildButton.waitForExistence(timeout: 5))
+        buildButton.click()
 
         XCTAssertTrue(
             app.staticTexts["PDF ready"].waitForExistence(timeout: 90),
@@ -562,6 +583,7 @@ final class TextEditorTypingTests: XCTestCase {
 
         app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
         app.launchEnvironment["REEL_CAPTURE_SOURCE"] = captureSource.path
+        app.launchEnvironment["CLIP_UI_TESTING"] = "1"
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
             "-reel.captureDestination", "timeline",
@@ -574,12 +596,37 @@ final class TextEditorTypingTests: XCTestCase {
         try FileManager.default.moveItem(at: stagingURL, to: recordingURL)
 
         XCTAssertTrue(
-            app.staticTexts["1 clip"].waitForExistence(timeout: 30),
+            waitForTimelineItemCount(1, in: app, timeout: 30),
             "A new recording did not open the timeline editor"
         )
         XCTAssertTrue(
             app.descendants(matching: .any)["video-timeline"].waitForExistence(timeout: 5)
         )
+    }
+
+    @MainActor
+    private func waitForLabelPrefix(
+        _ prefix: String,
+        on element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        guard element.waitForExistence(timeout: min(timeout, 5)) else { return false }
+        let labelMatches = NSPredicate(format: "label BEGINSWITH %@", prefix)
+        let expectation = XCTNSPredicateExpectation(predicate: labelMatches, object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func waitForTimelineItemCount(
+        _ expectedCount: Int,
+        in app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> Bool {
+        let status = app.descendants(matching: .any)["video-timeline-item-count"]
+        guard status.waitForExistence(timeout: min(timeout, 5)) else { return false }
+        let valueMatches = NSPredicate(format: "value == %@", "\(expectedCount)")
+        let expectation = XCTNSPredicateExpectation(predicate: valueMatches, object: status)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     @MainActor

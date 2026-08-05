@@ -43,7 +43,9 @@ test-app:
 	swift test --package-path App/Reel
 
 test-ui: generate
-	xcodebuild test -project Clip.xcodeproj -scheme Clip -configuration Debug -destination 'platform=macOS' -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO
+	@rm -rf TestResults/ClipUITests.xcresult
+	@mkdir -p TestResults
+	xcodebuild test -project Clip.xcodeproj -scheme Clip -configuration Debug -destination 'platform=macOS' -disableAutomaticPackageResolution -resultBundlePath TestResults/ClipUITests.xcresult CODE_SIGNING_ALLOWED=NO
 
 deps:
 	Scripts/check-aikit-dependencies.sh

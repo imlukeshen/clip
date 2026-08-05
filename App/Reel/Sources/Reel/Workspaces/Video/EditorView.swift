@@ -629,6 +629,10 @@ struct EditorView: View {
             )
             .font(theme.type.caption.font)
             .foregroundStyle(theme.palette.textSecondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("video-timeline-item-count")
+            .accessibilityLabel("Timeline items")
+            .accessibilityValue("\(timelineItemCount)")
 
             Divider()
                 .overlay(theme.palette.line)

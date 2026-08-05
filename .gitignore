@@ -3,5 +3,6 @@
 .swiftpm/
 DerivedData/
 ReleaseBuild/
+TestResults/
 *.xcodeproj
 *.xcworkspace/xcuserdata/

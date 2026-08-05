@@ -67,6 +67,14 @@ jobs:
         run: Scripts/install-xcodegen-ci.sh
       - name: Run macOS UI tests
         run: make test-ui
+      - name: Upload UI test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Clip-UI-Test-Results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestResults/ClipUITests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
 
   boundaries:
     runs-on: macos-26
