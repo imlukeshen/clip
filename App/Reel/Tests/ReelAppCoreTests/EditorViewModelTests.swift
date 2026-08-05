@@ -26,6 +26,21 @@ struct EditorViewModelTests {
         #expect(editor.document.timeline.video[0].speed == 2)
     }
 
+    @Test("Project names trim, persist through the graph, and undo exactly")
+    func renameProject() throws {
+        let original = try document()
+        let editor = makeEditor(document: original)
+
+        #expect(editor.renameProject(to: "  Launch Cut  "))
+        #expect(editor.document.name == "Launch Cut")
+        #expect(editor.undoManager.canUndo)
+
+        editor.undo()
+        #expect(editor.document == original)
+        #expect(!editor.renameProject(to: "   \n "))
+        #expect(editor.document == original)
+    }
+
     @Test("Editor split uses the same patch path and preserves duration")
     func split() throws {
         let original = try document()

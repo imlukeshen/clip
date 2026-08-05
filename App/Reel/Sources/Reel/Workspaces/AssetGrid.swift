@@ -14,6 +14,8 @@ struct AssetGrid: View {
     @State private var marqueeStart: CGPoint?
     @State private var marqueeCurrent: CGPoint?
     @State private var infoAsset: AssetRecord?
+    @State private var renamingAsset: AssetRecord?
+    @State private var renameValue = ""
 
     private let columns = [
         GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 14)
@@ -31,13 +33,27 @@ struct AssetGrid: View {
                     if model.browserViewMode == .grid {
                         grid
                     } else {
-                        AssetList(model: model, assets: assets, modifiers: currentModifiers)
+                        AssetList(
+                            model: model,
+                            assets: assets,
+                            modifiers: currentModifiers,
+                            onRename: beginRename
+                        )
                     }
                 }
             }
         }
         .onAppear { model.selection.setItems(assetIDs) }
         .onChange(of: assetIDs) { _, ids in model.selection.setItems(ids) }
+        .alert("Rename File", isPresented: isRenamePresented) {
+            TextField("File name", text: $renameValue)
+                .accessibilityIdentifier("asset-rename-field")
+            Button("Cancel", role: .cancel) {}
+            Button("Rename", action: commitRename)
+                .disabled(renameValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("If you leave off the extension, Clip keeps the current one.")
+        }
     }
 
     private var browserToolbar: some View {
@@ -49,6 +65,19 @@ struct AssetGrid: View {
                 Text("\(model.selection.selected.count) selected")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
+                if let selectedAsset {
+                    Menu {
+                        if model.selection.selected.count == 1 {
+                            Button("Rename…") { beginRename(selectedAsset) }
+                        }
+                        AssetMoveMenu(model: model, asset: selectedAsset)
+                    } label: {
+                        Label("Organize", systemImage: "folder")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Rename or move the selected files")
+                }
             }
             Spacer()
             Button {
@@ -118,6 +147,9 @@ struct AssetGrid: View {
                 .contextMenu {
                     Button("Open") { model.activateAsset(asset.id) }
                         .disabled(asset.isMissing)
+                    Divider()
+                    Button("Rename…") { beginRename(asset) }
+                    AssetMoveMenu(model: model, asset: asset)
                     Divider()
                     Button("Get Info") {
                         if !model.selection.selected.contains(asset.id) {
@@ -190,6 +222,32 @@ struct AssetGrid: View {
     }
 
     private var assetIDs: [AssetID] { assets.map(\.id) }
+
+    private var selectedAsset: AssetRecord? {
+        assets.first { model.selection.selected.contains($0.id) }
+    }
+
+    private var isRenamePresented: Binding<Bool> {
+        Binding(
+            get: { renamingAsset != nil },
+            set: { if !$0 { renamingAsset = nil } }
+        )
+    }
+
+    private func beginRename(_ asset: AssetRecord) {
+        if !model.selection.selected.contains(asset.id) {
+            model.selectAsset(asset.id)
+        }
+        renameValue = asset.displayName
+        renamingAsset = asset
+    }
+
+    private func commitRename() {
+        guard let asset = renamingAsset else { return }
+        let name = renameValue
+        renamingAsset = nil
+        model.renameAsset(asset.id, to: name)
+    }
 
     /// A fixed-size chip so the system drag image never balloons past the grid
     /// cell it came from. The count reflects the dragged multi-selection.
@@ -326,6 +384,7 @@ private struct AssetList: View {
     @Bindable var model: AppModel
     let assets: [AssetRecord]
     let modifiers: ReelAppCore.EventModifiers
+    let onRename: (AssetRecord) -> Void
 
     var body: some View {
         LazyVStack(spacing: 1) {
@@ -344,7 +403,12 @@ private struct AssetList: View {
             .frame(height: 28)
 
             ForEach(assets) { asset in
-                AssetListRow(model: model, asset: asset, modifiers: modifiers)
+                AssetListRow(
+                    model: model,
+                    asset: asset,
+                    modifiers: modifiers,
+                    onRename: onRename
+                )
             }
         }
         .focusable()
@@ -421,6 +485,7 @@ private struct AssetListRow: View {
     @Bindable var model: AppModel
     let asset: AssetRecord
     let modifiers: ReelAppCore.EventModifiers
+    let onRename: (AssetRecord) -> Void
     @State private var isHovered = false
     @State private var isInfoPresented = false
 
@@ -474,6 +539,9 @@ private struct AssetListRow: View {
         Button("Open") { model.activateAsset(asset.id) }
             .disabled(asset.isMissing)
         Divider()
+        Button("Rename…") { onRename(asset) }
+        AssetMoveMenu(model: model, asset: asset)
+        Divider()
         Button("Get Info") {
             selectIfNeeded()
             isInfoPresented = true
@@ -522,6 +590,50 @@ private struct AssetListRow: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             model.locateMissingAsset(asset.id, at: url)
+        }
+    }
+}
+
+private struct AssetMoveMenu: View {
+    @Bindable var model: AppModel
+    let asset: AssetRecord
+
+    var body: some View {
+        Menu("Move to Folder") {
+            ForEach(model.folderDestinations, id: \.self) { destination in
+                Button(folderLabel(destination)) {
+                    selectIfNeeded()
+                    model.moveSelectedAssets(to: destination)
+                }
+                .disabled(allEffectiveAssetsAreAlready(in: destination))
+            }
+        }
+    }
+
+    private var effectiveAssetIDs: Set<AssetID> {
+        model.selection.selected.contains(asset.id)
+            ? model.selection.selected : [asset.id]
+    }
+
+    private func allEffectiveAssetsAreAlready(in destination: String) -> Bool {
+        let records = model.assets.filter { effectiveAssetIDs.contains($0.id) }
+        return !records.isEmpty && records.allSatisfy { folderPath(for: $0) == destination }
+    }
+
+    private func folderPath(for asset: AssetRecord) -> String {
+        guard asset.relativePath.hasPrefix("Media/") else { return "" }
+        let relative = String(asset.relativePath.dropFirst("Media/".count))
+        let parent = (relative as NSString).deletingLastPathComponent
+        return parent == "." ? "" : parent
+    }
+
+    private func folderLabel(_ destination: String) -> String {
+        destination.isEmpty ? "Media" : destination
+    }
+
+    private func selectIfNeeded() {
+        if !model.selection.selected.contains(asset.id) {
+            model.selectAsset(asset.id)
         }
     }
 }

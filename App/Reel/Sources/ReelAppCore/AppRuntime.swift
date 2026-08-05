@@ -401,6 +401,14 @@ public actor AppRuntime {
         try await folders.rename(path, to: name)
     }
 
+    public func renameAsset(_ id: AssetID, to name: String) async throws -> AssetRecord {
+        try await folders.renameAsset(id, to: name)
+    }
+
+    public func folderDestinations() async throws -> [String] {
+        try await folders.destinations()
+    }
+
     public func moveAssets(_ ids: [AssetID], to folder: String) async throws -> [AssetRecord] {
         try await folders.move(ids, to: folder)
     }

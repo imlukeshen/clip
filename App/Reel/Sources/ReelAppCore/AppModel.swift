@@ -55,6 +55,7 @@ public final class AppModel {
     public private(set) var embeddingModelNeedsReindex = false
     public private(set) var assets: [AssetRecord] = []
     public private(set) var folderTree: FolderNode?
+    public private(set) var folderDestinations: [String] = ["", "Inbox"]
     public private(set) var expandedFolders: Set<String>
     public var selectedFolderPath: String? = "Inbox"
     public var browserViewMode: BrowserViewMode = .grid
@@ -833,6 +834,26 @@ public final class AppModel {
                 undoManager.setActionName("Rename Folder")
             } catch {
                 lastMessage = "The folder could not be renamed."
+            }
+        }
+    }
+
+    public func renameAsset(_ id: AssetID, to name: String) {
+        guard let runtime, let original = assets.first(where: { $0.id == id }) else { return }
+        Task {
+            do {
+                let renamed = try await runtime.renameAsset(id, to: name)
+                await refreshAssets()
+                guard renamed.displayName != original.displayName else { return }
+                undoManager.registerUndo(withTarget: self) { target in
+                    target.renameAsset(id, to: original.displayName)
+                }
+                undoManager.setActionName("Rename File")
+                if renamed.displayName != name.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    lastMessage = "Renamed to \(renamed.displayName)."
+                }
+            } catch {
+                lastMessage = "The file could not be renamed. Choose a different name."
             }
         }
     }
@@ -2434,6 +2455,7 @@ public final class AppModel {
     private func refreshFolderTree() async {
         guard let runtime else { return }
         folderTree = try? await runtime.folderTree(expanding: expandedFolders)
+        folderDestinations = [""] + ((try? await runtime.folderDestinations()) ?? ["Inbox"])
     }
 
     private func restoreFolder(_ receipt: FolderTrashReceipt) {

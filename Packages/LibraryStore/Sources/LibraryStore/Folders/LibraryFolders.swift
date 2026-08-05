@@ -42,6 +42,78 @@ public actor LibraryFolders {
         return try await relocateFolder(source: source, destination: destination)
     }
 
+    /// Renames an indexed file without changing its stable asset identity.
+    /// When the user omits an extension, the source extension is retained so a
+    /// friendly Finder-style rename cannot accidentally change the media type.
+    @discardableResult
+    public func renameAsset(_ assetID: AssetID, to proposedName: String) async throws
+        -> AssetRecord
+    {
+        guard var asset = try await library.asset(id: assetID) else {
+            throw LibraryError.assetNotFound(assetID)
+        }
+        let source = root.appendingPathComponent(asset.relativePath)
+        let requestedName = try normalizedAssetName(proposedName, source: source)
+        guard requestedName != source.lastPathComponent else { return asset }
+
+        let proposedDestination = source.deletingLastPathComponent()
+            .appendingPathComponent(requestedName)
+        let isCaseOnlyRename =
+            source.path.caseInsensitiveCompare(proposedDestination.path)
+            == .orderedSame
+        let destination =
+            isCaseOnlyRename
+            ? proposedDestination
+            : uniqueAssetURL(
+                named: requestedName,
+                in: source.deletingLastPathComponent(),
+                hasEventTrack: asset.eventTrackPath != nil
+            )
+        var moves: [(URL, URL)] = []
+        do {
+            try moveItem(at: source, to: destination, recording: &moves)
+            asset.relativePath = "Media/\(relative(destination))"
+            asset.displayName = destination.lastPathComponent
+
+            if let eventPath = asset.eventTrackPath {
+                let eventSource = root.appendingPathComponent(eventPath)
+                if FileManager.default.fileExists(atPath: eventSource.path) {
+                    let eventDestination = eventSidecarURL(for: destination)
+                    try moveItem(at: eventSource, to: eventDestination, recording: &moves)
+                    asset.eventTrackPath = "Media/\(relative(eventDestination))"
+                }
+            }
+            try await library.updateLocations([asset])
+            return asset
+        } catch {
+            rollback(moves)
+            throw error
+        }
+    }
+
+    /// Every internal folder that can receive a file, including collapsed
+    /// descendants. This powers Move To menus without forcing the sidebar open.
+    public func destinations() throws -> [String] {
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: media,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
+        else { return [] }
+
+        var result: [String] = []
+        for case let url as URL in enumerator {
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                continue
+            }
+            result.append(relative(url))
+        }
+        return result.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
     @discardableResult
     public func move(_ assetIDs: [AssetID], to relativePath: String) async throws
         -> [AssetRecord]
@@ -55,12 +127,16 @@ public actor LibraryFolders {
                     throw LibraryError.assetNotFound(id)
                 }
                 let source = root.appendingPathComponent(asset.relativePath)
-                let destination = uniqueFileURL(
-                    named: source.lastPathComponent, in: destinationFolder)
-                guard source.standardizedFileURL != destination.standardizedFileURL else {
+                let proposed = destinationFolder.appendingPathComponent(source.lastPathComponent)
+                guard source.standardizedFileURL != proposed.standardizedFileURL else {
                     updated.append(asset)
                     continue
                 }
+                let destination = uniqueAssetURL(
+                    named: source.lastPathComponent,
+                    in: destinationFolder,
+                    hasEventTrack: asset.eventTrackPath != nil
+                )
                 try FileManager.default.moveItem(at: source, to: destination)
                 moves.append((source, destination))
                 asset.relativePath = "Media/\(relative(destination))"
@@ -236,17 +312,72 @@ public actor LibraryFolders {
 
     private func validateName(_ name: String) throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != ".", trimmed != "..", !trimmed.contains("/") else {
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("."), !trimmed.contains("/") else {
             throw LibraryError.invalidRelativePath(name)
+        }
+    }
+
+    private func normalizedAssetName(_ proposedName: String, source: URL) throws -> String {
+        let trimmed = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        try validateName(trimmed)
+        let sourceExtension = source.pathExtension
+        guard !sourceExtension.isEmpty, (trimmed as NSString).pathExtension.isEmpty else {
+            return trimmed
+        }
+        return "\(trimmed).\(sourceExtension)"
+    }
+
+    private func uniqueAssetURL(named name: String, in parent: URL, hasEventTrack: Bool) -> URL {
+        let proposed = parent.appendingPathComponent(name)
+        if !assetDestinationExists(proposed, hasEventTrack: hasEventTrack) { return proposed }
+
+        let ns = name as NSString
+        let stem = ns.deletingPathExtension
+        let ext = ns.pathExtension
+        var index = 2
+        while true {
+            let candidateName = ext.isEmpty ? "\(stem) \(index)" : "\(stem) \(index).\(ext)"
+            let candidate = parent.appendingPathComponent(candidateName)
+            if !assetDestinationExists(candidate, hasEventTrack: hasEventTrack) { return candidate }
+            index += 1
+        }
+    }
+
+    private func assetDestinationExists(_ url: URL, hasEventTrack: Bool) -> Bool {
+        if FileManager.default.fileExists(atPath: url.path) { return true }
+        return hasEventTrack
+            && FileManager.default.fileExists(atPath: eventSidecarURL(for: url).path)
+    }
+
+    private func eventSidecarURL(for mediaURL: URL) -> URL {
+        mediaURL.deletingPathExtension().appendingPathExtension("events.json")
+    }
+
+    /// APFS is usually case-insensitive, so a direct move from `cut.mov` to
+    /// `Cut.mov` can report that the destination already exists. Hop through a
+    /// unique sibling while retaining both moves for transactional rollback.
+    private func moveItem(
+        at source: URL,
+        to destination: URL,
+        recording moves: inout [(URL, URL)]
+    ) throws {
+        guard source.standardizedFileURL != destination.standardizedFileURL else { return }
+        if source.path.caseInsensitiveCompare(destination.path) == .orderedSame {
+            let temporary = source.deletingLastPathComponent().appendingPathComponent(
+                ".clip-rename-\(UUID().uuidString)-\(source.lastPathComponent)"
+            )
+            try FileManager.default.moveItem(at: source, to: temporary)
+            moves.append((source, temporary))
+            try FileManager.default.moveItem(at: temporary, to: destination)
+            moves.append((temporary, destination))
+        } else {
+            try FileManager.default.moveItem(at: source, to: destination)
+            moves.append((source, destination))
         }
     }
 
     private func uniqueFolderURL(named name: String, in parent: URL) -> URL {
         uniqueURL(named: name, in: parent, preservesExtension: false)
-    }
-
-    private func uniqueFileURL(named name: String, in parent: URL) -> URL {
-        uniqueURL(named: name, in: parent, preservesExtension: true)
     }
 
     private func uniqueURL(named name: String, in parent: URL, preservesExtension: Bool) -> URL {

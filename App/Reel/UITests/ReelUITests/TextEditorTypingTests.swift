@@ -236,6 +236,16 @@ final class TextEditorTypingTests: XCTestCase {
             app.windows.firstMatch.frame.maxY + 1,
             "The video timeline must stay inside the dynamically sized window"
         )
+        let projectTitle = app.buttons["video-project-title"]
+        XCTAssertTrue(projectTitle.waitForExistence(timeout: 5))
+        projectTitle.click()
+        let projectTitleField = app.textFields["video-project-title-field"]
+        XCTAssertTrue(projectTitleField.waitForExistence(timeout: 5))
+        projectTitleField.typeKey("a", modifierFlags: .command)
+        projectTitleField.typeText("Launch Cut")
+        projectTitleField.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(projectTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(projectTitle.label, "Rename project Launch Cut")
 
         NSPasteboard.general.clearContents()
         XCTAssertTrue(NSPasteboard.general.writeObjects([videoURL as NSURL]))

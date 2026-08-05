@@ -53,6 +53,17 @@ private struct FolderTestTrashManager: FileTrashManaging {
     try await store.storeEventTrack(
         EventTrack(assetID: id, alignment: .exact(offset: .zero), samples: [], clicks: [])
     )
+    let renamedAsset = try await folders.renameAsset(id, to: "Launch Cut")
+    #expect(renamedAsset.id == id)
+    #expect(renamedAsset.displayName == "Launch Cut.mov")
+    #expect(renamedAsset.relativePath == "Media/Inbox/Launch Cut.mov")
+    #expect(renamedAsset.eventTrackPath == "Media/Inbox/Launch Cut.events.json")
+    let capitalizedAsset = try await folders.renameAsset(id, to: "LAUNCH CUT.mov")
+    #expect(capitalizedAsset.displayName == "LAUNCH CUT.mov")
+    #expect(capitalizedAsset.relativePath == "Media/Inbox/LAUNCH CUT.mov")
+    #expect(capitalizedAsset.eventTrackPath == "Media/Inbox/LAUNCH CUT.events.json")
+    let sameFolderMove = try await folders.move([id], to: "Inbox")
+    #expect(sameFolderMove.first?.relativePath == "Media/Inbox/LAUNCH CUT.mov")
     let item = TimelineItem(
         id: ItemID(rawValue: "stable-item"),
         assetID: id,
@@ -70,11 +81,14 @@ private struct FolderTestTrashManager: FileTrashManaging {
     #expect(try await folders.createFolder(named: "Demos", in: "") == "Demos")
     #expect(try await folders.createFolder(named: "Demos", in: "") == "Demos 2")
     #expect(try await folders.createFolder(named: "onboarding", in: "Demos") == "Demos/onboarding")
+    #expect(
+        Set(try await folders.destinations()) == ["Demos", "Demos/onboarding", "Demos 2", "Inbox"]
+    )
     _ = try await folders.move([id], to: "Demos/onboarding")
-    #expect(try await store.asset(id: id)?.relativePath == "Media/Demos/onboarding/Recording.mov")
+    #expect(try await store.asset(id: id)?.relativePath == "Media/Demos/onboarding/LAUNCH CUT.mov")
     #expect(
         try await store.asset(id: id)?.eventTrackPath
-            == "Media/Demos/onboarding/Recording.events.json"
+            == "Media/Demos/onboarding/LAUNCH CUT.events.json"
     )
 
     let renamed = try await folders.rename("Demos/onboarding", to: "launch")
@@ -97,7 +111,7 @@ private struct FolderTestTrashManager: FileTrashManaging {
     #expect(
         !FileManager.default.fileExists(atPath: root.appendingPathComponent("Media/launch").path))
     try await folders.restoreFolder(folderTrash)
-    #expect(try await store.asset(id: id)?.relativePath == "Media/launch/Recording.mov")
+    #expect(try await store.asset(id: id)?.relativePath == "Media/launch/LAUNCH CUT.mov")
     #expect(try await store.projectsReferencing(assetIDs: [id]).map(\.name) == ["Stable Project"])
 }
 
@@ -146,4 +160,53 @@ private struct FolderTestTrashManager: FileTrashManaging {
 
     #expect(tree.children?.first(where: { $0.id == "Inbox" })?.assetCount == 5_000)
     #expect(elapsed < .milliseconds(100))
+}
+
+@Test func everyAssetKindCanBeRenamedAndMovedWithoutChangingIdentity() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "clip-folder-all-kinds-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    let folders = LibraryFolders(root: root, library: store)
+    _ = try await folders.createFolder(named: "Organized", in: "")
+
+    let cases: [(AssetKind, String)] = [
+        (.video, "mov"),
+        (.image, "png"),
+        (.audio, "m4a"),
+        (.document, "pdf"),
+        (.text, "md"),
+    ]
+    for (index, item) in cases.enumerated() {
+        let id = AssetID(rawValue: "kind-\(item.0.rawValue)")
+        let originalName = "Original \(index).\(item.1)"
+        let originalURL = LibraryLayout.inbox(in: root).appendingPathComponent(originalName)
+        try Data("kind-\(index)".utf8).write(to: originalURL)
+        try await store.insert(
+            AssetRecord(
+                id: id,
+                relativePath: "Media/Inbox/\(originalName)",
+                displayName: originalName,
+                kind: item.0,
+                createdAt: .now,
+                importedAt: .now,
+                byteSize: Int64(index + 1),
+                contentHash: "hash-\(index)",
+                ingestState: .ready
+            )
+        )
+
+        let renamed = try await folders.renameAsset(id, to: "Renamed \(index)")
+        #expect(renamed.id == id)
+        #expect(renamed.kind == item.0)
+        #expect(renamed.displayName == "Renamed \(index).\(item.1)")
+        let moved = try await folders.move([id], to: "Organized")
+        #expect(moved.first?.id == id)
+        #expect(moved.first?.relativePath == "Media/Organized/Renamed \(index).\(item.1)")
+    }
 }

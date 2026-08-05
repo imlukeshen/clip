@@ -334,6 +334,41 @@ public final class EditorViewModel {
         try apply(patch, registeringUndo: true)
     }
 
+    /// Renames the project through the same durable, undoable graph path as a
+    /// timeline edit. Project packages are keyed by ID, so every Unicode name is
+    /// safe as long as it is a useful single-line label.
+    @discardableResult
+    public func renameProject(to proposedName: String) -> Bool {
+        let normalized =
+            proposedName
+            .components(separatedBy: .newlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            notice = "A project name cannot be empty."
+            return false
+        }
+        guard normalized.count <= 200 else {
+            notice = "Keep the project name under 200 characters."
+            return false
+        }
+        guard normalized != document.name else { return true }
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.rename(normalized)],
+                    label: "Rename Project",
+                    origin: .user
+                )
+            )
+            notice = "Project renamed."
+            return true
+        } catch {
+            notice = "The project could not be renamed."
+            return false
+        }
+    }
+
     public func undo() {
         undoManager.undo()
     }
