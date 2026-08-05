@@ -103,16 +103,20 @@ struct ClipApp: App {
                 }
                 .keyboardShortcut("z", modifiers: .command)
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil && model.textEditor == nil
-                        && !model.undoManager.canUndo
+                    !model.renamingAssetIDs.isEmpty
+                        || (model.editor == nil && model.imageEditor == nil
+                            && model.pdfEditor == nil && model.textEditor == nil
+                            && !model.undoManager.canUndo)
                 )
                 Button(commandTitle("edit.redo")) {
                     AppCommandRouter.run("edit.redo", in: model)
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(
-                    model.editor == nil && model.imageEditor == nil && model.textEditor == nil
-                        && !model.undoManager.canRedo
+                    !model.renamingAssetIDs.isEmpty
+                        || (model.editor == nil && model.imageEditor == nil
+                            && model.pdfEditor == nil && model.textEditor == nil
+                            && !model.undoManager.canRedo)
                 )
             }
             CommandMenu("Assets") {

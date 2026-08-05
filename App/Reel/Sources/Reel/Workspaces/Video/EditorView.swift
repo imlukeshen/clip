@@ -19,9 +19,6 @@ struct EditorView: View {
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
     @State private var liveTextSpans: [OCRSpan] = []
-    @State private var isRenamingProject = false
-    @State private var projectNameDraft = ""
-    @FocusState private var isProjectNameFocused: Bool
     @AppStorage("clip.timeline.zoom") private var timelineZoom = TimelineViewport.fitZoom
 
     var body: some View {
@@ -62,9 +59,6 @@ struct EditorView: View {
         }
         .task(id: liveTextRequestID) {
             await refreshLiveText()
-        }
-        .onChange(of: editor.document.id) { _, _ in
-            cancelProjectRename()
         }
     }
 
@@ -246,84 +240,12 @@ struct EditorView: View {
         .background(theme.palette.surfacePanel)
     }
 
-    @ViewBuilder private var projectTitle: some View {
-        if isRenamingProject {
-            TextField("Project name", text: $projectNameDraft)
-                .textFieldStyle(.plain)
-                .font(theme.type.label.font)
-                .lineLimit(1)
-                .focused($isProjectNameFocused)
-                .onSubmit(commitProjectRename)
-                .onExitCommand(perform: cancelProjectRename)
-                .padding(.horizontal, 8)
-                .frame(width: projectTitleEditorWidth, height: 28)
-                .background {
-                    ZStack {
-                        RoundedRectangle(
-                            cornerRadius: theme.metrics.radius.control,
-                            style: .continuous
-                        )
-                        .fill(theme.palette.surfaceSunken)
-                        OutsideClickMonitor(isActive: isRenamingProject) {
-                            commitProjectRename()
-                        }
-                    }
-                }
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: theme.metrics.radius.control,
-                        style: .continuous
-                    )
-                    .strokeBorder(theme.palette.accentLine, lineWidth: 1)
-                }
-                .accessibilityIdentifier("video-project-title-field")
-        } else {
-            Button(action: beginProjectRename) {
-                HStack(spacing: 5) {
-                    Text(editor.document.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Image(systemName: "pencil")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(theme.palette.textTertiary)
-                }
-                .font(theme.type.label.font)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(ReelPlainButtonStyle())
-            .help("Rename project")
-            .accessibilityLabel("Rename project \(editor.document.name)")
-            .accessibilityIdentifier("video-project-title")
-        }
-    }
-
-    private var projectTitleEditorWidth: CGFloat {
-        min(max(CGFloat(projectNameDraft.count) * 7.5 + 30, 150), 360)
-    }
-
-    private func beginProjectRename() {
-        projectNameDraft = editor.document.name
-        isRenamingProject = true
-        Task { @MainActor in
-            await Task.yield()
-            isProjectNameFocused = true
-            await Task.yield()
-            (NSApp.keyWindow?.fieldEditor(false, for: nil) as? NSTextView)?.selectAll(nil)
-        }
-    }
-
-    private func commitProjectRename() {
-        guard isRenamingProject else { return }
-        _ = editor.renameProject(to: projectNameDraft)
-        isRenamingProject = false
-        isProjectNameFocused = false
-    }
-
-    private func cancelProjectRename() {
-        guard isRenamingProject else { return }
-        projectNameDraft = editor.document.name
-        isRenamingProject = false
-        isProjectNameFocused = false
+    private var projectTitle: some View {
+        EditableFileTitle(
+            name: editor.document.name,
+            accessibilityIdentifier: "video-project-title",
+            onCommit: { _ = editor.renameProject(to: $0) }
+        )
     }
 
     private var toolRail: some View {

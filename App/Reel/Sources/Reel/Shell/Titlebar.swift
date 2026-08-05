@@ -204,27 +204,49 @@ struct Titlebar: View {
             return segments
         }
         if model.selectedWorkspace == .photo, let editor = model.imageEditor {
+            let name =
+                model.assets.first(where: { $0.id == editor.document.sourceAssetID })?.displayName
+                ?? editor.sourceURL.lastPathComponent
             return [
                 Breadcrumb.Segment(title: "Images"),
-                Breadcrumb.Segment(title: editor.sourceURL.lastPathComponent),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                ),
             ]
         }
         if model.selectedWorkspace == .video, let editor = model.editor {
             return [
                 Breadcrumb.Segment(title: "Projects"),
-                Breadcrumb.Segment(title: editor.document.name),
+                Breadcrumb.Segment(
+                    title: editor.document.name,
+                    renameAction: { _ = editor.renameProject(to: $0) }
+                ),
             ]
         }
         if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
+            let name =
+                model.assets.first(where: { $0.id == editor.document.sourceAssetID })?.displayName
+                ?? editor.sourceURL.lastPathComponent
             return [
                 Breadcrumb.Segment(title: "Documents"),
-                Breadcrumb.Segment(title: editor.document.title),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                ),
             ]
         }
         if model.selectedWorkspace == .text, let editor = model.textEditor {
+            let name =
+                editor.activeFile?.assetID.flatMap { assetID in
+                    model.assets.first(where: { $0.id == assetID })?.displayName
+                } ?? editor.activeFile?.relativePath ?? "Untitled"
             return [
                 Breadcrumb.Segment(title: "Text"),
-                Breadcrumb.Segment(title: editor.activeFile?.relativePath ?? "Untitled"),
+                Breadcrumb.Segment(
+                    title: name,
+                    renameAction: model.renameOpenTextFile
+                ),
             ]
         }
         return [Breadcrumb.Segment(title: model.selectedWorkspace.title)]

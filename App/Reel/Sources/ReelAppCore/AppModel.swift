@@ -54,6 +54,8 @@ public final class AppModel {
     public private(set) var isSearchComplete = true
     public private(set) var embeddingModelNeedsReindex = false
     public private(set) var assets: [AssetRecord] = []
+    /// Stable IDs currently undergoing a filesystem rename.
+    public private(set) var renamingAssetIDs: Set<AssetID> = []
     public private(set) var folderTree: FolderNode?
     public private(set) var folderDestinations: [String] = ["", "Inbox"]
     public private(set) var expandedFolders: Set<String>
@@ -810,10 +812,9 @@ public final class AppModel {
                 expandedFolders.insert(parent)
                 await refreshFolderTree()
                 selectFolder(path)
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Create Folder") { target in
                     target.trashFolder(path)
                 }
-                undoManager.setActionName("Create Folder")
             } catch {
                 lastMessage = "The folder could not be created."
             }
@@ -828,10 +829,9 @@ public final class AppModel {
                 let updated = try await runtime.renameFolder(path, to: name)
                 if selectedFolderPath == path { selectedFolderPath = updated }
                 await refreshAssets()
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Rename Folder") { target in
                     target.renameFolder(updated, to: oldName)
                 }
-                undoManager.setActionName("Rename Folder")
             } catch {
                 lastMessage = "The folder could not be renamed."
             }
@@ -839,22 +839,156 @@ public final class AppModel {
     }
 
     public func renameAsset(_ id: AssetID, to name: String) {
-        guard let runtime, let original = assets.first(where: { $0.id == id }) else { return }
+        _ = scheduleAssetRename(id, to: name, registersUndoOnSuccess: true)
+    }
+
+    @discardableResult
+    private func scheduleAssetRename(
+        _ id: AssetID,
+        to name: String,
+        registersUndoOnSuccess: Bool,
+        undoToken: AssetRenameUndoToken? = nil
+    ) -> Bool {
+        guard let runtime, let original = assets.first(where: { $0.id == id }),
+            !renamingAssetIDs.contains(id)
+        else { return false }
+        renamingAssetIDs.insert(id)
         Task {
+            defer { renamingAssetIDs.remove(id) }
             do {
                 let renamed = try await runtime.renameAsset(id, to: name)
+                let relocatedURL = libraryRoot.appendingPathComponent(renamed.relativePath)
+                relocateOpenEditorSource(
+                    for: id,
+                    to: relocatedURL,
+                    displayName: renamed.displayName
+                )
                 await refreshAssets()
-                guard renamed.displayName != original.displayName else { return }
-                undoManager.registerUndo(withTarget: self) { target in
-                    target.renameAsset(id, to: original.displayName)
+                guard renamed.displayName != original.displayName else {
+                    if let undoToken {
+                        undoToken.manager?.removeAllActions(withTarget: undoToken)
+                    }
+                    return
                 }
-                undoManager.setActionName("Rename File")
-                if renamed.displayName != name.trimmingCharacters(in: .whitespacesAndNewlines) {
-                    lastMessage = "Renamed to \(renamed.displayName)."
+                if registersUndoOnSuccess {
+                    registerAssetRenameUndo(
+                        id,
+                        targetName: original.displayName,
+                        inverseName: renamed.displayName
+                    )
                 }
+                lastMessage = "Renamed to \(renamed.displayName)."
             } catch {
+                if let undoToken {
+                    // UndoManager requires the inverse to be registered while
+                    // undo/redo is executing, before this async move finishes.
+                    // A unique target lets us remove only that failed rename's
+                    // inverse without erasing other filenames or content edits.
+                    undoToken.manager?.removeAllActions(withTarget: undoToken)
+                }
                 lastMessage = "The file could not be renamed. Choose a different name."
             }
+        }
+        return true
+    }
+
+    /// Registers the inverse synchronously when an undo or redo handler runs,
+    /// before its asynchronous filesystem move starts. Waiting until that move
+    /// finishes would miss NSUndoManager's redo group and turn Redo into a
+    /// second Undo entry.
+    private func registerAssetRenameUndo(
+        _ id: AssetID,
+        targetName: String,
+        inverseName: String,
+        token: AssetRenameUndoToken? = nil
+    ) {
+        let manager = token?.manager ?? renameUndoManager(for: id)
+        let token = token ?? AssetRenameUndoToken(manager: manager)
+        let opensGroup = manager.groupingLevel == 0
+        if opensGroup { manager.beginUndoGrouping() }
+        // UndoManager keeps an unowned target. Capturing this operation token
+        // in its own handler keeps it alive exactly as long as the action is on
+        // an undo or redo stack.
+        manager.registerUndo(withTarget: token) { [weak self, token] _ in
+            guard let self else { return }
+            guard
+                self.scheduleAssetRename(
+                    id,
+                    to: targetName,
+                    registersUndoOnSuccess: false,
+                    undoToken: token
+                )
+            else { return }
+            self.registerAssetRenameUndo(
+                id,
+                targetName: inverseName,
+                inverseName: targetName,
+                token: token
+            )
+        }
+        manager.setActionName("Rename File")
+        if opensGroup { manager.endUndoGrouping() }
+    }
+
+    /// Filename changes made inside an editor join that editor's history so
+    /// Command-Z preserves the real ordering between content edits and renames.
+    private func renameUndoManager(for assetID: AssetID) -> UndoManager {
+        if let textEditor,
+            textEditor.document.files.contains(where: { $0.assetID == assetID })
+        {
+            return textEditor.undoManager
+        }
+        if imageEditor?.document.sourceAssetID == assetID {
+            return imageEditor?.undoManager ?? undoManager
+        }
+        if pdfEditor?.document.sourceAssetID == assetID {
+            return pdfEditor?.undoManager ?? undoManager
+        }
+        return undoManager
+    }
+
+    /// Renames the file currently shown by the text workspace. Library-backed
+    /// files go through LibraryStore so the file, metadata, search index, and
+    /// undo history stay in sync. Scratch buffers only rename their persisted
+    /// document entry because they do not have a standalone file yet.
+    public func renameOpenTextFile(to name: String) {
+        guard let textEditor, let activeFile = textEditor.activeFile else { return }
+        if let assetID = activeFile.assetID {
+            renameAsset(assetID, to: name)
+            return
+        }
+
+        guard textEditor.sourceURL == nil else {
+            lastMessage = "This project file must be added to the library before it can be renamed."
+            return
+        }
+        if textEditor.renameActiveScratchFile(to: name) {
+            lastMessage = "Renamed to \(textEditor.activeFile?.relativePath ?? name)."
+            Task { await refreshScratchBuffers() }
+        } else {
+            lastMessage = textEditor.notice ?? "The file could not be renamed."
+        }
+    }
+
+    private func relocateOpenEditorSource(
+        for assetID: AssetID,
+        to url: URL,
+        displayName: String
+    ) {
+        if imageEditor?.document.sourceAssetID == assetID {
+            imageEditor?.relocateSource(to: url, displayName: displayName)
+        }
+        if pdfEditor?.document.sourceAssetID == assetID {
+            pdfEditor?.relocateSource(to: url, displayName: displayName)
+        }
+        if let textEditor,
+            textEditor.document.files.contains(where: { $0.assetID == assetID })
+        {
+            _ = textEditor.relocateSource(
+                for: assetID,
+                to: url,
+                displayName: displayName
+            )
         }
     }
 
@@ -873,12 +1007,11 @@ public final class AppModel {
                 _ = try await runtime.moveAssets(ids, to: folder)
                 await refreshAssets()
                 selection.deselectAll()
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Move Assets") { target in
                     for (parent, ids) in oldParents {
                         target.moveAssets(ids, to: parent)
                     }
                 }
-                undoManager.setActionName("Move Assets")
             } catch {
                 lastMessage = "The selected files could not be moved."
             }
@@ -893,10 +1026,9 @@ public final class AppModel {
                 let updated = try await runtime.moveFolder(path, to: parent)
                 if selectedFolderPath == path { selectedFolderPath = updated }
                 await refreshAssets()
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Move Folder") { target in
                     target.moveFolder(updated, to: oldParent)
                 }
-                undoManager.setActionName("Move Folder")
             } catch {
                 lastMessage = "The folder could not be moved."
             }
@@ -910,10 +1042,9 @@ public final class AppModel {
                 let receipt = try await runtime.trashFolder(path)
                 if selectedFolderPath == path { selectedFolderPath = "Inbox" }
                 await refreshAssets()
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Move Folder to Trash") { target in
                     target.restoreFolder(receipt)
                 }
-                undoManager.setActionName("Move Folder to Trash")
             } catch {
                 lastMessage = "The folder could not be moved to Trash."
             }
@@ -2458,19 +2589,35 @@ public final class AppModel {
         folderDestinations = [""] + ((try? await runtime.folderDestinations()) ?? ["Inbox"])
     }
 
+    /// AppModel mutations finish in asynchronous tasks, after AppKit's event
+    /// group has closed. Because automatic grouping is disabled, every such
+    /// registration must establish an explicit boundary or NSUndoManager raises
+    /// an internal inconsistency exception after the operation succeeds.
+    private func registerUndo(
+        on manager: UndoManager? = nil,
+        actionName: String,
+        action: @escaping (AppModel) -> Void
+    ) {
+        let undoManager = manager ?? self.undoManager
+        let opensGroup = undoManager.groupingLevel == 0
+        if opensGroup { undoManager.beginUndoGrouping() }
+        undoManager.registerUndo(withTarget: self, handler: action)
+        undoManager.setActionName(actionName)
+        if opensGroup { undoManager.endUndoGrouping() }
+    }
+
     private func restoreFolder(_ receipt: FolderTrashReceipt) {
         guard let runtime else { return }
         Task {
             do {
                 try await runtime.restoreFolder(receipt)
                 await refreshAssets()
-                undoManager.registerUndo(withTarget: self) { target in
+                registerUndo(actionName: "Move Folder to Trash") { target in
                     let path = receipt.originalURL.path
                         .replacingOccurrences(
                             of: LibraryLayout.media(in: target.libraryRoot).path + "/", with: "")
                     target.trashFolder(path)
                 }
-                undoManager.setActionName("Move Folder to Trash")
             } catch {
                 lastMessage = "The folder could not be restored."
             }
@@ -2499,10 +2646,9 @@ public final class AppModel {
             let receipt = try await runtime.trash(assetIDs: ids)
             selection.deselectAll()
             await refreshAssets()
-            undoManager.registerUndo(withTarget: self) { target in
+            registerUndo(actionName: "Move to Trash") { target in
                 Task { await target.restoreFromTrash(receipt) }
             }
-            undoManager.setActionName("Move to Trash")
             lastMessage = ids.count == 1 ? "Moved to Trash" : "Moved \(ids.count) items to Trash"
         } catch {
             lastMessage = "Clip couldn't move the selected files to Trash."
@@ -2519,10 +2665,9 @@ public final class AppModel {
             for id in ids {
                 selection.click(id, modifiers: selection.selected.isEmpty ? [] : [.command])
             }
-            undoManager.registerUndo(withTarget: self) { target in
+            registerUndo(actionName: "Move to Trash") { target in
                 Task { await target.performTrash(ids) }
             }
-            undoManager.setActionName("Move to Trash")
             lastMessage = ids.count == 1 ? "Restored from Trash" : "Restored \(ids.count) items"
         } catch {
             lastMessage = "Clip couldn't restore the files. They may have been removed from Trash."
@@ -2610,6 +2755,19 @@ public final class AppModel {
             }
             suffix += 1
         }
+    }
+}
+
+/// Identity target for one file rename's complete undo/redo chain.
+///
+/// `UndoManager` can remove actions by target but not by individual closure, so
+/// each asynchronous filesystem rename owns a distinct token. If a later undo
+/// fails, only that rename chain is discarded.
+private final class AssetRenameUndoToken {
+    weak var manager: UndoManager?
+
+    init(manager: UndoManager) {
+        self.manager = manager
     }
 }
 

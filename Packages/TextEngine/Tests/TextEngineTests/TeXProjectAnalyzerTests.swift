@@ -59,6 +59,18 @@ import Testing
     #expect(analysis.reachableFiles == ["paper.latex"])
 }
 
+@Test func texProjectAcceptsAColonInAFilename() {
+    let path = "chapters/launch:final.tex"
+    let analysis = TeXProjectAnalyzer.analyze(
+        sources: [path: "\\documentclass{article}"],
+        availableFiles: [path],
+        selectedMainFile: path
+    )
+
+    #expect(analysis.mainFile == path)
+    #expect(analysis.reachableFiles == [path])
+}
+
 @Test func texProjectRejectsTraversalAndCopiesReferencedLocalResourcesOnly() {
     let sources = [
         "main.tex": """

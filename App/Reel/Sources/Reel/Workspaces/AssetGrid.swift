@@ -45,13 +45,18 @@ struct AssetGrid: View {
         }
         .onAppear { model.selection.setItems(assetIDs) }
         .onChange(of: assetIDs) { _, ids in model.selection.setItems(ids) }
-        .alert("Rename File", isPresented: isRenamePresented) {
+        .alert(
+            "Rename File",
+            isPresented: isRenamePresented,
+            presenting: renamingAsset
+        ) { asset in
             TextField("File name", text: $renameValue)
                 .accessibilityIdentifier("asset-rename-field")
             Button("Cancel", role: .cancel) {}
-            Button("Rename", action: commitRename)
+            Button("Rename") { commitRename(asset) }
                 .disabled(renameValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
+            _ in
             Text("If you leave off the extension, Clip keeps the current one.")
         }
     }
@@ -66,6 +71,16 @@ struct AssetGrid: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
                 if let selectedAsset {
+                    if model.selection.selected.count == 1 {
+                        Button {
+                            beginRename(selectedAsset)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .buttonStyle(ReelBorderedButtonStyle())
+                        .help("Rename the selected file")
+                        .accessibilityIdentifier("asset-rename-button")
+                    }
                     Menu {
                         if model.selection.selected.count == 1 {
                             Button("Rename…") { beginRename(selectedAsset) }
@@ -124,6 +139,9 @@ struct AssetGrid: View {
                     },
                     openAction: {
                         model.activateAsset(asset.id)
+                    },
+                    renameAction: {
+                        beginRename(asset)
                     }
                 ) {
                     AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
@@ -242,8 +260,7 @@ struct AssetGrid: View {
         renamingAsset = asset
     }
 
-    private func commitRename() {
-        guard let asset = renamingAsset else { return }
+    private func commitRename(_ asset: AssetRecord) {
         let name = renameValue
         renamingAsset = nil
         model.renameAsset(asset.id, to: name)

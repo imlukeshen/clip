@@ -239,7 +239,7 @@ public enum TeXProjectAnalyzer {
     }
 
     private static func safeRelativePath(_ path: String) -> String? {
-        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains(":") else { return nil }
+        guard !path.isEmpty, !path.hasPrefix("/") else { return nil }
         let normalized = (path as NSString).standardizingPath
         guard normalized != "..", !normalized.hasPrefix("../") else { return nil }
         return normalized == "." ? nil : normalized

@@ -120,8 +120,8 @@ public final class TextEditorViewModel {
     private let persistStructure: @Sendable (TextDocument) async throws -> Void
     /// Persists the buffer contents to their on-disk home (library file or scratch).
     private let persistContents: @Sendable (FileID, Data, String) async throws -> Void
-    private let sourceURLs: [FileID: URL]
-    private let projectFileURLs: [String: URL]
+    private var sourceURLs: [FileID: URL]
+    private var projectFileURLs: [String: URL]
     private var textBuffers: [FileID: String]
     private var dirtyFileIDs: Set<FileID> = []
 
@@ -272,6 +272,108 @@ public final class TextEditorViewModel {
         } catch {
             notice = "That change could not be applied."
         }
+    }
+
+    /// Gives an unsaved scratch buffer a user-facing filename without turning it
+    /// into a library asset. Finder-style extension preservation keeps `Notes.md`
+    /// as Markdown when the user enters only `Meeting Notes`.
+    @discardableResult
+    public func renameActiveScratchFile(to proposedName: String) -> Bool {
+        guard let activeFile, activeFile.assetID == nil, sourceURL == nil else {
+            notice = "Only an unsaved scratch file can be renamed here."
+            return false
+        }
+        guard
+            let name = Self.normalizedScratchFilename(
+                proposedName,
+                preservingExtensionOf: activeFile.relativePath
+            )
+        else {
+            notice = "Choose a filename without path separators."
+            return false
+        }
+        guard name != activeFile.relativePath else { return true }
+
+        var candidate = document
+        do {
+            _ = try candidate.apply(.renameFile(activeFile.id, name))
+        } catch {
+            notice = "Another file in this document already uses that name."
+            return false
+        }
+
+        perform(.renameFile(activeFile.id, name), actionName: "Rename File")
+        reconcileActivePathChange()
+        return self.activeFile?.relativePath == name
+    }
+
+    /// Reconciles the editor after LibraryStore has physically renamed an open
+    /// text asset. The stable asset ID identifies the document file while the
+    /// existing parent-relative path is retained for multi-file LaTeX projects.
+    /// This must run promptly after the disk move so an event for the vanished
+    /// old path cannot detach an otherwise healthy buffer.
+    @discardableResult
+    public func relocateSource(
+        for assetID: AssetID,
+        to newURL: URL,
+        displayName: String
+    ) -> Bool {
+        guard let file = document.files.first(where: { $0.assetID == assetID }) else {
+            notice = "The renamed file is not open in this document."
+            return false
+        }
+        guard let safeName = Self.validatedFilename(displayName) else {
+            notice = "The renamed file has an invalid filename."
+            return false
+        }
+        let standardizedURL = newURL.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: standardizedURL.path) else {
+            notice = "The renamed file could not be found on disk."
+            return false
+        }
+
+        let oldRelativePath = file.relativePath
+        let parent = (oldRelativePath as NSString).deletingLastPathComponent
+        let newRelativePath =
+            parent.isEmpty || parent == "." ? safeName : "\(parent)/\(safeName)"
+        var candidate = document
+        do {
+            if newRelativePath != oldRelativePath {
+                _ = try candidate.apply(.renameFile(file.id, newRelativePath))
+            }
+        } catch {
+            notice = "Another file in this document already uses that name."
+            return false
+        }
+
+        let isActiveFile = file.id == activeFileID
+        let wasMonitoring = isActiveFile && fileMonitor != nil
+        if isActiveFile {
+            externalReloadTask?.cancel()
+            externalReloadTask = nil
+            fileMonitor?.cancel()
+            fileMonitor = nil
+        }
+
+        let previousURL = sourceURLs[file.id]?.standardizedFileURL
+        sourceURLs[file.id] = standardizedURL
+        let obsoleteKeys = projectFileURLs.compactMap { path, url in
+            path == oldRelativePath || url.standardizedFileURL == previousURL ? path : nil
+        }
+        for key in obsoleteKeys { projectFileURLs.removeValue(forKey: key) }
+        projectFileURLs[newRelativePath] = standardizedURL
+        document = candidate
+
+        if isActiveFile {
+            isDetached = false
+            hasSavedDetachedCopy = false
+            if wasMonitoring { startFileMonitor() }
+            reconcileActivePathChange()
+        } else {
+            rebuildTeXProjectAnalysis()
+            persistStructureNow()
+        }
+        return true
     }
 
     /// Sets the active file's highlighting language as an explicit user choice.
@@ -1110,10 +1212,23 @@ public final class TextEditorViewModel {
                 target.undoManager.setActionName(actionName)
                 target.rebuildTeXProjectAnalysis()
                 target.persistStructureNow()
+                if case .renameFile(let fileID, _) = patch,
+                    fileID == target.activeFileID
+                {
+                    target.scheduleLanguageDetection()
+                    if target.language == .latex { target.scheduleTeXCompilation() }
+                }
             } catch {
                 target.notice = "That change could not be undone."
             }
         }
+    }
+
+    private func reconcileActivePathChange() {
+        rebuildTeXProjectAnalysis()
+        persistStructureNow()
+        scheduleLanguageDetection()
+        if language == .latex { scheduleTeXCompilation() }
     }
 
     private func replaceContentsForCommand(_ value: String, actionName: String) {
@@ -1244,7 +1359,7 @@ public final class TextEditorViewModel {
     }
 
     private static func safeTeXDestination(_ path: String, below root: URL) -> URL? {
-        guard !path.isEmpty, !path.hasPrefix("/"), URL(string: path)?.scheme == nil else {
+        guard !path.isEmpty, !path.hasPrefix("/") else {
             return nil
         }
         let destination = root.appendingPathComponent(path).standardizedFileURL
@@ -1279,6 +1394,26 @@ public final class TextEditorViewModel {
         let depth = relativePath.split(separator: "/").count
         for _ in 0..<depth { root.deleteLastPathComponent() }
         return root
+    }
+
+    private static func normalizedScratchFilename(
+        _ proposedName: String,
+        preservingExtensionOf currentPath: String
+    ) -> String? {
+        guard let name = validatedFilename(proposedName) else { return nil }
+        let currentExtension = (currentPath as NSString).pathExtension
+        guard !currentExtension.isEmpty, (name as NSString).pathExtension.isEmpty else {
+            return name
+        }
+        return "\(name).\(currentExtension)"
+    }
+
+    private static func validatedFilename(_ proposedName: String) -> String? {
+        let name = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != ".", name != "..", !name.hasPrefix("."),
+            name.utf8.count <= 255, !name.contains("/"), !name.contains("\0")
+        else { return nil }
+        return name
     }
 
     private static func projectPathsMatch(_ lhs: String, _ rhs: String) -> Bool {

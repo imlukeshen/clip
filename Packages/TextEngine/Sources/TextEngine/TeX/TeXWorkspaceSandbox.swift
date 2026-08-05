@@ -122,9 +122,7 @@ struct TeXWorkspaceSandbox {
     }
 
     private static func safeDestination(_ relativePath: String, below root: URL) -> URL? {
-        guard !relativePath.isEmpty, !relativePath.hasPrefix("/"),
-            URL(string: relativePath)?.scheme == nil
-        else { return nil }
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return nil }
         let destination = root.appendingPathComponent(relativePath).standardizedFileURL
         let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         guard destination.path.hasPrefix(rootPrefix) else { return nil }

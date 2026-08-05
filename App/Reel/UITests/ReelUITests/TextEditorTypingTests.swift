@@ -293,6 +293,82 @@ final class TextEditorTypingTests: XCTestCase {
     }
 
     @MainActor
+    func testLibraryRenameMovesThePhysicalFileAndUpdatesItsVisibleName() throws {
+        let temporaryRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-library-rename-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let libraryRoot = temporaryRoot.appendingPathComponent("Library", isDirectory: true)
+        let imageURL = temporaryRoot.appendingPathComponent("Rename Fixture.png")
+        try FileManager.default.createDirectory(
+            at: temporaryRoot,
+            withIntermediateDirectories: true
+        )
+        try makeTestImage(at: imageURL)
+        defer {
+            NSPasteboard.general.clearContents()
+            try? FileManager.default.removeItem(at: temporaryRoot)
+        }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["CLIP_UI_TESTING"] = "1"
+        app.launchEnvironment["REEL_LIBRARY_ROOT"] = libraryRoot.path
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["sidebar-route-all-media"].waitForExistence(timeout: 10))
+        app.typeKey("k", modifierFlags: .command)
+        let palette = app.descendants(matching: .any)["command-palette"]
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        let videoCommand = app.buttons["command-navigation.video"]
+        XCTAssertTrue(videoCommand.waitForExistence(timeout: 5))
+        videoCommand.click()
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(try Data(contentsOf: imageURL), forType: .png)
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(
+            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            "The fixture image was not imported into the library-backed timeline"
+        )
+
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        let mediaCommand = app.buttons["command-navigation.inbox"]
+        XCTAssertTrue(mediaCommand.waitForExistence(timeout: 5))
+        mediaCommand.click()
+
+        let originalName = app.staticTexts["Pasted Image.mov"]
+        XCTAssertTrue(originalName.waitForExistence(timeout: 10))
+        originalName.click()
+        let renameButton = app.buttons["asset-rename-button"]
+        XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
+        renameButton.click()
+
+        let renameAlert = app.alerts["Rename File"]
+        XCTAssertTrue(renameAlert.waitForExistence(timeout: 5))
+        let renameField = renameAlert.textFields["asset-rename-field"]
+        XCTAssertTrue(renameField.waitForExistence(timeout: 5))
+        renameField.typeKey("a", modifierFlags: .command)
+        renameField.typeText("Renamed Still")
+        renameAlert.buttons["Rename"].click()
+
+        XCTAssertTrue(
+            app.staticTexts["Renamed Still.mov"].waitForExistence(timeout: 10),
+            "The library did not publish the canonical renamed filename"
+        )
+        let originalURL = libraryRoot.appendingPathComponent("Media/Inbox/Pasted Image.mov")
+        let renamedURL = libraryRoot.appendingPathComponent("Media/Inbox/Renamed Still.mov")
+        let deadline = Date().addingTimeInterval(10)
+        while !FileManager.default.fileExists(atPath: renamedURL.path), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: renamedURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalURL.path))
+    }
+
+    @MainActor
     func testLibrarySearchResignsFocusOnOutsideClick() throws {
         let (app, libraryRoot) = launchClip(named: "search-focus")
         defer { try? FileManager.default.removeItem(at: libraryRoot) }

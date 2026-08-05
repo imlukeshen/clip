@@ -284,6 +284,110 @@ struct TextEditorViewModelTests {
         editor.stop()
     }
 
+    @Test("A scratch filename is safe, keeps its extension, persists, and is undoable")
+    func renamesScratchFile() async throws {
+        let file = TextFile(
+            id: FileID(rawValue: "scratch-name"),
+            relativePath: "Untitled.md",
+            language: .markdown,
+            languageIsExplicit: true
+        )
+        let structures = TextDocumentRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "# Notes",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { document in await structures.record(document) },
+            persistingContents: { _, _ in }
+        )
+
+        #expect(editor.renameActiveScratchFile(to: "  Meeting Notes  "))
+        #expect(editor.activeFile?.relativePath == "Meeting Notes.md")
+        for _ in 0..<30 where await structures.path != "Meeting Notes.md" {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(await structures.path == "Meeting Notes.md")
+
+        #expect(!editor.renameActiveScratchFile(to: "folder/notes"))
+        #expect(!editor.renameActiveScratchFile(to: ".hidden"))
+        #expect(editor.activeFile?.relativePath == "Meeting Notes.md")
+
+        editor.undo()
+        #expect(editor.activeFile?.relativePath == "Untitled.md")
+        editor.redo()
+        #expect(editor.activeFile?.relativePath == "Meeting Notes.md")
+    }
+
+    @Test("A library rename relocates the active source and LaTeX project maps")
+    func relocatesRenamedLibrarySource() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-text-relocation-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let chapters = root.appendingPathComponent("chapters", isDirectory: true)
+        try FileManager.default.createDirectory(at: chapters, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldURL = chapters.appendingPathComponent("main.tex")
+        let newURL = chapters.appendingPathComponent("launch:final.tex")
+        let source = "\\documentclass{article}\\begin{document}Clip\\end{document}"
+        try Data(source.utf8).write(to: oldURL)
+
+        let fileID = FileID(rawValue: "relocated-main")
+        let assetID = AssetID(rawValue: "relocated-asset")
+        let file = TextFile(
+            id: fileID,
+            assetID: assetID,
+            relativePath: "chapters/main.tex",
+            language: .latex,
+            languageIsExplicit: true
+        )
+        let preferences = try makeTeXPreferences(packageAccess: .cachedOnly)
+        let jobs = TeXJobRecorder()
+        let structures = TextDocumentRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file], mainFileID: fileID),
+            contents: [fileID: source],
+            activeFileID: fileID,
+            sourceURLs: [fileID: oldURL],
+            projectFileURLs: ["chapters/main.tex": oldURL],
+            hashingWith: { _ in "hash" },
+            persistingStructure: { document in await structures.record(document) },
+            persistingContents: { _, _, _ in },
+            texPreferences: preferences
+        )
+        editor.configureTeXEngine(RecordingTeXEngine(recorder: jobs))
+        editor.start()
+        defer { editor.stop() }
+
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        #expect(
+            editor.relocateSource(
+                for: assetID,
+                to: newURL,
+                displayName: "launch:final.tex"
+            )
+        )
+        #expect(editor.sourceURL == newURL.standardizedFileURL)
+        #expect(editor.activeFile?.relativePath == "chapters/launch:final.tex")
+        #expect(!editor.isDetached)
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        let job = try #require(jobs.job)
+        #expect(job.mainFile == newURL.standardizedFileURL)
+        #expect(Set(job.projectFiles) == [newURL.standardizedFileURL])
+        #expect(Set(job.sourceOverrides.keys) == ["chapters/launch:final.tex"])
+
+        try Data("changed after rename".utf8).write(to: newURL, options: .atomic)
+        for _ in 0..<30 where editor.text != "changed after rename" {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(editor.text == "changed after rename")
+        #expect(!editor.isDetached)
+        #expect(await structures.path == "chapters/launch:final.tex")
+    }
+
     @Test("A failed rebuild keeps the last successful LaTeX PDF visible")
     func latexRetainsLastSuccessfulPDF() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
@@ -486,6 +590,16 @@ private actor TextWriteRecorder {
     }
 
     func text(for id: FileID) -> String? { writes[id] }
+}
+
+private actor TextDocumentRecorder {
+    private var document: TextDocument?
+
+    var path: String? { document?.files.first?.relativePath }
+
+    func record(_ document: TextDocument) {
+        self.document = document
+    }
 }
 
 private struct RecordingTeXEngine: TeXEngine {

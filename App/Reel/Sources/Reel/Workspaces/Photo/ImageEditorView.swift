@@ -76,9 +76,13 @@ struct ImageEditorView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(editor.sourceURL.deletingPathExtension().lastPathComponent)
-                    .font(theme.type.label.font)
-                    .lineLimit(1)
+                EditableFileTitle(
+                    name: model.assets.first(where: {
+                        $0.id == editor.document.sourceAssetID
+                    })?.displayName ?? editor.sourceURL.lastPathComponent,
+                    accessibilityIdentifier: "image-file-title",
+                    onCommit: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+                )
                 HStack(spacing: 5) {
                     Circle()
                         .fill(editor.isRendering ? theme.palette.click : theme.palette.success)
@@ -103,7 +107,10 @@ struct ImageEditorView: View {
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(ReelIconButtonStyle())
-                .disabled(!editor.undoManager.canUndo)
+                .disabled(
+                    model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                        || !editor.undoManager.canUndo
+                )
                 .help("Undo")
 
                 Button {
@@ -113,7 +120,10 @@ struct ImageEditorView: View {
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(ReelIconButtonStyle())
-                .disabled(!editor.undoManager.canRedo)
+                .disabled(
+                    model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                        || !editor.undoManager.canRedo
+                )
                 .help("Redo")
             }
 

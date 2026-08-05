@@ -10,6 +10,17 @@ struct Breadcrumb: View {
     struct Segment {
         let title: String
         var action: (() -> Void)?
+        var renameAction: ((String) -> Void)?
+
+        init(
+            title: String,
+            action: (() -> Void)? = nil,
+            renameAction: ((String) -> Void)? = nil
+        ) {
+            self.title = title
+            self.action = action
+            self.renameAction = renameAction
+        }
     }
 
     @Environment(\.theme) private var theme
@@ -25,7 +36,13 @@ struct Breadcrumb: View {
                         .padding(.horizontal, 1)
                         .accessibilityHidden(true)
                 }
-                if index == segments.count - 1 {
+                if index == segments.count - 1, let renameAction = segment.renameAction {
+                    EditableFileTitle(
+                        name: segment.title,
+                        accessibilityIdentifier: "breadcrumb-file-title",
+                        onCommit: renameAction
+                    )
+                } else if index == segments.count - 1 {
                     Text(segment.title)
                         .font(theme.type.label.font.weight(.medium))
                         .foregroundStyle(theme.palette.textPrimary)

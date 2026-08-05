@@ -17,6 +17,7 @@ public struct AssetCard<Thumbnail: View>: View {
     private let state: AssetCardState
     private let action: () -> Void
     private let openAction: (() -> Void)?
+    private let renameAction: (() -> Void)?
     private let retry: (() -> Void)?
     private let thumbnail: Thumbnail
 
@@ -27,6 +28,7 @@ public struct AssetCard<Thumbnail: View>: View {
         state: AssetCardState = .normal,
         action: @escaping () -> Void,
         openAction: (() -> Void)? = nil,
+        renameAction: (() -> Void)? = nil,
         retry: (() -> Void)? = nil,
         @ViewBuilder thumbnail: () -> Thumbnail
     ) {
@@ -36,6 +38,7 @@ public struct AssetCard<Thumbnail: View>: View {
         self.state = state
         self.action = action
         self.openAction = openAction
+        self.renameAction = renameAction
         self.retry = retry
         self.thumbnail = thumbnail()
     }
@@ -141,6 +144,23 @@ public struct AssetCard<Thumbnail: View>: View {
         .overlay {
             RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
                 .strokeBorder(borderColor, lineWidth: theme.metrics.hairline)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if isHovered || state.isSelected, let renameAction {
+                Button(action: renameAction) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(ReelPlainButtonStyle())
+                .foregroundStyle(theme.palette.textSecondary)
+                .background(theme.palette.surfaceRaised)
+                .clipShape(Circle())
+                .padding(.trailing, 7)
+                .padding(.bottom, 31)
+                .help("Rename file")
+                .accessibilityLabel("Rename \(title)")
+            }
         }
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)

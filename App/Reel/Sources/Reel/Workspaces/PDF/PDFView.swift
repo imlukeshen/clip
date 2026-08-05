@@ -92,9 +92,13 @@ private struct PDFEditorView: View {
             }
             .buttonStyle(ReelPlainButtonStyle())
             .help("Back to PDF library")
-            Text(editor.document.title)
-                .font(theme.type.label.font)
-                .lineLimit(1)
+            EditableFileTitle(
+                name: model.assets.first(where: {
+                    $0.id == editor.document.sourceAssetID
+                })?.displayName ?? editor.sourceURL.lastPathComponent,
+                accessibilityIdentifier: "pdf-file-title",
+                onCommit: { model.renameAsset(editor.document.sourceAssetID, to: $0) }
+            )
             Text("Page \(editor.selectedPageNumber) of \(editor.document.pages.count)")
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -119,7 +123,10 @@ private struct PDFEditorView: View {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(ReelPlainButtonStyle())
-            .disabled(!editor.undoManager.canUndo)
+            .disabled(
+                model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                    || !editor.undoManager.canUndo
+            )
             .keyboardShortcut("z", modifiers: .command)
             Button {
                 editor.redo()
@@ -127,7 +134,10 @@ private struct PDFEditorView: View {
                 Image(systemName: "arrow.uturn.forward")
             }
             .buttonStyle(ReelPlainButtonStyle())
-            .disabled(!editor.undoManager.canRedo)
+            .disabled(
+                model.renamingAssetIDs.contains(editor.document.sourceAssetID)
+                    || !editor.undoManager.canRedo
+            )
             .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         .padding(.horizontal, 14)

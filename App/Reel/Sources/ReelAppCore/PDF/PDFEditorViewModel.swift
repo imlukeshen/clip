@@ -53,7 +53,10 @@ public final class PDFEditorViewModel {
     public var selectedSourceTextBlockID: Int?
     public var activeTool: PDFEditorTool = .select
     public var automaticallyResolveMissingFonts: Bool
-    public let sourceURL: URL
+    /// Current library location for the source PDF.
+    public private(set) var sourceURL: URL
+    /// Canonical library filename after collision and extension handling.
+    public private(set) var sourceDisplayName: String
     public let undoManager = UndoManager()
 
     private let source: PDFiumDocument
@@ -81,6 +84,7 @@ public final class PDFEditorViewModel {
         let converter = PDFMarkdownConverter(source: source)
         self.document = document
         self.sourceURL = sourceURL
+        self.sourceDisplayName = sourceURL.lastPathComponent
         self.source = source
         self.fontStore = fontStore
         self.automaticallyResolveMissingFonts = automaticallyResolveMissingFonts
@@ -151,6 +155,36 @@ public final class PDFEditorViewModel {
         renderTask?.cancel()
         thumbnailTask?.cancel()
         persistenceTask?.cancel()
+    }
+
+    /// Rebinds the editor after the library moves its source asset.
+    ///
+    /// PDFium owns the already-open source bytes, so a filesystem rename does
+    /// not require rebuilding the renderer. The edit document title is derived
+    /// from the library filename, though, and must be persisted so reopening the
+    /// PDF does not restore the old title. This synchronization deliberately
+    /// does not register editor undo: the library rename owns that undo action
+    /// and will call this method again when it moves the asset back.
+    public func relocateSource(to url: URL, displayName: String) {
+        let relocatedURL = url.standardizedFileURL
+        let didMove = relocatedURL != sourceURL.standardizedFileURL
+        if didMove { sourceURL = relocatedURL }
+        sourceDisplayName = displayName
+
+        let relocatedTitle = URL(fileURLWithPath: displayName).deletingPathExtension()
+            .lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relocatedTitle.isEmpty, relocatedTitle != document.title else { return }
+
+        var candidate = document
+        candidate.title = relocatedTitle
+        do {
+            try candidate.validate()
+            document = candidate
+            persist()
+        } catch {
+            notice = "The renamed PDF title could not be saved locally."
+        }
     }
 
     public func selectPage(_ id: PDFPageID) {

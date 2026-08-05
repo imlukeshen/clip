@@ -36,13 +36,21 @@ public enum AppCommandRouter {
                 ? .unavailable(reason: "The capture history is already empty.")
                 : .available
         case "edit.undo":
+            guard model.renamingAssetIDs.isEmpty else {
+                return .unavailable(reason: "Wait for the file rename to finish.")
+            }
             return model.textEditor?.undoManager.canUndo == true
                 || model.imageEditor?.undoManager.canUndo == true
+                || model.pdfEditor?.undoManager.canUndo == true
                 || model.editor?.undoManager.canUndo == true || model.undoManager.canUndo
                 ? .available : .unavailable(reason: "There is nothing to undo.")
         case "edit.redo":
+            guard model.renamingAssetIDs.isEmpty else {
+                return .unavailable(reason: "Wait for the file rename to finish.")
+            }
             return model.textEditor?.undoManager.canRedo == true
                 || model.imageEditor?.undoManager.canRedo == true
+                || model.pdfEditor?.undoManager.canRedo == true
                 || model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
                 ? .available : .unavailable(reason: "There is nothing to redo.")
         case "asset.selectAll":
@@ -114,6 +122,8 @@ public enum AppCommandRouter {
                 editor.undo()
             } else if let editor = model.imageEditor {
                 editor.undo()
+            } else if let editor = model.pdfEditor {
+                editor.undo()
             } else if let editor = model.editor {
                 editor.undo()
             } else {
@@ -124,6 +134,8 @@ public enum AppCommandRouter {
             if let editor = model.textEditor {
                 editor.redo()
             } else if let editor = model.imageEditor {
+                editor.redo()
+            } else if let editor = model.pdfEditor {
                 editor.redo()
             } else if let editor = model.editor {
                 editor.redo()

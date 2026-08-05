@@ -1,3 +1,4 @@
+import CaptureKit
 import CoreGraphics
 import CoreModel
 import CoreText
@@ -99,6 +100,81 @@ struct PDFEditorViewModelTests {
         editor.stop()
     }
 
+    @Test("Relocating the source updates and persists the filename-derived title")
+    @MainActor
+    func relocateSource() async throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "relocated-pdf-fixture"),
+            title: "Original Name"
+        )
+        let recorder = PDFPersistenceRecorder()
+        let editor = PDFEditorViewModel(
+            document: document,
+            sourceURL: URL(fileURLWithPath: "/tmp/Original Name.pdf"),
+            source: source,
+            fontStore: PDFOpenFontStore(
+                cacheDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "clip-pdf-font-tests-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            ),
+            persisting: { document in await recorder.save(document) }
+        )
+        let relocated = URL(fileURLWithPath: "/tmp/Renamed Notes.pdf")
+
+        editor.relocateSource(to: relocated, displayName: "Renamed Notes.pdf")
+
+        #expect(editor.sourceURL == relocated.standardizedFileURL)
+        #expect(editor.sourceDisplayName == "Renamed Notes.pdf")
+        #expect(editor.document.title == "Renamed Notes")
+        #expect(!editor.undoManager.canUndo)
+        try await waitUntil { await recorder.last?.title == "Renamed Notes" }
+        editor.stop()
+    }
+
+    @Test("Application undo and redo commands stay available for PDF edits")
+    @MainActor
+    func appCommandsRoutePDFUndoAndRedo() async throws {
+        let fixtureRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-pdf-command-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+        try FileManager.default.createDirectory(
+            at: fixtureRoot,
+            withIntermediateDirectories: true
+        )
+        let sourceURL = fixtureRoot.appendingPathComponent("Command Fixture.pdf")
+        try fixturePDF().write(to: sourceURL, options: .atomic)
+        let libraryRoot = fixtureRoot.appendingPathComponent("Library", isDirectory: true)
+        let model = AppModel(
+            libraryRoot: libraryRoot,
+            shortcutReader: ShortcutReader(sandboxed: true)
+        )
+
+        await model.start()
+        model.accept([sourceURL], source: .drop)
+        try await waitUntil {
+            model.ingestCount == 0 && model.assets.count == 1
+        }
+        let asset = try #require(model.assets.first)
+        model.openPDFEditor(for: asset.id)
+        try await waitUntil { model.pdfEditor?.renderedPage != nil }
+        let editor = try #require(model.pdfEditor)
+        let original = editor.document
+
+        editor.rotateSelectedPage()
+        #expect(AppCommandRouter.availability(of: "edit.undo", in: model) == .available)
+        _ = AppCommandRouter.run("edit.undo", in: model)
+        #expect(editor.document == original)
+
+        #expect(AppCommandRouter.availability(of: "edit.redo", in: model) == .available)
+        _ = AppCommandRouter.run("edit.redo", in: model)
+        #expect(editor.selectedPage?.rotation == .degrees90)
+        model.closePDFEditor()
+    }
+
     private func fixturePDF() throws -> Data {
         let data = NSMutableData()
         let consumer = try #require(CGDataConsumer(data: data))
@@ -148,6 +224,7 @@ private actor PDFPersistenceRecorder {
     private var documents: [PDFEditDocument] = []
 
     var count: Int { documents.count }
+    var last: PDFEditDocument? { documents.last }
 
     func save(_ document: PDFEditDocument) {
         documents.append(document)

@@ -182,6 +182,36 @@ import Testing
     editor.stop()
 }
 
+@MainActor
+@Test func relocatedImageSourceRebuildsFromTheNewLibraryPath() async throws {
+    let source = try temporaryImageSource()
+    let relocated = source.deletingLastPathComponent().appendingPathComponent(
+        "Renamed Image-\(UUID().uuidString).png"
+    )
+    defer {
+        try? FileManager.default.removeItem(at: source)
+        try? FileManager.default.removeItem(at: relocated)
+    }
+    let document = try ImageDocument(
+        id: DocumentID(rawValue: "relocated-image-source-test"),
+        sourceAssetID: AssetID(rawValue: "relocated-image-source"),
+        canvas: ImageCanvas(width: 1, height: 1)
+    )
+    let editor = ImageEditorViewModel(
+        document: document,
+        sourceURL: source,
+        persisting: { _ in }
+    )
+
+    try FileManager.default.moveItem(at: source, to: relocated)
+    editor.relocateSource(to: relocated, displayName: "Renamed Image.png")
+
+    #expect(editor.sourceURL == relocated.standardizedFileURL)
+    #expect(editor.sourceDisplayName == "Renamed Image.png")
+    try await waitUntil { !editor.isRendering && editor.renderedImage != nil }
+    editor.stop()
+}
+
 private func temporaryImageSource() throws -> URL {
     let source = FileManager.default.temporaryDirectory.appendingPathComponent(
         "reel-image-editor-\(UUID().uuidString).png"
@@ -194,4 +224,21 @@ private func temporaryImageSource() throws -> URL {
     )
     try tinyPNG.write(to: source)
     return source
+}
+
+@MainActor
+private func waitUntil(
+    timeout: Duration = .seconds(2),
+    _ condition: @escaping @MainActor () -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while !condition() {
+        guard clock.now < deadline else { throw ImageEditorTestError.timeout }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+private enum ImageEditorTestError: Error {
+    case timeout
 }

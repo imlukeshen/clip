@@ -81,7 +81,10 @@ public final class ImageEditorViewModel {
     public var textFontSize = 28.0
     public var blurRadius = 18.0
     public var redactionMode: ImageRedactionMode = .pixelate
-    public let sourceURL: URL
+    /// Current library location for the source image.
+    public private(set) var sourceURL: URL
+    /// Canonical library filename after collision and extension handling.
+    public private(set) var sourceDisplayName: String
     public let undoManager = UndoManager()
 
     private let renderer: ImageDocumentRenderer
@@ -99,6 +102,7 @@ public final class ImageEditorViewModel {
     ) {
         self.document = document
         self.sourceURL = sourceURL
+        self.sourceDisplayName = sourceURL.lastPathComponent
         self.sourceCanvas = sourceCanvas ?? document.canvas
         self.renderer = renderer
         self.persistence = persisting
@@ -110,6 +114,20 @@ public final class ImageEditorViewModel {
     public func stop() {
         renderTask?.cancel()
         persistenceTask?.cancel()
+    }
+
+    /// Rebinds the editor after the library moves its source asset.
+    ///
+    /// Library assets keep a stable identifier when renamed, but image renders
+    /// read from the source URL on every rebuild. Updating the URL and starting
+    /// a fresh render together prevents the next edit from reading the old,
+    /// now-missing path.
+    public func relocateSource(to url: URL, displayName: String) {
+        let relocatedURL = url.standardizedFileURL
+        let didMove = relocatedURL != sourceURL.standardizedFileURL
+        sourceURL = relocatedURL
+        sourceDisplayName = displayName
+        if didMove { rebuild() }
     }
 
     public func activate(_ tool: ImageEditorTool) {

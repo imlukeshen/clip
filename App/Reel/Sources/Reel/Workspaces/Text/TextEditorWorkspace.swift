@@ -201,6 +201,16 @@ struct TextEditorWorkspace: View {
                 .fill(theme.palette.line)
                 .frame(width: theme.metrics.hairline, height: 18)
 
+            EditableFileTitle(
+                name: activeFilename,
+                accessibilityIdentifier: "text-file-title",
+                onCommit: model.renameOpenTextFile
+            )
+
+            Rectangle()
+                .fill(theme.palette.line)
+                .frame(width: theme.metrics.hairline, height: 18)
+
             languageMenu
 
             Spacer()
@@ -288,7 +298,7 @@ struct TextEditorWorkspace: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(ReelIconButtonStyle())
-            .disabled(!editor.undoManager.canUndo)
+            .disabled(isRenamingOpenFile || !editor.undoManager.canUndo)
             .help("Undo")
 
             Button(action: editor.redo) {
@@ -296,12 +306,24 @@ struct TextEditorWorkspace: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(ReelIconButtonStyle())
-            .disabled(!editor.undoManager.canRedo)
+            .disabled(isRenamingOpenFile || !editor.undoManager.canRedo)
             .help("Redo")
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(height: EditorChromeMetrics.headerHeight)
         .background(theme.palette.surfacePanel)
+    }
+
+    private var activeFilename: String {
+        editor.activeFile?.assetID.flatMap { assetID in
+            model.assets.first(where: { $0.id == assetID })?.displayName
+        } ?? editor.activeFile?.relativePath ?? "Untitled.txt"
+    }
+
+    private var isRenamingOpenFile: Bool {
+        editor.document.files.contains { file in
+            file.assetID.map(model.renamingAssetIDs.contains) == true
+        }
     }
 
     private var languageMenu: some View {
