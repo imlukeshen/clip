@@ -116,16 +116,29 @@ final class CodeTextView: NSTextView {
             super.insertText(insertString, replacementRange: replacementRange)
             return
         }
+        let selection = selectedRange()
+        if snippetLanguage == .markdown,
+            !MarkdownEditingIntelligence.isInsideFencedCode(
+                location: selection.location,
+                in: string
+            ),
+            let prepared = MarkdownFormattingOperations.preparingTypedInsertion(
+                inserted,
+                in: string,
+                selectedRange: selection
+            )
+        {
+            apply(prepared)
+            return
+        }
         let pairs = ["(": ")", "[": "]", "{": "}", "\"": "\"", "'": "'"]
         if let closing = pairs[inserted] {
-            let selection = selectedRange()
             let selected = (string as NSString).substring(with: selection)
             super.insertText(inserted + selected + closing, replacementRange: selection)
             setSelectedRange(NSRange(location: selection.location + 1, length: selection.length))
             return
         }
         if pairs.values.contains(inserted) {
-            let selection = selectedRange()
             let source = string as NSString
             if selection.length == 0, selection.location < source.length,
                 source.substring(with: NSRange(location: selection.location, length: 1)) == inserted

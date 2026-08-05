@@ -54,6 +54,49 @@ public enum MarkdownBlockStyle: Sendable, Equatable {
 
 /// Pure Markdown transformations so toolbar and keyboard commands remain undoable and testable.
 public enum MarkdownFormattingOperations {
+    /// Makes an unfinished ATX heading behave like a block-editor shortcut.
+    /// Typing the first content character after one to six leading `#` markers
+    /// inserts Markdown's required separator as part of the same undoable edit.
+    public static func preparingTypedInsertion(
+        _ insertion: String,
+        in text: String,
+        selectedRange requestedRange: NSRange
+    ) -> TextEditResult? {
+        guard insertion.utf16.count == 1,
+            insertion != "#",
+            insertion.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else { return nil }
+        let source = text as NSString
+        let selection = clamped(requestedRange, in: source)
+        guard selection.length == 0 else { return nil }
+        let lineRange = source.lineRange(
+            for: NSRange(location: selection.location, length: 0)
+        )
+        let beforeCaret = source.substring(
+            with: NSRange(
+                location: lineRange.location,
+                length: selection.location - lineRange.location
+            )
+        )
+        guard
+            let expression = try? NSRegularExpression(pattern: "^[ \\t]*#{1,6}$"),
+            expression.firstMatch(
+                in: beforeCaret,
+                range: NSRange(location: 0, length: (beforeCaret as NSString).length)
+            ) != nil
+        else { return nil }
+        let replacement = " " + insertion
+        return replacing(
+            selection,
+            in: source,
+            with: replacement,
+            selection: NSRange(
+                location: selection.location + (replacement as NSString).length,
+                length: 0
+            )
+        )
+    }
+
     /// Returns the semantic block style at the start of the current selection.
     public static func blockStyle(
         in text: String,

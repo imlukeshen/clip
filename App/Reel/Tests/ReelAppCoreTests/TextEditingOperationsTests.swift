@@ -291,6 +291,32 @@ struct TextEditingOperationsTests {
         )
     }
 
+    @Test("Markdown heading shortcuts insert the required separator while typing")
+    func markdownHeadingTypingShortcut() {
+        let heading = MarkdownFormattingOperations.preparingTypedInsertion(
+            "s",
+            in: "###",
+            selectedRange: NSRange(location: 3, length: 0)
+        )
+        #expect(heading?.text == "### s")
+        #expect(heading?.selectedRange == NSRange(location: 5, length: 0))
+
+        #expect(
+            MarkdownFormattingOperations.preparingTypedInsertion(
+                "#",
+                in: "###",
+                selectedRange: NSRange(location: 3, length: 0)
+            ) == nil
+        )
+        #expect(
+            MarkdownFormattingOperations.preparingTypedInsertion(
+                "s",
+                in: "Use ###",
+                selectedRange: NSRange(location: 7, length: 0)
+            ) == nil
+        )
+    }
+
     @Test("Markdown link and block insertion select the next editable content")
     func markdownInsertions() {
         let link = MarkdownFormattingOperations.apply(

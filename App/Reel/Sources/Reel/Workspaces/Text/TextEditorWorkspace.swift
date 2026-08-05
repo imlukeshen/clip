@@ -441,6 +441,7 @@ struct TextEditorWorkspace: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Turn the current line into body text or a heading")
+            .accessibilityLabel(currentMarkdownBlockStyle.displayName)
             .accessibilityIdentifier("markdown-block-style")
 
             formattingDivider
@@ -450,7 +451,6 @@ struct TextEditorWorkspace: View {
                 systemImage: "bold",
                 action: #selector(CodeTextView.markdownBold(_:)),
                 identifier: "markdown-bold",
-                shortcut: "⌘B",
                 isActive: markdownInlineStyleIsActive(.bold)
             )
             markdownFormatButton(
@@ -458,7 +458,6 @@ struct TextEditorWorkspace: View {
                 systemImage: "italic",
                 action: #selector(CodeTextView.markdownItalic(_:)),
                 identifier: "markdown-italic",
-                shortcut: "⌘I",
                 isActive: markdownInlineStyleIsActive(.italic)
             )
             markdownFormatButton(
@@ -466,7 +465,6 @@ struct TextEditorWorkspace: View {
                 systemImage: "strikethrough",
                 action: #selector(CodeTextView.markdownStrikethrough(_:)),
                 identifier: "markdown-strikethrough",
-                shortcut: "⇧⌘X",
                 isActive: markdownInlineStyleIsActive(.strikethrough)
             )
             markdownFormatButton(
@@ -567,7 +565,6 @@ struct TextEditorWorkspace: View {
         systemImage: String,
         action: Selector,
         identifier: String,
-        shortcut: String? = nil,
         isActive: Bool = false
     ) -> some View {
         Button {
@@ -577,7 +574,7 @@ struct TextEditorWorkspace: View {
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(ReelIconButtonStyle(isActive: isActive))
-        .help(shortcut.map { "\(title) (\($0))" } ?? title)
+        .help(title)
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
     }

@@ -324,7 +324,10 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["markdown-bulleted-list"].exists)
 
         let blockStyle = app.descendants(matching: .any)["markdown-block-style"]
-        XCTAssertTrue(blockStyle.label.contains("Heading 1"))
+        XCTAssertTrue(
+            blockStyle.label.contains("Heading 1"),
+            "Expected Heading 1 toolbar state, got: \(blockStyle.label)"
+        )
         editor.click()
         editor.typeKey(.end, modifierFlags: .command)
         editor.typeText("\n")
@@ -333,7 +336,10 @@ final class TextEditorTypingTests: XCTestCase {
         app.menuItems["Heading 1"].click()
         editor.typeText("Persistent heading")
         XCTAssertTrue((editor.value as? String ?? "").contains("# Persistent heading"))
-        XCTAssertTrue(blockStyle.label.contains("Heading 1"))
+        XCTAssertTrue(
+            blockStyle.label.contains("Heading 1"),
+            "Expected Heading 1 toolbar state after typing, got: \(blockStyle.label)"
+        )
 
         editor.click()
         editor.typeKey(.end, modifierFlags: .command)

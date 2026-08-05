@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   distribute:
-    runs-on: macos-15
+    runs-on: macos-26
     environment: release
     steps:
       - uses: actions/checkout@v4

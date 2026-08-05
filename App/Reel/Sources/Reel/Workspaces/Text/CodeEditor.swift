@@ -981,12 +981,28 @@ struct CodeEditor: NSViewRepresentable {
 
         private func refreshMarkdownPresentation(in textView: NSTextView) {
             guard parent.language == .markdown, let storage = textView.textStorage,
-                storage.length > 0
+                let syntaxBaseFont, let syntaxBaseColor, storage.length > 0
             else { return }
             let visible = visibleCharacterRange(in: textView)
             let range = (textView.string as NSString).lineRange(for: visible)
+            var baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: syntaxBaseFont,
+                .foregroundColor: syntaxBaseColor,
+            ]
+            if let syntaxParagraphStyle {
+                baseAttributes[.paragraphStyle] = syntaxParagraphStyle
+            }
             isApplyingSyntax = true
             storage.beginEditing()
+            // Always clear the whole visible line range before layering Markdown
+            // presentation. Resetting only the newly inserted character leaves
+            // stale heading fonts and paragraph spacing on lines that become body
+            // text, which can push the caret hundreds of points down the canvas.
+            storage.removeAttribute(.backgroundColor, range: range)
+            storage.removeAttribute(.strikethroughStyle, range: range)
+            storage.removeAttribute(.underlineStyle, range: range)
+            storage.removeAttribute(.underlineColor, range: range)
+            storage.addAttributes(baseAttributes, range: range)
             applyMarkdownPresentation(
                 source: textView.string,
                 range: range,
@@ -994,6 +1010,9 @@ struct CodeEditor: NSViewRepresentable {
             )
             storage.endEditing()
             isApplyingSyntax = false
+            // A newline created at the end of a heading must start a normal body
+            // paragraph rather than inheriting the heading's temporary attributes.
+            textView.typingAttributes = baseAttributes
             textView.needsDisplay = true
         }
 

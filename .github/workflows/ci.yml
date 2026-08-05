@@ -11,19 +11,19 @@ concurrency:
 
 jobs:
   format:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - run: make lint
 
   packages:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - run: make test-packages
 
   app:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
@@ -31,14 +31,14 @@ jobs:
       - run: make build
 
   boundaries:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - run: brew install xcodegen
+      - run: brew install ripgrep xcodegen
       - run: make deps shortcuts distribution-check
 
   docs:
-    runs-on: macos-15
+    runs-on: macos-26
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

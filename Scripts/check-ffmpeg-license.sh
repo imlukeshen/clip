@@ -12,7 +12,7 @@ fi
 found_binary=0
 while IFS= read -r codec_binary; do
     found_binary=1
-    configuration="$(strings "$codec_binary" | grep -m 1 -- '--disable-gpl' || true)"
+    configuration="$(strings -a "$codec_binary" | grep -m 1 -- '--disable-gpl' || true)"
     if [[ -z "$configuration" ]]; then
         echo "FFmpeg configuration string is missing from $codec_binary" >&2
         exit 1
