@@ -90,6 +90,13 @@ public final class EditorViewModel {
 
     public var isTimelineEmpty: Bool { timelineMediaCount == 0 }
 
+    /// Whether the timeline contains anything the preview surface can render.
+    /// Audio-only timelines are deliberately excluded so a removed video's
+    /// final frame cannot remain installed in the player.
+    public var hasVisualTimelineMedia: Bool {
+        document.timeline.videoTracks.contains { !$0.items.isEmpty }
+    }
+
     public var selectedItem: TimelineItem? {
         for item in document.timeline.videoTracks.flatMap(\.items) where selection.contains(item.id)
         {
@@ -1587,8 +1594,20 @@ public final class EditorViewModel {
     }
 
     private func rebuild(quality: RenderQuality) {
-        guard buildsPlayback else { return }
         rebuildTask?.cancel()
+        rebuildTask = nil
+
+        // CompositionBuilder cannot build a timeline without visual media.
+        // Invalidate the old item synchronously instead of allowing its final
+        // frame to remain visible while the failed rebuild is handled.
+        guard hasVisualTimelineMedia else {
+            pause()
+            player.replaceCurrentItem(with: nil)
+            isBuilding = false
+            return
+        }
+
+        guard buildsPlayback else { return }
         let document = document
         let resolver = resolver
         isBuilding = true

@@ -455,10 +455,12 @@ struct EditorView: View {
                 let contentSize = fittedPreviewSize(in: proxy.size)
                 ZStack {
                     Color.black
-                    PlayerSurface(player: editor.player)
-                        .frame(width: contentSize.width, height: contentSize.height)
-                        .scaleEffect(previewScale)
-                        .offset(previewDragOffset)
+                    if editor.hasVisualTimelineMedia {
+                        PlayerSurface(player: editor.player)
+                            .frame(width: contentSize.width, height: contentSize.height)
+                            .scaleEffect(previewScale)
+                            .offset(previewDragOffset)
+                    }
 
                     if !editor.isPlaying, !liveTextSpans.isEmpty {
                         LiveTextOverlay(

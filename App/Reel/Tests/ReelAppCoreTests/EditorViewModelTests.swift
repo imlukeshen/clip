@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import CoreModel
 import Foundation
 import LibraryStore
@@ -303,6 +304,67 @@ struct EditorViewModelTests {
 
         #expect(editor.timelineMediaCount == 1)
         #expect(!editor.isTimelineEmpty)
+    }
+
+    @Test("Deleting the final visual media clears the installed player item")
+    func deletingFinalVisualMediaClearsPlayer() throws {
+        let original = try document()
+        let itemID = try #require(original.timeline.video.first?.id)
+        let editor = makeEditor(document: original)
+        editor.player.replaceCurrentItem(
+            with: AVPlayerItem(asset: AVMutableComposition())
+        )
+        #expect(editor.player.currentItem != nil)
+
+        editor.seek(to: RationalTime(seconds: 2))
+        editor.select(itemID)
+        editor.deleteSelected()
+
+        #expect(editor.document.timeline.video.isEmpty)
+        #expect(!editor.hasVisualTimelineMedia)
+        #expect(editor.player.currentItem == nil)
+        #expect(editor.playhead == .zero)
+        #expect(!editor.isPlaying)
+        #expect(!editor.isBuilding)
+        #expect(editor.notice == "Media deleted.")
+    }
+
+    @Test("Deleting the final video clears its frame when audio remains")
+    func deletingFinalVideoWithAudioRemainingClearsPlayer() throws {
+        var original = try document()
+        original.timeline.audioTracks = [
+            Track(
+                id: TrackID(rawValue: "a1"),
+                name: "A1",
+                items: [
+                    TimelineItem(
+                        id: ItemID(rawValue: "audio-item"),
+                        assetID: AssetID(rawValue: "asset"),
+                        sourceRange: TimeRange(
+                            start: .zero,
+                            duration: RationalTime(seconds: 6)
+                        )
+                    )
+                ]
+            )
+        ]
+        let videoID = try #require(original.timeline.video.first?.id)
+        let editor = makeEditor(document: original)
+        editor.player.replaceCurrentItem(
+            with: AVPlayerItem(asset: AVMutableComposition())
+        )
+
+        editor.seek(to: RationalTime(seconds: 2))
+        editor.select(videoID)
+        editor.deleteSelected()
+
+        #expect(editor.document.timeline.audio.count == 1)
+        #expect(!editor.isTimelineEmpty)
+        #expect(!editor.hasVisualTimelineMedia)
+        #expect(editor.player.currentItem == nil)
+        #expect(editor.playhead == .zero)
+        #expect(!editor.isPlaying)
+        #expect(!editor.isBuilding)
     }
 
     private func makeEditor(

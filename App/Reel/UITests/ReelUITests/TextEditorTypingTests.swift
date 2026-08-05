@@ -256,6 +256,26 @@ final class TextEditorTypingTests: XCTestCase {
             "Command-V did not add the pasted video to the empty timeline"
         )
 
+        let deleteTool = app.descendants(matching: .any)["video-tool-delete"]
+        deleteTool.click()
+        XCTAssertTrue(
+            app.staticTexts["0 clips"].waitForExistence(timeout: 5),
+            "Deleting the selected final clip did not empty the timeline"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["video-empty-timeline"]
+                .waitForExistence(timeout: 5)
+        )
+
+        NSPasteboard.general.clearContents()
+        XCTAssertTrue(NSPasteboard.general.writeObjects([videoURL as NSURL]))
+        app.activate()
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertTrue(
+            app.staticTexts["1 clip"].waitForExistence(timeout: 20),
+            "Command-V did not add media again after deleting the final clip"
+        )
+
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(try Data(contentsOf: imageURL), forType: .png)
         app.activate()
