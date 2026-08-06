@@ -152,6 +152,7 @@ public final class AppModel {
     private var indexProgressTask: Task<Void, Never>?
     private var indexActivityTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var assetRefreshGeneration = 0
     private var conversionTask: Task<Void, Never>?
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
@@ -913,7 +914,15 @@ public final class AppModel {
                     to: relocatedURL,
                     displayName: renamed.displayName
                 )
-                await refreshAssets()
+                // The returned record is authoritative. Invalidate any older
+                // library snapshot that was already in flight, then publish
+                // the rename and its undo entry without another suspension.
+                // This keeps the visible filename, editor path, busy state,
+                // and Command-Z availability in one MainActor transaction.
+                assetRefreshGeneration &+= 1
+                if let index = assets.firstIndex(where: { $0.id == id }) {
+                    assets[index] = renamed
+                }
                 guard renamed.displayName != original.displayName else {
                     if let undoToken {
                         undoToken.manager?.removeAllActions(withTarget: undoToken)
@@ -2529,10 +2538,15 @@ public final class AppModel {
 
     private func refreshAssets() async {
         guard let runtime else { return }
+        assetRefreshGeneration &+= 1
+        let generation = assetRefreshGeneration
         do {
-            assets = try await runtime.assets()
+            let snapshot = try await runtime.assets()
+            guard generation == assetRefreshGeneration else { return }
+            assets = snapshot
             await refreshFolderTree()
         } catch {
+            guard generation == assetRefreshGeneration else { return }
             lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
         }
     }

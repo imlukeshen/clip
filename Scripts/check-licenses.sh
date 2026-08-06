@@ -5,6 +5,7 @@ readonly ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 Scripts/check-ffmpeg-license.sh
+python3 Scripts/check-resolved-packages.py
 
 declared="$(rg -o --no-filename 'https://[^\"]+' --glob Package.swift Packages App Vendor | sort -u)"
 unexpected="$(comm -23 <(printf '%s\n' "$declared") <(sort Scripts/allowed-package-urls.txt) || true)"

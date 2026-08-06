@@ -10,7 +10,7 @@ let package = Package(
         .package(path: "../CoreModel"),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
-            from: "1.5.0"
+            exact: "1.5.0"
         ),
     ],
     targets: [

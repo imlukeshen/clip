@@ -85,16 +85,24 @@ public actor AppRuntime {
             embeddingProvider: embeddingProvider
         )
         let libraryInboxes = [InboxWatcher(url: inboxURL, bookmarks: bookmarks)]
-        let captureInboxes =
-            Self.isUITesting || captureDirectory.standardizedFileURL == inboxURL.standardizedFileURL
-            ? []
-            : [
+        let shouldMonitorCaptureDirectory = Self.shouldMonitorCaptureDirectory(
+            isUITesting: Self.isUITesting,
+            hasExplicitOverride: preferredCaptureDirectory.hasExplicitOverride,
+            captureDirectory: captureDirectory,
+            inboxDirectory: inboxURL
+        )
+        let captureInboxes: [InboxWatcher]
+        if shouldMonitorCaptureDirectory {
+            captureInboxes = [
                 InboxWatcher(
                     url: captureDirectory,
                     bookmarks: bookmarks,
                     usesSecurityScope: preferredCaptureDirectory.usesSecurityScope
                 )
             ]
+        } else {
+            captureInboxes = []
+        }
         let history = CaptureHistory(
             directory: LibraryLayout.captureHistory(in: root),
             limit: .clipboard
@@ -136,21 +144,34 @@ public actor AppRuntime {
 
     private static func preferredCaptureDirectory(
         saved: URL?
-    ) -> (url: URL, usesSecurityScope: Bool) {
+    ) -> (url: URL, usesSecurityScope: Bool, hasExplicitOverride: Bool) {
         #if DEBUG
             if let override = ProcessInfo.processInfo.environment["REEL_CAPTURE_SOURCE"],
                 !override.isEmpty
             {
                 return (
                     URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL,
-                    false
+                    false,
+                    true
                 )
             }
         #endif
         if let saved {
-            return (saved.standardizedFileURL, true)
+            return (saved.standardizedFileURL, true, false)
         }
-        return (SystemCaptureDestination.current(), false)
+        return (SystemCaptureDestination.current(), false, false)
+    }
+
+    static func shouldMonitorCaptureDirectory(
+        isUITesting: Bool,
+        hasExplicitOverride: Bool,
+        captureDirectory: URL,
+        inboxDirectory: URL
+    ) -> Bool {
+        guard captureDirectory.standardizedFileURL != inboxDirectory.standardizedFileURL else {
+            return false
+        }
+        return !isUITesting || hasExplicitOverride
     }
 
     private static var isUITesting: Bool {
@@ -402,7 +423,12 @@ public actor AppRuntime {
     }
 
     public func renameAsset(_ id: AssetID, to name: String) async throws -> AssetRecord {
-        try await folders.renameAsset(id, to: name)
+        let renamed = try await folders.renameAsset(id, to: name)
+        // Keyword search follows the asset table's FTS update trigger. Semantic
+        // chunks also include the display name, so replace the completed
+        // embedding job rather than using the idempotent ingest-time enqueue.
+        await indexPipeline.reindex(renamed.id, stages: [.embedding])
+        return renamed
     }
 
     public func folderDestinations() async throws -> [String] {

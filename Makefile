@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate xcode build run test test-packages deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
+.PHONY: bootstrap generate xcode build run test test-packages test-frameworks test-app test-ui deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
@@ -8,13 +8,16 @@ generate:
 	@# Xcode load every local Swift package twice and report workspace conflicts.
 	@rm -rf Reel.xcodeproj
 	xcodegen generate
+	@# Seed Xcode with the reviewed lock for the complete generated project graph.
+	@mkdir -p Clip.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+	@cp App/Clip.Package.resolved Clip.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 xcode: generate
 	open Clip.xcodeproj
 
 build: generate
-	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug CODE_SIGNING_ALLOWED=NO build
-	xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreDebug CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreDebug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
 
 run: generate
 	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
@@ -22,7 +25,9 @@ run: generate
 
 test: test-packages deps shortcuts licence-audit
 
-test-packages:
+test-packages: test-frameworks test-app
+
+test-frameworks:
 	swift test --package-path Packages/CoreModel
 	swift test --package-path Packages/LibraryStore
 	swift test --package-path Packages/CaptureKit
@@ -33,7 +38,14 @@ test-packages:
 	swift test --package-path Packages/SearchEngine
 	swift test --package-path Packages/AIKit
 	swift test --package-path Packages/DesignSystem
+
+test-app:
 	swift test --package-path App/Reel
+
+test-ui: generate
+	@rm -rf TestResults/ClipUITests.xcresult
+	@mkdir -p TestResults
+	xcodebuild test -project Clip.xcodeproj -scheme Clip -configuration Debug -destination 'platform=macOS' -disableAutomaticPackageResolution -resultBundlePath TestResults/ClipUITests.xcresult CODE_SIGNING_ALLOWED=NO
 
 deps:
 	Scripts/check-aikit-dependencies.sh

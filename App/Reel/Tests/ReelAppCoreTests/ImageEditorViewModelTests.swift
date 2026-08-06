@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreModel
 import Foundation
+import MediaEngine
 import ReelAppCore
 import Testing
 
@@ -332,6 +333,7 @@ import Testing
     let editor = ImageEditorViewModel(
         document: document,
         sourceURL: source,
+        renderer: ImageDocumentRenderer(useSoftwareRenderer: true),
         persisting: { _ in }
     )
 
@@ -340,7 +342,9 @@ import Testing
 
     #expect(editor.sourceURL == relocated.standardizedFileURL)
     #expect(editor.sourceDisplayName == "Renamed Image.png")
-    try await waitUntil { !editor.isRendering && editor.renderedImage != nil }
+    try await waitUntil(timeout: .seconds(10)) {
+        !editor.isRendering && editor.renderedImage != nil
+    }
     editor.stop()
 }
 

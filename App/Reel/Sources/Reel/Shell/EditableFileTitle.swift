@@ -10,6 +10,7 @@ struct EditableFileTitle: View {
 
     let name: String
     let accessibilityIdentifier: String
+    let renameKind: String
     let onCommit: (String) -> Void
 
     @State private var draft: String
@@ -19,10 +20,12 @@ struct EditableFileTitle: View {
     init(
         name: String,
         accessibilityIdentifier: String,
+        renameKind: String = "file",
         onCommit: @escaping (String) -> Void
     ) {
         self.name = name
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.renameKind = renameKind
         self.onCommit = onCommit
         _draft = State(initialValue: name)
     }
@@ -70,8 +73,8 @@ struct EditableFileTitle: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(ReelPlainButtonStyle())
-            .help("Rename \(name)")
-            .accessibilityLabel("Rename file \(name)")
+            .help("Rename \(renameKind) \(name)")
+            .accessibilityLabel("Rename \(renameKind) \(name)")
             .accessibilityIdentifier(accessibilityIdentifier)
         }
     }

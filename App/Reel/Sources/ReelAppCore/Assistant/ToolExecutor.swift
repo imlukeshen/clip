@@ -416,9 +416,8 @@ public struct ToolExecutor: Sendable {
             message = "Split the clip."
         case "reorderClips":
             let arguments = try invocation.arguments.decode(ReorderArguments.self)
-            try requireItems(arguments.order, in: context.document)
             patch = GraphPatch(
-                ops: arguments.order.enumerated().map { .moveItem($0.element, toIndex: $0.offset) },
+                ops: try reorderOperations(arguments.order, in: context.document),
                 label: "Assistant: Reorder Clips", origin: .assistant(turnID: turnID))
             message = "Reordered the clips."
         case "timeline.rippleDelete":
@@ -1354,6 +1353,38 @@ private func item(_ id: ItemID, in document: ProjectDocument) throws -> Timeline
 
 private func requireItems(_ ids: [ItemID], in document: ProjectDocument) throws {
     for id in ids { _ = try item(id, in: document) }
+}
+
+private func reorderOperations(
+    _ order: [ItemID],
+    in document: ProjectDocument
+) throws -> [GraphOp] {
+    guard let firstItemID = order.first else {
+        throw ToolExecutorError.invalidArguments("Reorder Clips needs at least one clip")
+    }
+    try requireItems(order, in: document)
+    guard Set(order).count == order.count else {
+        throw ToolExecutorError.invalidArguments(
+            "Reorder Clips cannot contain the same clip more than once"
+        )
+    }
+
+    let tracks = document.timeline.videoTracks + document.timeline.audioTracks
+    guard
+        let track = tracks.first(where: { track in
+            track.items.contains(where: { $0.id == firstItemID })
+        })
+    else {
+        throw ToolExecutorError.itemNotFound(firstItemID)
+    }
+    let trackItemIDs = Set(track.items.map(\.id))
+    guard order.allSatisfy(trackItemIDs.contains) else {
+        throw ToolExecutorError.invalidArguments(
+            "Reorder Clips can only move clips within one track"
+        )
+    }
+
+    return order.enumerated().map { .moveItem($0.element, toIndex: $0.offset) }
 }
 
 private func duration(for item: TimelineItem, context: ToolExecutionContext) throws -> RationalTime

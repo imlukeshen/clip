@@ -482,7 +482,7 @@ struct EditorViewModelTests {
         #expect(!editor.isTimelineEmpty)
         #expect(!editor.hasVisualTimelineMedia)
         #expect(editor.player.currentItem == nil)
-        #expect(editor.playhead == .zero)
+        #expect(editor.playhead == RationalTime(seconds: 2))
         #expect(!editor.isPlaying)
         #expect(!editor.isBuilding)
     }

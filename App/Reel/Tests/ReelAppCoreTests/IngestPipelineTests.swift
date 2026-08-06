@@ -30,11 +30,15 @@ import Testing
     let clock = ContinuousClock()
     let start = clock.now
 
-    let first = try await pipeline.ingest(source, source: .inbox)
+    let firstResult = try await pipeline.ingestResult(source, source: .inbox)
+    let first = firstResult.record
     let elapsed = start.duration(to: clock.now)
-    let second = try await pipeline.ingest(source, source: .drop)
+    let secondResult = try await pipeline.ingestResult(source, source: .drop)
+    let second = secondResult.record
 
     #expect(elapsed < .seconds(2))
+    #expect(firstResult.wasInserted)
+    #expect(!secondResult.wasInserted)
     #expect(first == second)
     #expect(first.displayName == "Screen Recording.mov")
     #expect(first.relativePath == "Media/Inbox/Screen Recording.mov")

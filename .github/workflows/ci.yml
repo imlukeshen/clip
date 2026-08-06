@@ -4,46 +4,98 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   format:
     runs-on: macos-26
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - run: make lint
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate workflows
+        run: Scripts/check-workflows-ci.sh
+      - name: Check formatting
+        run: make lint
 
   packages:
     runs-on: macos-26
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
-      - run: make test-packages
+          persist-credentials: false
+      - name: Test framework packages
+        run: make test-frameworks
 
   app:
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
-      - run: brew install xcodegen
-      - run: swift test --package-path App/Reel
-      - run: make build
+          persist-credentials: false
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Test app package
+        run: make test-app
+      - name: Build both distribution variants
+        run: make build
+
+  ui:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+          persist-credentials: false
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Run macOS UI tests
+        run: make test-ui
+      - name: Upload UI test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Clip-UI-Test-Results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestResults/ClipUITests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
 
   boundaries:
     runs-on: macos-26
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - run: brew install ripgrep xcodegen
-      - run: make deps shortcuts distribution-check
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install audit tools
+        run: |
+          brew install ripgrep
+          Scripts/install-xcodegen-ci.sh
+      - name: Check dependency, shortcut, and distribution boundaries
+        run: make deps shortcuts distribution-check
 
   docs:
     runs-on: macos-26
-    continue-on-error: true
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - run: swift package --package-path Packages/AIKit generate-documentation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build AIKit documentation
+        run: swift package --package-path Packages/AIKit generate-documentation

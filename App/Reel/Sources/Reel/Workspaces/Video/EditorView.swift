@@ -244,6 +244,7 @@ struct EditorView: View {
         EditableFileTitle(
             name: editor.document.name,
             accessibilityIdentifier: "video-project-title",
+            renameKind: "project",
             onCommit: { _ = editor.renameProject(to: $0) }
         )
     }
@@ -628,6 +629,9 @@ struct EditorView: View {
             )
             .font(theme.type.caption.font)
             .foregroundStyle(theme.palette.textSecondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("video-timeline-item-count")
+            .accessibilityLabel("Timeline items: \(timelineItemCount)")
 
             Divider()
                 .overlay(theme.palette.line)
@@ -1004,6 +1008,9 @@ private struct ToolButton: View {
             }
             .buttonStyle(ReelIconButtonStyle(isActive: isActive))
             .disabled(isDisabled)
+            .accessibilityLabel(title)
+            .accessibilityHint(detail)
+            .accessibilityIdentifier(identifier)
         }
         .contentShape(Rectangle())
         .overlay(alignment: .leading) {
@@ -1043,9 +1050,6 @@ private struct ToolButton: View {
             withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
         }
         .help("\(title): \(detail)")
-        .accessibilityLabel(title)
-        .accessibilityHint(detail)
-        .accessibilityIdentifier(identifier)
         .zIndex(isHovered ? 100 : 0)
     }
 }
@@ -1131,214 +1135,37 @@ struct EditorInspector: View {
         )
     }
 
-    @ViewBuilder private var inspector: some View {
+    private var inspector: some View {
+        SelectedClipInspector(editor: editor)
+    }
+
+    private var durationText: String {
+        String(format: "%.1f seconds", editor.duration.seconds)
+    }
+
+}
+
+private struct SelectedClipInspector: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+
+    var body: some View {
         if let item = editor.selectedItem {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let track = editor.targetedVideoTrack {
-                        SectionLabel("Target track · \(track.name)")
-                        HStack(spacing: 6) {
-                            EffectButton(track.isEnabled ? "Disable" : "Enable") {
-                                editor.toggleTargetTrackEnabled()
-                            }
-                            EffectButton(track.isLocked ? "Unlock" : "Lock") {
-                                editor.toggleTargetTrackLocked()
-                            }
-                            EffectButton(track.isMuted ? "Unmute" : "Mute") {
-                                editor.toggleTargetTrackMuted()
-                            }
-                            EffectButton(track.isSolo ? "Unsolo" : "Solo") {
-                                editor.toggleTargetTrackSolo()
-                            }
-                        }
-                        KeyframeSlider(
-                            title: "Gain",
-                            value: Binding(
-                                get: { editor.targetedGain },
-                                set: { value in editor.setTargetedGain(value) }
-                            ),
-                            range: -60...12,
-                            suffix: " dB",
-                            hasKeyframe: editor.hasGainKeyframeAtPlayhead,
-                            addKeyframe: { editor.setGainKeyframe() }
-                        )
-                        Divider().overlay(theme.palette.line)
-                    }
-                    SectionLabel(
-                        editor.selectedTrackKind == .audio ? "Selected audio" : "Selected video"
-                    )
-                    Text(editor.assetNames[item.assetID] ?? "Media clip")
-                        .font(theme.type.body.font)
-                        .lineLimit(2)
-
-                    LabeledContent("Track") {
-                        Text(editor.selectedTrackName ?? "—")
-                            .font(theme.type.numeric.font)
-                    }
-
-                    LabeledContent("Source") {
-                        Text(
-                            "\(item.sourceRange.start.seconds, specifier: "%.2f")–\(item.sourceRange.end.seconds, specifier: "%.2f")s"
-                        )
-                        .font(theme.type.numeric.font)
-                    }
-
-                    SectionLabel("Timeline actions")
-                    HStack(spacing: 6) {
-                        EffectButton("Delete") { editor.deleteSelected() }
-                            .accessibilityIdentifier("inspector-delete-selected")
-                        if editor.selectedTrackKind == .video {
-                            EffectButton("Separate audio") { editor.separateSelectedAudio() }
-                                .disabled(!editor.canSeparateSelectedAudio)
-                                .accessibilityIdentifier("inspector-separate-audio")
-                            EffectButton("Ripple delete") { editor.rippleDeleteSelected() }
-                                .disabled(!editor.canRippleDeleteSelected)
-                                .accessibilityIdentifier("inspector-ripple-delete")
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        if editor.selectedNestID == nil {
-                            EffectButton("Nest selection") { editor.nestSelection() }
-                                .disabled(!editor.canNestSelection)
-                        } else {
-                            EffectButton("Unnest selection") { editor.unnestSelection() }
-                        }
-                        Text(
-                            editor.selectedNestID == nil
-                                ? "Shift-click clips to select more than one."
-                                : "This media edits as one group."
-                        )
-                        .font(theme.type.micro.font)
-                        .foregroundStyle(theme.palette.textTertiary)
-                    }
-
+                    TargetTrackInspectorSection(editor: editor)
+                    SelectedMediaInspectorSection(editor: editor, item: item)
+                    TimelineActionsInspectorSection(editor: editor)
                     Divider().overlay(theme.palette.line)
-
                     if editor.selectedTrackKind == .video {
-                        LabeledContent("Clicks") {
-                            Text("\(editor.selectedClickCount)")
-                                .font(theme.type.numeric.font)
-                        }
-                        LabeledContent("Alignment") {
-                            Text(editor.selectedAlignmentDescription)
-                                .font(theme.type.caption.font)
-                        }
-
-                        Button("Zoom on clicks") {
-                            editor.autoZoomSelectedClip()
-                        }
-                        .buttonStyle(ReelBorderedButtonStyle())
-                        .disabled(editor.autoZoomUnavailableReason != nil)
-
-                        if let reason = editor.autoZoomUnavailableReason {
-                            Text(reason)
-                                .font(theme.type.caption.font)
-                                .foregroundStyle(theme.palette.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        VideoAnalysisInspectorSection(editor: editor)
                     }
-
-                    Picker(
-                        "Speed",
-                        selection: Binding(
-                            get: { item.speed },
-                            set: { editor.setSpeed($0, for: item.id) }
-                        )
-                    ) {
-                        Text("0.25×").tag(0.25)
-                        Text("0.5×").tag(0.5)
-                        Text("1×").tag(1.0)
-                        Text("1.5×").tag(1.5)
-                        Text("2×").tag(2.0)
-                        Text("4×").tag(4.0)
-                    }
-
-                    if editor.selectedTrackKind == .video {
-                        KeyframeSlider(
-                            title: "Opacity",
-                            value: Binding(
-                                get: { editor.selectedOpacity },
-                                set: { value in editor.setSelectedOpacity(value) }
-                            ),
-                            range: 0...1,
-                            suffix: "",
-                            hasKeyframe: editor.hasOpacityKeyframeAtPlayhead,
-                            addKeyframe: { editor.setOpacityKeyframe() }
-                        )
-                        KeyframeSlider(
-                            title: "Scale",
-                            value: Binding(
-                                get: { editor.selectedTransform.scaleX },
-                                set: { value in editor.setSelectedScale(value) }
-                            ),
-                            range: 0.1...3,
-                            suffix: "×",
-                            hasKeyframe: editor.hasTransformKeyframeAtPlayhead,
-                            addKeyframe: { editor.setTransformKeyframe() }
-                        )
-                    }
-
+                    PlaybackInspectorSection(editor: editor, item: item)
                     Divider().overlay(theme.palette.line)
-                    SectionLabel("Precision edit")
-                    HStack(spacing: 6) {
-                        EffectButton("Roll +1f") { editor.rollSelected() }
-                        EffectButton("Slip +1f") { editor.slipSelected() }
-                        EffectButton("Slide +1f") { editor.slideSelected() }
-                    }
-                    HStack(spacing: 6) {
-                        if editor.selectedTrackKind == .video {
-                            EffectButton("Dissolve") { editor.addCrossDissolve() }
-                        }
-                        EffectButton("Audio fade") { editor.addAudioFade() }
-                    }
-                    HStack(spacing: 6) {
-                        EffectButton("Copy attrs") { editor.copySelectedAttributes() }
-                        EffectButton("Paste attrs") { editor.pasteAttributesToSelection() }
-                    }
-                    HStack(spacing: 6) {
-                        EffectButton("Insert") { editor.insertSelectedSource(overwrite: false) }
-                        EffectButton("Overwrite") { editor.insertSelectedSource(overwrite: true) }
-                    }
-
+                    PrecisionEditInspectorSection(editor: editor)
                     if editor.selectedTrackKind == .video {
                         Divider().overlay(theme.palette.line)
-                        SectionLabel("Effects")
-                        HStack(spacing: 6) {
-                            EffectButton("Zoom") { editor.addZoom(to: item.id) }
-                            EffectButton("Frame") { editor.addBackground(to: item.id) }
-                            EffectButton("Crop") { editor.addCrop(to: item.id) }
-                            EffectButton("Blur") { editor.addBlur(to: item.id) }
-                        }
-                        if item.effects.isEmpty {
-                            Text("No clip effects")
-                                .font(theme.type.caption.font)
-                                .foregroundStyle(theme.palette.textTertiary)
-                        } else {
-                            ForEach(item.effects) { effect in
-                                HStack {
-                                    Text(effectName(effect.kind))
-                                        .font(theme.type.caption.font)
-                                    Spacer()
-                                    if effect.kind == .blur || effect.kind == .zoom {
-                                        Button {
-                                            editor.setEffectKeyframe(effect)
-                                        } label: {
-                                            Image(systemName: "diamond")
-                                        }
-                                        .buttonStyle(ReelPlainButtonStyle())
-                                        .foregroundStyle(theme.palette.accent)
-                                        .help("Add keyframe at playhead")
-                                    }
-                                    Button {
-                                        editor.removeEffect(effect.id, from: item.id)
-                                    } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(ReelPlainButtonStyle())
-                                    .foregroundStyle(theme.palette.textTertiary)
-                                }
-                            }
-                        }
+                        EffectsInspectorSection(editor: editor, item: item)
                     }
                 }
                 .padding(14)
@@ -1351,13 +1178,264 @@ struct EditorInspector: View {
             Spacer()
         }
     }
+}
 
-    private var durationText: String {
-        String(format: "%.1f seconds", editor.duration.seconds)
+private struct TargetTrackInspectorSection: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+
+    var body: some View {
+        if let track = editor.targetedVideoTrack {
+            SectionLabel("Target track · \(track.name)")
+            HStack(spacing: 6) {
+                EffectButton(track.isEnabled ? "Disable" : "Enable") {
+                    editor.toggleTargetTrackEnabled()
+                }
+                EffectButton(track.isLocked ? "Unlock" : "Lock") {
+                    editor.toggleTargetTrackLocked()
+                }
+                EffectButton(track.isMuted ? "Unmute" : "Mute") {
+                    editor.toggleTargetTrackMuted()
+                }
+                EffectButton(track.isSolo ? "Unsolo" : "Solo") {
+                    editor.toggleTargetTrackSolo()
+                }
+            }
+            KeyframeSlider(
+                title: "Gain",
+                value: Binding(
+                    get: { editor.targetedGain },
+                    set: { value in editor.setTargetedGain(value) }
+                ),
+                range: -60...12,
+                suffix: " dB",
+                hasKeyframe: editor.hasGainKeyframeAtPlayhead,
+                addKeyframe: { editor.setGainKeyframe() }
+            )
+            Divider().overlay(theme.palette.line)
+        }
+    }
+}
+
+private struct SelectedMediaInspectorSection: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+    let item: TimelineItem
+
+    var body: some View {
+        SectionLabel(editor.selectedTrackKind == .audio ? "Selected audio" : "Selected video")
+        Text(editor.assetNames[item.assetID] ?? "Media clip")
+            .font(theme.type.body.font)
+            .lineLimit(2)
+        LabeledContent("Track") {
+            Text(editor.selectedTrackName ?? "—")
+                .font(theme.type.numeric.font)
+        }
+        LabeledContent("Source") {
+            Text(
+                "\(item.sourceRange.start.seconds, specifier: "%.2f")–\(item.sourceRange.end.seconds, specifier: "%.2f")s"
+            )
+            .font(theme.type.numeric.font)
+        }
+    }
+}
+
+private struct TimelineActionsInspectorSection: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+
+    var body: some View {
+        SectionLabel("Timeline actions")
+        HStack(spacing: 6) {
+            EffectButton("Delete") { editor.deleteSelected() }
+                .accessibilityIdentifier("inspector-delete-selected")
+            if editor.selectedTrackKind == .video {
+                EffectButton("Separate audio") { editor.separateSelectedAudio() }
+                    .disabled(!editor.canSeparateSelectedAudio)
+                    .accessibilityIdentifier("inspector-separate-audio")
+                EffectButton("Ripple delete") { editor.rippleDeleteSelected() }
+                    .disabled(!editor.canRippleDeleteSelected)
+                    .accessibilityIdentifier("inspector-ripple-delete")
+            }
+        }
+        HStack(spacing: 6) {
+            if editor.selectedNestID == nil {
+                EffectButton("Nest selection") { editor.nestSelection() }
+                    .disabled(!editor.canNestSelection)
+            } else {
+                EffectButton("Unnest selection") { editor.unnestSelection() }
+            }
+            Text(nestingGuidance)
+                .font(theme.type.micro.font)
+                .foregroundStyle(theme.palette.textTertiary)
+        }
     }
 
-    private func effectName(_ kind: EffectKind) -> String {
-        switch kind {
+    private var nestingGuidance: String {
+        editor.selectedNestID == nil
+            ? "Shift-click clips to select more than one."
+            : "This media edits as one group."
+    }
+}
+
+private struct VideoAnalysisInspectorSection: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+
+    var body: some View {
+        LabeledContent("Clicks") {
+            Text("\(editor.selectedClickCount)")
+                .font(theme.type.numeric.font)
+        }
+        LabeledContent("Alignment") {
+            Text(editor.selectedAlignmentDescription)
+                .font(theme.type.caption.font)
+        }
+        Button("Zoom on clicks") {
+            editor.autoZoomSelectedClip()
+        }
+        .buttonStyle(ReelBorderedButtonStyle())
+        .disabled(editor.autoZoomUnavailableReason != nil)
+        if let reason = editor.autoZoomUnavailableReason {
+            Text(reason)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct PlaybackInspectorSection: View {
+    @Bindable var editor: EditorViewModel
+    let item: TimelineItem
+
+    var body: some View {
+        Picker(
+            "Speed",
+            selection: Binding(
+                get: { item.speed },
+                set: { editor.setSpeed($0, for: item.id) }
+            )
+        ) {
+            Text("0.25×").tag(0.25)
+            Text("0.5×").tag(0.5)
+            Text("1×").tag(1.0)
+            Text("1.5×").tag(1.5)
+            Text("2×").tag(2.0)
+            Text("4×").tag(4.0)
+        }
+        if editor.selectedTrackKind == .video {
+            KeyframeSlider(
+                title: "Opacity",
+                value: Binding(
+                    get: { editor.selectedOpacity },
+                    set: { value in editor.setSelectedOpacity(value) }
+                ),
+                range: 0...1,
+                suffix: "",
+                hasKeyframe: editor.hasOpacityKeyframeAtPlayhead,
+                addKeyframe: { editor.setOpacityKeyframe() }
+            )
+            KeyframeSlider(
+                title: "Scale",
+                value: Binding(
+                    get: { editor.selectedTransform.scaleX },
+                    set: { value in editor.setSelectedScale(value) }
+                ),
+                range: 0.1...3,
+                suffix: "×",
+                hasKeyframe: editor.hasTransformKeyframeAtPlayhead,
+                addKeyframe: { editor.setTransformKeyframe() }
+            )
+        }
+    }
+}
+
+private struct PrecisionEditInspectorSection: View {
+    @Bindable var editor: EditorViewModel
+
+    var body: some View {
+        SectionLabel("Precision edit")
+        HStack(spacing: 6) {
+            EffectButton("Roll +1f") { editor.rollSelected() }
+            EffectButton("Slip +1f") { editor.slipSelected() }
+            EffectButton("Slide +1f") { editor.slideSelected() }
+        }
+        HStack(spacing: 6) {
+            if editor.selectedTrackKind == .video {
+                EffectButton("Dissolve") { editor.addCrossDissolve() }
+            }
+            EffectButton("Audio fade") { editor.addAudioFade() }
+        }
+        HStack(spacing: 6) {
+            EffectButton("Copy attrs") { editor.copySelectedAttributes() }
+            EffectButton("Paste attrs") { editor.pasteAttributesToSelection() }
+        }
+        HStack(spacing: 6) {
+            EffectButton("Insert") { editor.insertSelectedSource(overwrite: false) }
+            EffectButton("Overwrite") { editor.insertSelectedSource(overwrite: true) }
+        }
+    }
+}
+
+private struct EffectsInspectorSection: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+    let item: TimelineItem
+
+    var body: some View {
+        SectionLabel("Effects")
+        HStack(spacing: 6) {
+            EffectButton("Zoom") { editor.addZoom(to: item.id) }
+            EffectButton("Frame") { editor.addBackground(to: item.id) }
+            EffectButton("Crop") { editor.addCrop(to: item.id) }
+            EffectButton("Blur") { editor.addBlur(to: item.id) }
+        }
+        if item.effects.isEmpty {
+            Text("No clip effects")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+        } else {
+            ForEach(item.effects) { effect in
+                EffectInspectorRow(editor: editor, itemID: item.id, effect: effect)
+            }
+        }
+    }
+}
+
+private struct EffectInspectorRow: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: EditorViewModel
+    let itemID: ItemID
+    let effect: Effect
+
+    var body: some View {
+        HStack {
+            Text(effectName)
+                .font(theme.type.caption.font)
+            Spacer()
+            if effect.kind == .blur || effect.kind == .zoom {
+                Button {
+                    editor.setEffectKeyframe(effect)
+                } label: {
+                    Image(systemName: "diamond")
+                }
+                .buttonStyle(ReelPlainButtonStyle())
+                .foregroundStyle(theme.palette.accent)
+                .help("Add keyframe at playhead")
+            }
+            Button {
+                editor.removeEffect(effect.id, from: itemID)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .foregroundStyle(theme.palette.textTertiary)
+        }
+    }
+
+    private var effectName: String {
+        switch effect.kind {
         case .zoom: "Zoom"
         case .crop: "Crop"
         case .background: "Background"

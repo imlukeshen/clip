@@ -80,6 +80,12 @@ Requires macOS 14 or later and a Swift 6 toolchain.
 Release builds currently target Apple silicon because the pinned FFmpeg
 XCFramework is arm64-only.
 
+Run the native interaction suite from an unlocked macOS session with:
+
+```bash
+make test-ui
+```
+
 Generate and build the native app with:
 
 ```bash

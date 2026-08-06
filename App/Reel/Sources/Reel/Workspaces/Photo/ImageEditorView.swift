@@ -299,44 +299,7 @@ struct ImageEditorView: View {
     }
 
     private var toolRail: some View {
-        ScrollView {
-            VStack(spacing: 7) {
-                ForEach(Array(ImageEditorTool.grouped.enumerated()), id: \.offset) { index, group in
-                    if index > 0 {
-                        Rectangle()
-                            .fill(theme.palette.line)
-                            .frame(width: 24, height: theme.metrics.hairline)
-                            .padding(.vertical, 1)
-                    }
-                    ForEach(group) { tool in
-                        Button {
-                            editor.activate(tool)
-                        } label: {
-                            Image(systemName: tool.symbol)
-                                .font(.system(size: 15, weight: .medium))
-                                .frame(width: 38, height: 34)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(ReelIconButtonStyle(isActive: editor.activeTool == tool))
-                        .overlay(alignment: .leading) {
-                            if editor.activeTool == tool {
-                                Capsule()
-                                    .fill(theme.palette.accent)
-                                    .frame(width: 2, height: 18)
-                                    .offset(x: -4)
-                            }
-                        }
-                        .help("\(tool.title) — \(tool.guidance)")
-                        .accessibilityLabel(tool.title)
-                    }
-                }
-            }
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollIndicators(.never)
-        .frame(width: 56)
-        .background(theme.palette.surfacePanel)
+        ImageEditorToolRail(editor: editor)
     }
 
     private func export() {
@@ -369,6 +332,77 @@ struct ImageEditorView: View {
                 _ = try? editor.addRasterLayer(from: url)
             }
         }
+    }
+}
+
+private struct ImageEditorToolRail: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: ImageEditorViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 7) {
+                ForEach(Array(ImageEditorTool.grouped.enumerated()), id: \.offset) { index, tools in
+                    ImageEditorToolGroup(
+                        index: index,
+                        tools: tools,
+                        editor: editor
+                    )
+                }
+            }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.never)
+        .frame(width: 56)
+        .background(theme.palette.surfacePanel)
+    }
+}
+
+private struct ImageEditorToolGroup: View {
+    @Environment(\.theme) private var theme
+    let index: Int
+    let tools: [ImageEditorTool]
+    @Bindable var editor: ImageEditorViewModel
+
+    var body: some View {
+        if index > 0 {
+            Rectangle()
+                .fill(theme.palette.line)
+                .frame(width: 24, height: theme.metrics.hairline)
+                .padding(.vertical, 1)
+        }
+        ForEach(tools) { tool in
+            ImageEditorToolButton(tool: tool, editor: editor)
+        }
+    }
+}
+
+private struct ImageEditorToolButton: View {
+    @Environment(\.theme) private var theme
+    let tool: ImageEditorTool
+    @Bindable var editor: ImageEditorViewModel
+
+    var body: some View {
+        Button {
+            editor.activate(tool)
+        } label: {
+            Image(systemName: tool.symbol)
+                .font(.system(size: 15, weight: .medium))
+                .frame(width: 38, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(ReelIconButtonStyle(isActive: editor.activeTool == tool))
+        .overlay(alignment: .leading) {
+            if editor.activeTool == tool {
+                Capsule()
+                    .fill(theme.palette.accent)
+                    .frame(width: 2, height: 18)
+                    .offset(x: -4)
+            }
+        }
+        .help("\(tool.title) — \(tool.guidance)")
+        .accessibilityLabel(tool.title)
     }
 }
 

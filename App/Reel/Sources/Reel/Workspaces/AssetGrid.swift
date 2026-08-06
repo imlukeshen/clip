@@ -134,6 +134,7 @@ struct AssetGrid: View {
                     duration: duration(for: asset),
                     state: model.selection.selected.contains(asset.id)
                         ? .selected : .normal,
+                    accessibilityIdentifier: "asset-card-\(asset.id.rawValue)",
                     action: {
                         model.selectAsset(asset.id, modifiers: currentModifiers)
                     },

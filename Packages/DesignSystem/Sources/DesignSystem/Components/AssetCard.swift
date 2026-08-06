@@ -15,6 +15,7 @@ public struct AssetCard<Thumbnail: View>: View {
     private let metadata: String
     private let duration: String?
     private let state: AssetCardState
+    private let accessibilityIdentifier: String
     private let action: () -> Void
     private let openAction: (() -> Void)?
     private let renameAction: (() -> Void)?
@@ -26,6 +27,7 @@ public struct AssetCard<Thumbnail: View>: View {
         metadata: String,
         duration: String? = nil,
         state: AssetCardState = .normal,
+        accessibilityIdentifier: String = "asset-card",
         action: @escaping () -> Void,
         openAction: (() -> Void)? = nil,
         renameAction: (() -> Void)? = nil,
@@ -36,6 +38,7 @@ public struct AssetCard<Thumbnail: View>: View {
         self.metadata = metadata
         self.duration = duration
         self.state = state
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.action = action
         self.openAction = openAction
         self.renameAction = renameAction
@@ -119,6 +122,8 @@ public struct AssetCard<Thumbnail: View>: View {
                 }
             }
             .buttonStyle(ReelPlainButtonStyle())
+            .accessibilityIdentifier(accessibilityIdentifier)
+            .accessibilityLabel("\(title), \(metadata)")
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
                     openAction?()

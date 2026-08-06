@@ -28,6 +28,13 @@ final class ReelVideoInstruction: NSObject, AVVideoCompositionInstructionProtoco
         self.timeRange = timeRange
         self.layers = layers
         self.background = background
-        containsTweening = layers.contains { !$0.item.effects.isEmpty }
+        containsTweening = layers.contains { layer in
+            let item = layer.item
+            return !item.effects.isEmpty
+                || item.videoFade.fadeIn > .zero
+                || item.videoFade.fadeOut > .zero
+                || !item.transform.keyframes.isEmpty
+                || !item.opacity.keyframes.isEmpty
+        }
     }
 }

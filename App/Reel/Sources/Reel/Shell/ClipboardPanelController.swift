@@ -22,6 +22,7 @@ final class ClipboardPanelController {
     private var panel: NSPanel?
     private var clickMonitor: Any?
     private var pasteTarget: NSRunningApplication?
+    private weak var clipPasteResponder: NSResponder?
 
     init(model: AppModel) {
         self.model = model
@@ -46,11 +47,17 @@ final class ClipboardPanelController {
 
     private func show() {
         Task { await model.refreshCaptureHistory() }
+        let isClipTarget = NSApp.isActive
         pasteTarget =
-            NSApp.isActive
+            isClipTarget
             ? NSRunningApplication(
                 processIdentifier: ProcessInfo.processInfo.processIdentifier
             ) : NSWorkspace.shared.frontmostApplication
+        // A nonactivating panel normally preserves focus, but clicking one of
+        // its SwiftUI buttons can still disturb AppKit's current responder.
+        // Remember Clip's editor now so the selected history item returns to
+        // the exact field the user was editing.
+        clipPasteResponder = isClipTarget ? NSApp.keyWindow?.firstResponder : nil
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
@@ -86,22 +93,23 @@ final class ClipboardPanelController {
 
     private func paste(_ item: CaptureHistoryItem) {
         let target = pasteTarget
+        let responder = clipPasteResponder
         model.copyCaptureToPasteboard(item) { [weak self] in
             guard let self else { return }
             hide()
+            if target?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                performClipPasteCommand(to: responder)
+                return
+            }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(70))
-                pasteIntoTarget(target)
+                pasteIntoExternalTarget(target)
             }
         }
     }
 
-    private func pasteIntoTarget(_ target: NSRunningApplication?) {
+    private func pasteIntoExternalTarget(_ target: NSRunningApplication?) {
         guard let target, !target.isTerminated else { return }
-        if target.processIdentifier == ProcessInfo.processInfo.processIdentifier {
-            performClipPasteCommand()
-            return
-        }
         guard EventTapRecorder.isAuthorized() else {
             EventTapRecorder.requestAuthorization()
             model.reportAutomaticPasteUnavailable()
@@ -128,7 +136,12 @@ final class ClipboardPanelController {
 
     /// Preserves Clip's paste context: text goes through the active responder,
     /// while media goes through the open timeline's normal import path.
-    private func performClipPasteCommand() {
+    private func performClipPasteCommand(to responder: NSResponder?) {
+        if let responder,
+            NSApp.sendAction(#selector(NSText.paste(_:)), to: responder, from: nil)
+        {
+            return
+        }
         if model.editor != nil {
             model.pasteMediaIntoTimeline()
         } else {

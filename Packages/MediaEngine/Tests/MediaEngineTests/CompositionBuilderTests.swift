@@ -263,6 +263,80 @@ struct CompositionBuilderTests {
         #expect((180...195).contains(Int(value)))
     }
 
+    @Test("Video instructions report every time-varying visual property")
+    func videoInstructionTweenDetection() {
+        let range = TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+        func item(
+            _ id: String,
+            videoFade: FadeEnvelope = .none,
+            transformAnimation: Animatable<Transform2D>? = nil,
+            opacityAnimation: Animatable<Double>? = nil
+        ) -> TimelineItem {
+            TimelineItem(
+                id: ItemID(rawValue: id),
+                assetID: AssetID(rawValue: "asset-\(id)"),
+                sourceRange: range,
+                transformAnimation: transformAnimation,
+                opacityAnimation: opacityAnimation,
+                videoFade: videoFade
+            )
+        }
+        func instruction(for item: TimelineItem) -> ReelVideoInstruction {
+            ReelVideoInstruction(
+                timeRange: CMTimeRange(start: .zero, duration: range.duration.cmTime),
+                layers: [
+                    ReelVideoLayer(
+                        item: item,
+                        preferredTransform: .identity,
+                        sourceTrackID: 1
+                    )
+                ],
+                background: .black
+            )
+        }
+        let transform = Animatable(
+            constant: Transform2D.identity,
+            keyframes: [
+                Keyframe(time: .zero, value: .identity),
+                Keyframe(
+                    time: RationalTime(seconds: 1),
+                    value: Transform2D(scaleX: 1.5, scaleY: 1.5)
+                ),
+            ]
+        )
+        let opacity = Animatable(
+            constant: 1.0,
+            keyframes: [
+                Keyframe(time: .zero, value: 0.0),
+                Keyframe(time: RationalTime(seconds: 1), value: 1.0),
+            ]
+        )
+
+        #expect(!instruction(for: item("constant")).containsTweening)
+        #expect(
+            instruction(
+                for: item(
+                    "fade-in",
+                    videoFade: FadeEnvelope(fadeIn: RationalTime(seconds: 0.5))
+                )
+            ).containsTweening
+        )
+        #expect(
+            instruction(
+                for: item(
+                    "fade-out",
+                    videoFade: FadeEnvelope(fadeOut: RationalTime(seconds: 0.5))
+                )
+            ).containsTweening
+        )
+        #expect(
+            instruction(for: item("transform", transformAnimation: transform)).containsTweening
+        )
+        #expect(
+            instruction(for: item("opacity", opacityAnimation: opacity)).containsTweening
+        )
+    }
+
     @Test("Builder emits overlapping V1 and V2 source tracks and ignores disabled tracks")
     func builderCreatesV2Instructions() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(

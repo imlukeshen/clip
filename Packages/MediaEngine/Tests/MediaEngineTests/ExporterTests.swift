@@ -119,6 +119,98 @@ struct ExporterTests {
         #expect(byteSize > 0)
     }
 
+    @Test("Trailing audio extends a video export over background frames")
+    func trailingAudioExtendsVideoExport() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "reel-export-trailing-audio-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let videoID = AssetID(rawValue: "short-video")
+        let audioID = AssetID(rawValue: "long-audio")
+        let videoURL = folder.appendingPathComponent("video.mov")
+        let audioURL = folder.appendingPathComponent("audio.wav")
+        try await makeMovie(at: videoURL, shade: 100)
+        try makeAudioFile(at: audioURL, duration: 0.5)
+
+        let videoDuration = RationalTime(seconds: 0.2)
+        let audioDuration = RationalTime(seconds: 0.5)
+        let document = try ProjectDocument(
+            id: ProjectID(rawValue: "trailing-audio-project"),
+            name: "Trailing audio",
+            canvas: CanvasSpec(
+                width: 64,
+                height: 64,
+                frameRate: .fps30,
+                colorSpace: .sRGB,
+                background: .black
+            ),
+            timeline: Timeline(
+                videoTracks: [
+                    Track(
+                        id: TrackID(rawValue: "v1"),
+                        name: "V1",
+                        items: [
+                            TimelineItem(
+                                id: ItemID(rawValue: "video-item"),
+                                assetID: videoID,
+                                sourceRange: TimeRange(
+                                    start: .zero,
+                                    duration: videoDuration
+                                )
+                            )
+                        ]
+                    )
+                ],
+                audioTracks: [
+                    Track(
+                        id: TrackID(rawValue: "a1"),
+                        name: "A1",
+                        items: [
+                            TimelineItem(
+                                id: ItemID(rawValue: "audio-item"),
+                                assetID: audioID,
+                                sourceRange: TimeRange(
+                                    start: .zero,
+                                    duration: audioDuration
+                                )
+                            )
+                        ]
+                    )
+                ]
+            ),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let destination = folder.appendingPathComponent("result.mp4")
+        let urls = [videoID: videoURL, audioID: audioURL]
+        let stream = await Exporter().export(
+            document,
+            preset: ExportPreset(
+                container: .mp4,
+                codec: .h264,
+                size: CGSize(width: 64, height: 64),
+                frameRate: .fps30,
+                bitrate: 300_000,
+                includeAudio: true
+            ),
+            to: destination,
+            resolving: { id in try #require(urls[id]) }
+        )
+        for try await _ in stream {}
+
+        let exported = AVURLAsset(url: destination)
+        let exportedDuration = try await exported.load(.duration).rational
+        let videoTracks = try await exported.loadTracks(withMediaType: .video)
+        let audioTracks = try await exported.loadTracks(withMediaType: .audio)
+
+        #expect(abs(exportedDuration.value - audioDuration.value) <= 1)
+        #expect(videoTracks.count == 1)
+        #expect(audioTracks.count == 1)
+    }
+
     private func makeMovie(at url: URL, shade: UInt8) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let input = AVAssetWriterInput(
@@ -173,6 +265,23 @@ struct ExporterTests {
             writer.finishWriting { continuation.resume() }
         }
         #expect(writer.status == .completed)
+    }
+
+    private func makeAudioFile(at url: URL, duration: Double) throws {
+        let sampleRate = 48_000.0
+        let format = try #require(
+            AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+        )
+        let frameCount = AVAudioFrameCount((sampleRate * duration).rounded())
+        let buffer = try #require(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+        )
+        buffer.frameLength = frameCount
+        if let samples = buffer.floatChannelData?[0] {
+            samples.initialize(repeating: 0.1, count: Int(frameCount))
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
     }
 
     private func emptyDocument() throws -> ProjectDocument {

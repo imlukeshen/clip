@@ -99,6 +99,38 @@ struct IndexPipelineTests {
         #expect(await calls.value == 3)
     }
 
+    @Test("Reindex replaces a completed stage")
+    func reindexReplacesCompletedStage() async throws {
+        let fixture = try await Fixture(assetCount: 1)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let processor = CountingProcessor()
+        let pipeline = IndexPipeline(
+            store: fixture.store,
+            processor: processor,
+            retryDelay: .milliseconds(10)
+        )
+        let assetID = fixture.assets[0].id
+
+        await pipeline.enqueue(assetID, stages: [.embedding])
+        try await waitUntil { await processor.callCount() == 1 }
+        try await waitUntil {
+            try await fixture.store.indexJobs().first?.state == .done
+        }
+
+        await pipeline.reindex(assetID, stages: [.embedding])
+        try await waitUntil { await processor.callCount() == 2 }
+        try await waitUntil {
+            try await fixture.store.indexJobs().first?.state == .done
+        }
+        await pipeline.stop()
+
+        let jobs = try await fixture.store.indexJobs()
+        #expect(jobs.count == 1)
+        #expect(jobs[0].assetID == assetID)
+        #expect(jobs[0].stage == .embedding)
+        #expect(jobs[0].state == .done)
+    }
+
     @Test("Serious thermal pressure defers all stages")
     func thermalPressureDefersWork() async throws {
         let fixture = try await Fixture(assetCount: 1)
