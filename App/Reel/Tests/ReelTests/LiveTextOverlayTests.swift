@@ -35,7 +35,7 @@ struct LiveTextOverlayTests {
                 completed: 0,
                 total: 1,
                 currentAssetID: assetID,
-                currentStage: .directText
+                currentStage: .text
             )
         )
         let after = PhotoLiveTextRefreshID(

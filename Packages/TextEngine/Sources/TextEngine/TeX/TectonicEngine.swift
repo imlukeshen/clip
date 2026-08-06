@@ -295,8 +295,8 @@ final class TeXProcessController: @unchecked Sendable {
     }
 
     private static func logSize(at url: URL) throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey])
-        return Int64(values.fileSize ?? 0)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private static func readLog(at url: URL, limit: Int64) throws -> String {
