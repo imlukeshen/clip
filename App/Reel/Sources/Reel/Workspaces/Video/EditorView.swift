@@ -821,11 +821,11 @@ struct EditorView: View {
         )
         .accessibilityIdentifier("video-timeline")
         .help(
-            "Drag clips in time or between compatible V or A tracks without rippling. Select a track label to target it; drag an edge to trim."
+            "Drag clips in time or between compatible V or A tracks. Occupied ranges overwrite without rippling; drag an edge to trim."
         )
         .accessibilityLabel("Project timeline")
         .accessibilityHint(
-            "Select V or A track labels to target them. Drag media in time or between compatible tracks without moving neighbouring clips."
+            "Select V or A track labels to target them. Drag media in time or between compatible tracks; occupied ranges overwrite without rippling."
         )
     }
 

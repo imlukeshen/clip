@@ -138,6 +138,11 @@ struct CodeEditor: NSViewRepresentable {
         }
         context.coordinator.parent = self
         _ = context.coordinator.transition(to: documentIdentity)
+        let languageChanged = context.coordinator.presentedLanguage != language
+        let shouldRestoreEditing =
+            context.coordinator.isTextEditorActive
+            || textView.window?.firstResponder === textView
+        context.coordinator.presentedLanguage = language
         textView.isEditable = !isReadOnly
         textView.snippetLanguage = language
         textView.snippetFileName = fileName
@@ -166,6 +171,14 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.ruler?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
+        if languageChanged, language == .latex, shouldRestoreEditing {
+            // Adding the PDF preview mutates the surrounding NSSplitView after
+            // this representable update. AppKit can consequently resign or
+            // reparent the text view and reset its typing attributes after the
+            // normal appearance pass. Reassert both on the next run-loop turn,
+            // once the split hierarchy has settled.
+            context.coordinator.restoreEditingAfterWorkspaceTransition(in: container)
+        }
     }
 
     static func dismantleNSView(
@@ -222,11 +235,35 @@ struct CodeEditor: NSViewRepresentable {
         private var compositionBinding: Binding<String>?
         private var pendingSaveAfterComposition: (() -> Void)?
         fileprivate var documentIdentity: CodeEditorDocumentIdentity
+        fileprivate var presentedLanguage: LanguageID
+        fileprivate var isTextEditorActive = false
+        private var focusRetirementGeneration = 0
 
         init(_ parent: CodeEditor) {
             self.parent = parent
             lastSynchronizedText = parent.text
             documentIdentity = parent.documentIdentity
+            presentedLanguage = parent.language
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            guard notification.object is CodeTextView else { return }
+            focusRetirementGeneration += 1
+            isTextEditorActive = true
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard notification.object is CodeTextView else { return }
+            focusRetirementGeneration += 1
+            let generation = focusRetirementGeneration
+            // A split-view reparent can briefly end editing in the same run-loop
+            // turn as LaTeX promotion. Delay retirement so that transition can
+            // reclaim focus, while a genuine click elsewhere clears the token
+            // before any later language change.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, focusRetirementGeneration == generation else { return }
+                isTextEditorActive = false
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -543,6 +580,32 @@ struct CodeEditor: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(scrollObserver)
             }
             scrollObserver = nil
+        }
+
+        fileprivate func restoreEditingAfterWorkspaceTransition(
+            in container: CodeEditorContainerView
+        ) {
+            guard
+                let expectedTextView = container.scrollView.documentView as? CodeTextView
+            else { return }
+            DispatchQueue.main.async { [weak self, weak container, weak expectedTextView] in
+                guard let self, let container,
+                    presentedLanguage == .latex, parent.language == .latex,
+                    let textView = expectedTextView,
+                    container.scrollView.documentView === textView,
+                    let window = container.window
+                else { return }
+                container.layoutSubtreeIfNeeded()
+                window.makeFirstResponder(textView)
+                updateAppearance(
+                    textView: textView,
+                    scrollView: container.scrollView,
+                    theme: parent.theme,
+                    language: parent.language,
+                    settings: parent.settings
+                )
+                applyVisibleBaseStyle(in: nil, to: textView)
+            }
         }
 
         @discardableResult

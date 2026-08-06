@@ -18,6 +18,14 @@ struct TimelineViewportTests {
         #expect(TimelineViewport.zooming(2, by: .nan) == 2)
     }
 
+    @Test("Editing horizon leaves useful future-time drop space")
+    func editingHorizon() {
+        #expect(TimelineViewport.editingDuration(projectDuration: 0) == 10)
+        #expect(TimelineViewport.editingDuration(projectDuration: 8) == 18)
+        #expect(TimelineViewport.editingDuration(projectDuration: 60) == 75)
+        #expect(TimelineViewport.editingDuration(projectDuration: .infinity) == 10)
+    }
+
     @Test("Buttons use finer steps near fit and faster steps when zoomed in")
     func steppedZoom() {
         #expect(TimelineViewport.stepping(1, direction: 1) == 1.25)

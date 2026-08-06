@@ -1238,20 +1238,25 @@ public final class EditorViewModel {
 
     /// Returns whether a timeline item (and any media nested with it) can be
     /// placed on `trackID` at an explicit project time. The timeline canvas uses
-    /// this while dragging so an invalid overlap or locked lane is visible
+    /// this while dragging so an unsafe overwrite or locked lane is visible
     /// before the user releases the pointer.
     public func canMoveTimelineItem(
         _ itemID: ItemID,
         to trackID: TrackID,
         at timelineStart: RationalTime
     ) -> Bool {
-        (try? movedTimeline(itemID, to: trackID, at: timelineStart)) != nil
+        (try? movedTimeline(
+            itemID,
+            to: trackID,
+            at: timelineStart,
+            preservingOverwriteFragments: false
+        )) != nil
     }
 
-    /// Moves clips in project time without rippling neighbouring media. Moving
-    /// between V tracks creates an overlay edit; moving between A tracks keeps
-    /// detached audio independently editable. Nested media follows the anchor
-    /// by the same time delta and the entire operation is one exact undo step.
+    /// Moves clips in project time without rippling. Occupied destination media
+    /// is trimmed or split around the overwrite window; linked and nested media
+    /// is never split implicitly. Nested media follows the anchor by the same
+    /// time delta and the entire operation is one exact undo step.
     public func moveTimelineItem(
         _ itemID: ItemID,
         to trackID: TrackID,
@@ -1757,7 +1762,8 @@ public final class EditorViewModel {
     private func movedTimeline(
         _ itemID: ItemID,
         to destinationTrackID: TrackID,
-        at requestedStart: RationalTime
+        at requestedStart: RationalTime,
+        preservingOverwriteFragments: Bool = true
     ) throws -> (
         videoTracks: [Track],
         audioTracks: [Track],
@@ -1829,6 +1835,7 @@ public final class EditorViewModel {
             audioTracks[index].items.removeAll { movingIDs.contains($0.id) }
         }
 
+        var plannedItems: [(item: TimelineItem, trackID: TrackID)] = []
         for moving in movingItems {
             var item = moving.item
             item.timelineStart = item.timelineStart + delta
@@ -1836,22 +1843,94 @@ public final class EditorViewModel {
                 throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
             }
             let targetID = item.id == itemID ? destinationTrackID : moving.trackID
-            if let index = videoTracks.firstIndex(where: { $0.id == targetID }) {
-                videoTracks[index].items.append(item)
-            } else if let index = audioTracks.firstIndex(where: { $0.id == targetID }) {
-                audioTracks[index].items.append(item)
-            } else {
+            guard
+                videoTracks.contains(where: { $0.id == targetID })
+                    || audioTracks.contains(where: { $0.id == targetID })
+            else {
                 throw ModelError.trackNotFound(targetID)
+            }
+            plannedItems.append((item, targetID))
+        }
+
+        for (index, left) in plannedItems.enumerated() {
+            let leftRange = TimeRange(
+                start: left.item.timelineStart,
+                duration: left.item.timelineDuration
+            )
+            for right in plannedItems.dropFirst(index + 1) where right.trackID == left.trackID {
+                let rightRange = TimeRange(
+                    start: right.item.timelineStart,
+                    duration: right.item.timelineDuration
+                )
+                guard !leftRange.intersects(rightRange) else {
+                    throw ModelError.overlappingItems(left.trackID)
+                }
             }
         }
 
-        for index in videoTracks.indices {
-            videoTracks[index].items.sort(by: timelineItemOrder)
+        let linkedAudioIDs = Set(allTracks.flatMap(\.items).compactMap(\.detachedAudioItemID))
+        for planned in plannedItems {
+            let targetItems =
+                videoTracks.first(where: { $0.id == planned.trackID })?.items
+                ?? audioTracks.first(where: { $0.id == planned.trackID })?.items
+                ?? []
+            let plannedRange = TimeRange(
+                start: planned.item.timelineStart,
+                duration: planned.item.timelineDuration
+            )
+            let collisions = targetItems.filter { existing in
+                TimeRange(
+                    start: existing.timelineStart,
+                    duration: existing.timelineDuration
+                ).intersects(plannedRange)
+            }
+            guard
+                collisions.isEmpty
+                    || movingIDs.count == 1
+                        && collisions.allSatisfy({ item in
+                            item.nestID == nil
+                                && item.detachedAudioItemID == nil
+                                && !linkedAudioIDs.contains(item.id)
+                        })
+            else {
+                throw ModelError.overlappingItems(planned.trackID)
+            }
+
+            guard !preservingOverwriteFragments else { continue }
+            if let index = videoTracks.firstIndex(where: { $0.id == planned.trackID }) {
+                videoTracks[index].items.removeAll { collisions.contains($0) }
+                videoTracks[index].items.append(planned.item)
+            } else if let index = audioTracks.firstIndex(where: { $0.id == planned.trackID }) {
+                audioTracks[index].items.removeAll { collisions.contains($0) }
+                audioTracks[index].items.append(planned.item)
+            }
         }
-        for index in audioTracks.indices {
-            audioTracks[index].items.sort(by: timelineItemOrder)
+
+        if preservingOverwriteFragments {
+            var candidate = document
+            candidate.timeline.videoTracks = videoTracks
+            candidate.timeline.audioTracks = audioTracks
+            for planned in plannedItems {
+                let patch = try TimelineEditPlanner.overwrite(
+                    in: candidate,
+                    item: planned.item,
+                    on: planned.trackID,
+                    at: planned.item.timelineStart,
+                    splitRightItemID: .generate()
+                )
+                try candidate.apply(patch)
+            }
+            videoTracks = candidate.timeline.videoTracks
+            audioTracks = candidate.timeline.audioTracks
+        } else {
+            for index in videoTracks.indices {
+                videoTracks[index].items.sort(by: timelineItemOrder)
+            }
+            for index in audioTracks.indices {
+                audioTracks[index].items.sort(by: timelineItemOrder)
+            }
+            try validateTimelinePlacement(videoTracks + audioTracks)
         }
-        try validateTimelinePlacement(videoTracks + audioTracks)
         return (videoTracks, audioTracks, kind)
     }
 

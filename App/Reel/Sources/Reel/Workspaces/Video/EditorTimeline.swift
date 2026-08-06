@@ -47,7 +47,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.group)
         view.setAccessibilityHelp(
-            "Drag media between compatible tracks without moving neighbouring clips. Select a lane label to target that track."
+            "Drag media between compatible tracks. Occupied ranges use a non-ripple overwrite that preserves media outside the drop range. Select a lane label to target that track."
         )
         return view
     }
@@ -251,7 +251,8 @@ final class TimelineCanvas: NSView {
                 onRazor?(hit.item.id, time(at: point.x))
                 return
             }
-            if abs(point.x - hit.rect.minX) <= 10 {
+            switch pointerIntent(for: hit, at: point.x) {
+            case .leadingTrim:
                 gesture = .trim(
                     itemID: hit.item.id,
                     edge: .leading,
@@ -259,7 +260,7 @@ final class TimelineCanvas: NSView {
                     speed: hit.item.speed,
                     originX: point.x
                 )
-            } else if abs(point.x - hit.rect.maxX) <= 10 {
+            case .trailingTrim:
                 gesture = .trim(
                     itemID: hit.item.id,
                     edge: .trailing,
@@ -267,7 +268,7 @@ final class TimelineCanvas: NSView {
                     speed: hit.item.speed,
                     originX: point.x
                 )
-            } else {
+            case .move:
                 gesture = .move(
                     itemID: hit.item.id,
                     kind: hit.kind,
@@ -417,10 +418,10 @@ final class TimelineCanvas: NSView {
         let hit = mediaItem(at: point)
         hoveredTime = time(at: point.x)
         hoveredItemID = hit?.item.id
-        if let hit, abs(point.x - hit.rect.minX) <= 10 {
+        if let hit, pointerIntent(for: hit, at: point.x) == .leadingTrim {
             hoveredEdge = .leading
             NSCursor.resizeLeftRight.set()
-        } else if let hit, abs(point.x - hit.rect.maxX) <= 10 {
+        } else if let hit, pointerIntent(for: hit, at: point.x) == .trailingTrim {
             hoveredEdge = .trailing
             NSCursor.resizeLeftRight.set()
         } else if hit != nil {
@@ -475,7 +476,13 @@ final class TimelineCanvas: NSView {
     }
 
     private var pointsPerSecond: CGFloat {
-        max((bounds.width - labelWidth) / max(CGFloat(duration.seconds), 0.01), 1)
+        max((bounds.width - labelWidth) / max(CGFloat(editingDuration.seconds), 0.01), 1)
+    }
+
+    private var editingDuration: RationalTime {
+        RationalTime(
+            seconds: TimelineViewport.editingDuration(projectDuration: duration.seconds)
+        )
     }
 
     private var videoTrackCount: Int { max(timeline.videoTracks.count, 1) }
@@ -564,6 +571,31 @@ final class TimelineCanvas: NSView {
         }
     }
 
+    /// Stable geometry access for event routing and accessibility validation.
+    func mediaRect(for itemID: ItemID) -> NSRect? {
+        (videoItemRects() + audioItemRects()).first { $0.item.id == itemID }?.rect
+    }
+
+    func laneCenterY(for trackID: TrackID) -> CGFloat? {
+        if let index = timeline.videoTracks.firstIndex(where: { $0.id == trackID }) {
+            return videoY(for: index) + videoHeight / 2
+        }
+        if let index = timeline.audioTracks.firstIndex(where: { $0.id == trackID }) {
+            return audioY(for: index) + audioHeight / 2
+        }
+        return nil
+    }
+
+    private func pointerIntent(
+        for hit: ItemRect,
+        at x: CGFloat
+    ) -> TimelineClipPointerIntent {
+        TimelineClipHitTester.intent(
+            localX: Double(x - hit.rect.minX),
+            clipWidth: Double(hit.rect.width)
+        )
+    }
+
     private func laneTrack(at point: NSPoint) -> TrackID? {
         for (index, track) in timeline.videoTracks.enumerated()
         where NSRect(
@@ -589,7 +621,7 @@ final class TimelineCanvas: NSView {
     private func time(at x: CGFloat) -> RationalTime {
         let seconds = min(
             max((x - labelWidth) / pointsPerSecond, 0),
-            CGFloat(duration.seconds)
+            CGFloat(editingDuration.seconds)
         )
         return RationalTime(seconds: seconds)
     }
@@ -682,9 +714,9 @@ final class TimelineCanvas: NSView {
             to: NSPoint(x: bounds.maxX, y: rulerHeight)
         )
         let interval = rulerInterval()
-        guard duration > .zero else { return }
+        guard editingDuration > .zero else { return }
         var second = 0.0
-        while second <= duration.seconds {
+        while second <= editingDuration.seconds {
             let x = labelWidth + CGFloat(second) * pointsPerSecond
             NSBezierPath.strokeLine(
                 from: NSPoint(x: x, y: rulerHeight - 5),

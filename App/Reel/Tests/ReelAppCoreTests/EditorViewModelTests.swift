@@ -489,6 +489,167 @@ struct EditorViewModelTests {
         #expect(editor.document.item(itemID)?.timelineStart == RationalTime(seconds: 2))
     }
 
+    @Test("Occupied-lane movement overwrites without ripple and undoes exactly")
+    func timelineMoveOverwritesAndPreservesOutsideFragments() throws {
+        let movingID = ItemID(rawValue: "moving")
+        let occupiedID = ItemID(rawValue: "occupied")
+        let trailingID = ItemID(rawValue: "trailing")
+        let original = try ProjectDocument(
+            id: ProjectID(rawValue: "move-overwrite"),
+            name: "Move Overwrite",
+            timeline: Timeline(videoTracks: [
+                Track(
+                    id: TrackID(rawValue: "v1"),
+                    name: "V1",
+                    items: [
+                        TimelineItem(
+                            id: movingID,
+                            assetID: AssetID(rawValue: "asset"),
+                            sourceRange: TimeRange(
+                                start: .zero,
+                                duration: RationalTime(seconds: 2)
+                            )
+                        ),
+                        TimelineItem(
+                            id: occupiedID,
+                            assetID: AssetID(rawValue: "occupied-asset"),
+                            sourceRange: TimeRange(
+                                start: .zero,
+                                duration: RationalTime(seconds: 6)
+                            ),
+                            timelineStart: RationalTime(seconds: 2)
+                        ),
+                        TimelineItem(
+                            id: trailingID,
+                            assetID: AssetID(rawValue: "trailing-asset"),
+                            sourceRange: TimeRange(
+                                start: .zero,
+                                duration: RationalTime(seconds: 2)
+                            ),
+                            timelineStart: RationalTime(seconds: 9)
+                        ),
+                    ]
+                )
+            ]),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let editor = makeEditor(document: original)
+        let destination = RationalTime(seconds: 4)
+
+        #expect(
+            editor.canMoveTimelineItem(
+                movingID,
+                to: TrackID(rawValue: "v1"),
+                at: destination
+            )
+        )
+        editor.moveTimelineItem(
+            movingID,
+            to: TrackID(rawValue: "v1"),
+            at: destination
+        )
+
+        let items = editor.document.timeline.videoTracks[0].items
+        #expect(
+            items.map(\.timelineStart) == [
+                RationalTime(seconds: 2),
+                RationalTime(seconds: 4),
+                RationalTime(seconds: 6),
+                RationalTime(seconds: 9),
+            ])
+        #expect(
+            items.map(\.timelineDuration) == [
+                RationalTime(seconds: 2),
+                RationalTime(seconds: 2),
+                RationalTime(seconds: 2),
+                RationalTime(seconds: 2),
+            ])
+        #expect(items[0].id == occupiedID)
+        #expect(items[1].id == movingID)
+        #expect(items[2].assetID == AssetID(rawValue: "occupied-asset"))
+        #expect(items[2].sourceRange.start == RationalTime(seconds: 4))
+        #expect(editor.document.item(trailingID)?.timelineStart == RationalTime(seconds: 9))
+
+        editor.undo()
+        #expect(editor.document == original)
+        editor.redo()
+        #expect(editor.document.item(movingID)?.timelineStart == destination)
+    }
+
+    @Test("Overwrite movement refuses to split linked destination media")
+    func timelineMoveProtectsLinkedDestinationMedia() throws {
+        let movingID = ItemID(rawValue: "moving")
+        let linkedVideoID = ItemID(rawValue: "linked-video")
+        let linkedAudioID = ItemID(rawValue: "linked-audio")
+        let original = try ProjectDocument(
+            id: ProjectID(rawValue: "protected-overwrite"),
+            name: "Protected Overwrite",
+            timeline: Timeline(
+                videoTracks: [
+                    Track(
+                        id: TrackID(rawValue: "v1"),
+                        name: "V1",
+                        items: [
+                            TimelineItem(
+                                id: movingID,
+                                assetID: AssetID(rawValue: "asset"),
+                                sourceRange: TimeRange(
+                                    start: .zero,
+                                    duration: RationalTime(seconds: 2)
+                                )
+                            ),
+                            TimelineItem(
+                                id: linkedVideoID,
+                                assetID: AssetID(rawValue: "asset"),
+                                sourceRange: TimeRange(
+                                    start: .zero,
+                                    duration: RationalTime(seconds: 6)
+                                ),
+                                timelineStart: RationalTime(seconds: 2),
+                                detachedAudioItemID: linkedAudioID
+                            ),
+                        ]
+                    )
+                ],
+                audioTracks: [
+                    Track(
+                        id: TrackID(rawValue: "a1"),
+                        name: "A1",
+                        items: [
+                            TimelineItem(
+                                id: linkedAudioID,
+                                assetID: AssetID(rawValue: "asset"),
+                                sourceRange: TimeRange(
+                                    start: .zero,
+                                    duration: RationalTime(seconds: 6)
+                                ),
+                                timelineStart: RationalTime(seconds: 2)
+                            )
+                        ]
+                    )
+                ]
+            ),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let editor = makeEditor(document: original)
+
+        #expect(
+            !editor.canMoveTimelineItem(
+                movingID,
+                to: TrackID(rawValue: "v1"),
+                at: RationalTime(seconds: 4)
+            )
+        )
+        editor.moveTimelineItem(
+            movingID,
+            to: TrackID(rawValue: "v1"),
+            at: RationalTime(seconds: 4)
+        )
+        #expect(editor.document == original)
+    }
+
     @Test("Primary audio moves freely within A1 without becoming a reorder")
     func primaryAudioMovesInTime() throws {
         var original = try document()
