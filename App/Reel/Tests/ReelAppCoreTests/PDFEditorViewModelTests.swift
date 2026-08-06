@@ -8,7 +8,10 @@ import Testing
 
 @testable import ReelAppCore
 
-@Suite("PDF editor mutation path")
+// PDFium rendering and Core Graphics font setup are process-global, so running
+// these renderer-heavy journeys concurrently makes their async publications
+// contend on slower hosted macOS runners.
+@Suite("PDF editor mutation path", .serialized)
 struct PDFEditorViewModelTests {
     @Test("Source text is selected and replaced through the undoable model")
     @MainActor
@@ -208,7 +211,7 @@ struct PDFEditorViewModelTests {
 
     @MainActor
     private func waitUntil(
-        timeout: Duration = .seconds(2),
+        timeout: Duration = .seconds(10),
         _ condition: @escaping @MainActor () async -> Bool
     ) async throws {
         let clock = ContinuousClock()

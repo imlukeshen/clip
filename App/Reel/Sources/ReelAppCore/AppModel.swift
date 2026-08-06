@@ -914,10 +914,15 @@ public final class AppModel {
                     to: relocatedURL,
                     displayName: renamed.displayName
                 )
+                // The returned record is authoritative. Invalidate any older
+                // library snapshot that was already in flight, then publish
+                // the rename and its undo entry without another suspension.
+                // This keeps the visible filename, editor path, busy state,
+                // and Command-Z availability in one MainActor transaction.
+                assetRefreshGeneration &+= 1
                 if let index = assets.firstIndex(where: { $0.id == id }) {
                     assets[index] = renamed
                 }
-                await refreshAssets()
                 guard renamed.displayName != original.displayName else {
                     if let undoToken {
                         undoToken.manager?.removeAllActions(withTarget: undoToken)
