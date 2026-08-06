@@ -15,6 +15,9 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
     public var blendMode: BlendMode
     public var videoFade: FadeEnvelope
     public var audioFade: FadeEnvelope
+    /// The explicit audio item created by separating this video's embedded
+    /// audio. While present, playback must not also emit the embedded source.
+    public var detachedAudioItemID: ItemID?
     /// Clips with the same value are treated as one nested editing group while
     /// remaining independent media items for deterministic playback/export.
     public var nestID: String?
@@ -34,6 +37,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         blendMode: BlendMode = .normal,
         videoFade: FadeEnvelope = .none,
         audioFade: FadeEnvelope = .none,
+        detachedAudioItemID: ItemID? = nil,
         nestID: String? = nil
     ) {
         self.id = id
@@ -48,6 +52,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         self.blendMode = blendMode
         self.videoFade = videoFade
         self.audioFade = audioFade
+        self.detachedAudioItemID = detachedAudioItemID
         self.nestID = nestID
     }
 
@@ -74,6 +79,7 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         case blendMode
         case videoFade
         case audioFade
+        case detachedAudioItemID
         case nestID
     }
 
@@ -96,6 +102,10 @@ public struct TimelineItem: Codable, Sendable, Equatable, Identifiable {
         blendMode = try container.decodeIfPresent(BlendMode.self, forKey: .blendMode) ?? .normal
         videoFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .videoFade) ?? .none
         audioFade = try container.decodeIfPresent(FadeEnvelope.self, forKey: .audioFade) ?? .none
+        detachedAudioItemID = try container.decodeIfPresent(
+            ItemID.self,
+            forKey: .detachedAudioItemID
+        )
         nestID = try container.decodeIfPresent(String.self, forKey: .nestID)
     }
 }

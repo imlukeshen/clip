@@ -85,10 +85,30 @@ public final class AppModel {
     public private(set) var conversionAggregateProgress = 0.0
     public private(set) var conversionCompletedCount = 0
     public private(set) var conversionBatchTotal = 0
-    public private(set) var editor: EditorViewModel?
-    public private(set) var imageEditor: ImageEditorViewModel?
-    public private(set) var pdfEditor: PDFEditorViewModel?
-    public private(set) var textEditor: TextEditorViewModel?
+    public private(set) var editor: EditorViewModel? {
+        didSet {
+            guard editor !== oldValue else { return }
+            assistantDocumentDidChange()
+        }
+    }
+    public private(set) var imageEditor: ImageEditorViewModel? {
+        didSet {
+            guard imageEditor !== oldValue else { return }
+            assistantDocumentDidChange()
+        }
+    }
+    public private(set) var pdfEditor: PDFEditorViewModel? {
+        didSet {
+            guard pdfEditor !== oldValue else { return }
+            assistantDocumentDidChange()
+        }
+    }
+    public private(set) var textEditor: TextEditorViewModel? {
+        didSet {
+            guard textEditor !== oldValue else { return }
+            assistantDocumentDidChange()
+        }
+    }
     /// Scratch buffers available for restoration in the text workspace.
     public private(set) var scratchBuffers: [ScratchTextRecord] = []
     public private(set) var lastMessage: String?
@@ -109,6 +129,25 @@ public final class AppModel {
                 isGlobalClipboardShortcutEnabled,
                 forKey: Self.globalClipboardShortcutPreferenceKey
             )
+        }
+    }
+    /// Whether Clip records eligible system clipboard changes into its local history.
+    /// This privacy-sensitive feature is independent from the panel shortcut and is
+    /// disabled until the user explicitly enables it.
+    public var isClipboardCaptureEnabled: Bool {
+        didSet {
+            guard isClipboardCaptureEnabled != oldValue else { return }
+            UserDefaults.standard.set(
+                isClipboardCaptureEnabled,
+                forKey: Self.clipboardCapturePreferenceKey
+            )
+            if let runtime {
+                let requestedValue = isClipboardCaptureEnabled
+                Task { [weak self] in
+                    guard let self, self.isClipboardCaptureEnabled == requestedValue else { return }
+                    await runtime.setClipboardCaptureEnabled(requestedValue)
+                }
+            }
         }
     }
     /// Allows Clip to fetch only pinned, hash-verified open fonts when a PDF's
@@ -154,12 +193,18 @@ public final class AppModel {
     private var searchTask: Task<Void, Never>?
     private var assetRefreshGeneration = 0
     private var conversionTask: Task<Void, Never>?
+    private var assistantTask: Task<Void, Never>?
+    private var assistantOperationID: UUID?
+    private var assistantAwaitingProviderOperationID: UUID?
+    private var assistantDocumentGeneration: UInt64 = 0
     private var hasStarted = false
     private var folderBackHistory: [String?] = []
     private var folderForwardHistory: [String?] = []
 
     private static let globalClipboardShortcutPreferenceKey =
         "clip.globalClipboardShortcutEnabled"
+    private static let clipboardCapturePreferenceKey =
+        "clip.clipboardCaptureEnabled"
     private static let pdfFontAutoDownloadPreferenceKey =
         "clip.pdf.autoResolveFonts"
 
@@ -168,7 +213,7 @@ public final class AppModel {
         shortcutReader: ShortcutReader = ShortcutReader(),
         conversionCapabilities: ConversionCapabilities = .appStore
     ) {
-        let normalizedLibraryRoot = libraryRoot.standardizedFileURL
+        let normalizedLibraryRoot = libraryRoot.resolvingSymlinksInPath().standardizedFileURL
         self.libraryRoot = normalizedLibraryRoot
         self.shortcutReader = shortcutReader
         self.conversionCapabilities = conversionCapabilities
@@ -207,6 +252,9 @@ public final class AppModel {
         self.isGlobalClipboardShortcutEnabled =
             UserDefaults.standard.object(forKey: Self.globalClipboardShortcutPreferenceKey)
             as? Bool ?? true
+        self.isClipboardCaptureEnabled =
+            UserDefaults.standard.object(forKey: Self.clipboardCapturePreferenceKey)
+            as? Bool ?? false
         self.isPDFFontAutoDownloadEnabled =
             UserDefaults.standard.object(forKey: Self.pdfFontAutoDownloadPreferenceKey)
             as? Bool ?? true
@@ -317,6 +365,7 @@ public final class AppModel {
             let runtime = try await AppRuntime(
                 libraryRoot: libraryRoot,
                 conversionCapabilities: conversionCapabilities,
+                isClipboardCaptureEnabled: isClipboardCaptureEnabled,
                 didAutomaticallyIngest: { [weak self] record in
                     await self?.handleAutomaticIngest(record)
                 },
@@ -517,6 +566,10 @@ public final class AppModel {
 
     public func setGlobalClipboardShortcutEnabled(_ isEnabled: Bool) {
         isGlobalClipboardShortcutEnabled = isEnabled
+    }
+
+    public func setClipboardCaptureEnabled(_ isEnabled: Bool) {
+        isClipboardCaptureEnabled = isEnabled
     }
 
     public func setPDFFontAutoDownloadEnabled(_ isEnabled: Bool) {
@@ -1718,10 +1771,15 @@ public final class AppModel {
         let turnID = UUID().uuidString.lowercased()
         let digest = session.digest
         let context = session.context
+        let sessionToken = session.token
         let settings = aiSettings
+        let operationID = UUID()
+        assistantOperationID = operationID
+        assistantAwaitingProviderOperationID = operationID
 
-        Task {
-            defer { isAssistantWorking = false }
+        assistantTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishAssistantOperation(operationID) }
             do {
                 let provider = try await settings.provider()
                 let turn = try await AssistantTurnRunner().run(
@@ -1732,6 +1790,10 @@ public final class AppModel {
                     digest: digest,
                     context: context
                 )
+                self.assistantAwaitingProviderOperationID = nil
+                try Task.checkCancellation()
+                guard self.isCurrentAssistantSession(sessionToken, operationID: operationID)
+                else { return }
                 var responseParts: [String] = []
                 if !turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     responseParts.append(turn.text)
@@ -1747,7 +1809,8 @@ public final class AppModel {
                         PendingAssistantAction(
                             name: invocation.name,
                             result: result,
-                            invocation: invocation
+                            invocation: invocation,
+                            session: sessionToken
                         )
                     )
                     responseParts.append("Review this file operation before applying.")
@@ -1762,10 +1825,17 @@ public final class AppModel {
                             requiresConfirmation: true
                         )
                         pendingAssistantActions.append(
-                            PendingAssistantAction(name: "assistant.turn", result: result)
+                            PendingAssistantAction(
+                                name: "assistant.turn",
+                                result: result,
+                                session: sessionToken
+                            )
                         )
                         responseParts.append("Review the complete edit plan before applying.")
-                    } else if let editor {
+                    } else if isCurrentAssistantSession(
+                        sessionToken,
+                        operationID: operationID
+                    ), let editor {
                         try editor.perform(combinedPatch)
                     } else {
                         throw ToolExecutorError.invalidArguments(
@@ -1779,7 +1849,15 @@ public final class AppModel {
                 assistantMessages.append(
                     AssistantMessage(role: .assistant, text: responseParts.joined(separator: "\n")))
                 await settings.refresh()
+            } catch is CancellationError {
+                return
             } catch {
+                guard
+                    self.isCurrentAssistantSession(
+                        sessionToken,
+                        operationID: operationID
+                    )
+                else { return }
                 assistantMessages.append(
                     AssistantMessage(
                         role: .status,
@@ -1787,6 +1865,7 @@ public final class AppModel {
                     ))
             }
         }
+        monitorAssistantRevision(sessionToken, operationID: operationID)
     }
 
     public func approveAssistantAction(_ id: String) {
@@ -1794,6 +1873,16 @@ public final class AppModel {
             return
         }
         let action = pendingAssistantActions[index]
+        guard isCurrentAssistantSession(action.session) else {
+            pendingAssistantActions.removeAll { $0.id == id }
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status,
+                    text: "The document changed, so this action was discarded."
+                )
+            )
+            return
+        }
         if let patch = action.result.patch, let editor {
             do {
                 try editor.perform(patch)
@@ -1811,9 +1900,19 @@ public final class AppModel {
         else { return }
         isAssistantWorking = true
         let context = session.context
+        let sessionToken = session.token
+        guard sessionToken == action.session else {
+            isAssistantWorking = false
+            pendingAssistantActions.removeAll { $0.id == id }
+            return
+        }
         let policy = aiSettings.confirmationPolicy
-        Task {
-            defer { isAssistantWorking = false }
+        let operationID = UUID()
+        assistantOperationID = operationID
+        assistantAwaitingProviderOperationID = operationID
+        assistantTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishAssistantOperation(operationID) }
             do {
                 let result = try await ToolExecutor().execute(
                     invocation,
@@ -1822,13 +1921,30 @@ public final class AppModel {
                     context: context,
                     confirmed: true
                 )
+                self.assistantAwaitingProviderOperationID = nil
+                try Task.checkCancellation()
+                guard
+                    self.isCurrentAssistantSession(
+                        sessionToken,
+                        operationID: operationID
+                    )
+                else { return }
                 pendingAssistantActions.removeAll { $0.id == id }
                 assistantMessages.append(AssistantMessage(role: .status, text: result.message))
+            } catch is CancellationError {
+                return
             } catch {
+                guard
+                    self.isCurrentAssistantSession(
+                        sessionToken,
+                        operationID: operationID
+                    )
+                else { return }
                 assistantMessages.append(
                     AssistantMessage(role: .status, text: error.localizedDescription))
             }
         }
+        monitorAssistantRevision(sessionToken, operationID: operationID)
     }
 
     public func rejectAssistantAction(_ id: String) {
@@ -1847,11 +1963,16 @@ public final class AppModel {
 
     private func assistantSession(
         runtime: AppRuntime
-    ) -> (digest: ContextDigest, context: ToolExecutionContext)? {
+    ) -> (digest: ContextDigest, context: ToolExecutionContext, token: AssistantSessionToken)? {
         if let editor {
             return (
                 editor.assistantContextDigest(),
-                assistantToolContext(editor: editor, runtime: runtime)
+                assistantToolContext(editor: editor, runtime: runtime),
+                AssistantSessionToken(
+                    document: .timeline(editor.document.id),
+                    generation: assistantDocumentGeneration,
+                    revision: assistantRevision(editor.document)
+                )
             )
         }
         guard let textEditor,
@@ -1876,7 +1997,105 @@ public final class AppModel {
             selectedItemID: nil,
             items: []
         )
-        return (digest, context)
+        return (
+            digest,
+            context,
+            AssistantSessionToken(
+                document: .text(textEditor.document.id),
+                generation: assistantDocumentGeneration,
+                revision: assistantRevision(textEditor.document, text: textEditor.text)
+            )
+        )
+    }
+
+    private func assistantDocumentDidChange() {
+        assistantDocumentGeneration &+= 1
+        assistantTask?.cancel()
+        assistantTask = nil
+        assistantOperationID = nil
+        assistantAwaitingProviderOperationID = nil
+        isAssistantWorking = false
+        assistantDraft = ""
+        assistantMessages.removeAll()
+        pendingAssistantActions.removeAll()
+    }
+
+    private func currentAssistantDocument() -> AssistantSessionToken.Document? {
+        if let editor { return .timeline(editor.document.id) }
+        if let textEditor { return .text(textEditor.document.id) }
+        return nil
+    }
+
+    private func currentAssistantRevision() -> Data? {
+        if let editor { return assistantRevision(editor.document) }
+        if let textEditor {
+            return assistantRevision(textEditor.document, text: textEditor.text)
+        }
+        return nil
+    }
+
+    private func assistantRevision<Value: Encodable>(
+        _ value: Value,
+        text: String? = nil
+    ) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        var revision = (try? encoder.encode(value)) ?? Data()
+        if let text {
+            revision.append(0)
+            revision.append(contentsOf: text.utf8)
+        }
+        return revision
+    }
+
+    private func isCurrentAssistantSession(
+        _ token: AssistantSessionToken,
+        operationID: UUID? = nil
+    ) -> Bool {
+        guard token.generation == assistantDocumentGeneration,
+            token.document == currentAssistantDocument(),
+            token.revision == currentAssistantRevision()
+        else { return false }
+        if let operationID {
+            return assistantOperationID == operationID
+        }
+        return true
+    }
+
+    private func finishAssistantOperation(_ operationID: UUID) {
+        guard assistantOperationID == operationID else { return }
+        assistantAwaitingProviderOperationID = nil
+        assistantOperationID = nil
+        assistantTask = nil
+        isAssistantWorking = false
+    }
+
+    private func monitorAssistantRevision(
+        _ token: AssistantSessionToken,
+        operationID: UUID
+    ) {
+        Task { [weak self] in
+            while let self,
+                assistantAwaitingProviderOperationID == operationID
+            {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard assistantAwaitingProviderOperationID == operationID else { return }
+                guard !isCurrentAssistantSession(token, operationID: operationID) else {
+                    continue
+                }
+                assistantAwaitingProviderOperationID = nil
+                assistantTask?.cancel()
+                assistantMessages.append(
+                    AssistantMessage(
+                        role: .status,
+                        text:
+                            "The document changed, so the pending assistant request was cancelled."
+                    )
+                )
+                finishAssistantOperation(operationID)
+                return
+            }
+        }
     }
 
     private func configureSharedAssistantServices(

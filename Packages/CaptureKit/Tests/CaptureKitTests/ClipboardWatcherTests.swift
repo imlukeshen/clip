@@ -103,4 +103,43 @@ struct ClipboardWatcherTests {
         // would deadlock waiting on the timeout branch instead.
         await watcher.poll()
     }
+
+    @Test("Sensitive and transient pasteboard items are ignored")
+    func ignoresSensitiveMarkers() async throws {
+        let name = makeName()
+        let watcher = ClipboardWatcher(pasteboardName: name)
+        let board = NSPasteboard(name: name)
+        board.clearContents()
+        board.setString("secret", forType: .string)
+        board.setData(
+            Data(),
+            forType: .init("org.nspasteboard.ConcealedType")
+        )
+        await watcher.poll()
+
+        board.clearContents()
+        board.setString("safe", forType: .string)
+        async let change = nextChange(from: watcher)
+        await watcher.poll()
+        #expect(try await change == .text("safe"))
+    }
+
+    @Test("Oversized text is ignored without poisoning later copies")
+    func ignoresOversizedText() async throws {
+        let name = makeName()
+        let watcher = ClipboardWatcher(pasteboardName: name)
+        let board = NSPasteboard(name: name)
+        board.clearContents()
+        board.setString(
+            String(repeating: "x", count: CaptureHistory.maximumClipboardTextBytes + 1),
+            forType: .string
+        )
+        await watcher.poll()
+
+        board.clearContents()
+        board.setString("bounded", forType: .string)
+        async let change = nextChange(from: watcher)
+        await watcher.poll()
+        #expect(try await change == .text("bounded"))
+    }
 }

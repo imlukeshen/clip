@@ -117,6 +117,46 @@ struct CaptureHistoryRecordTests {
         #expect(try Data(contentsOf: history.url(for: item)) == data)
     }
 
+    @Test("Oversized clipboard payloads are rejected before writing")
+    func rejectsOversizedClipboardPayloads() async throws {
+        let directory = try makeDirectory()
+        let history = CaptureHistory(directory: directory)
+        let data = Data(repeating: 0x41, count: CaptureHistory.maximumClipboardTextBytes + 1)
+        let text = try #require(String(data: data, encoding: .utf8))
+
+        await #expect(throws: CaptureError.payloadTooLarge("Copied text")) {
+            _ = try await history.record(text: text)
+        }
+        #expect(await history.items().isEmpty)
+    }
+
+    @Test("Disabled clipboard recording cannot mutate or prune a full history")
+    func disabledClipboardRecordingIsTransactional() async throws {
+        let history = CaptureHistory(
+            directory: try makeDirectory(),
+            limit: CaptureHistoryLimit(
+                maximumCount: 2,
+                maximumAge: 60 * 60,
+                maximumBytes: 1_024
+            )
+        )
+        let first = try await history.record(text: "first")
+        let second = try await history.record(text: "second")
+        let before = await history.items()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await history.recordClipboard(text: "late clipboard item")
+        }
+
+        #expect(await history.items() == before)
+        #expect(FileManager.default.fileExists(atPath: history.url(for: first).path))
+        #expect(FileManager.default.fileExists(atPath: history.url(for: second).path))
+
+        await history.setClipboardRecordingEnabled(true)
+        _ = try await history.recordClipboard(text: "accepted clipboard item")
+        #expect(await history.items().count == 2)
+    }
+
     @Test("Old index.json without the new fields still decodes")
     func decodesLegacyIndex() throws {
         let legacy = """

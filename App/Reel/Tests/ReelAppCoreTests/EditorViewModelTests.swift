@@ -244,14 +244,155 @@ struct EditorViewModelTests {
 
         editor.separateSelectedAudio()
 
-        #expect(editor.document.timeline.audioTracks.count == 2)
+        #expect(editor.document.timeline.audioTracks.count == 1)
+        #expect(editor.document.timeline.audioTracks[0].items.count == 1)
+        #expect(editor.document.timeline.audioTracks[0].items[0].assetID == overlay.id)
         #expect(editor.selectedTrackKind == .audio)
+        #expect(editor.targetedTrackKind == .audio)
+        #expect(editor.targetedAudioTrackID == editor.selectedTrackID)
         let detachedID = try #require(editor.selectedItem?.id)
+        #expect(
+            editor.document.timeline.videoTracks[1].items[0].detachedAudioItemID == detachedID
+        )
         editor.deleteSelected()
         #expect(editor.document.item(detachedID) == nil)
         #expect(editor.document.timeline.videoTracks[1].items.count == 1)
         editor.undo()
         #expect(editor.document.item(detachedID) != nil)
+    }
+
+    @Test("Legacy matching audio is adopted instead of duplicated")
+    func legacySeparatedAudioIsAdopted() throws {
+        let base = try document()
+        let source = try #require(base.timeline.video.first)
+        let legacyAudio = TimelineItem(
+            id: ItemID(rawValue: "legacy-audio"),
+            assetID: source.assetID,
+            sourceRange: source.sourceRange,
+            timelineStart: source.timelineStart,
+            speed: source.speed
+        )
+        let legacy = try ProjectDocument(
+            id: base.id,
+            name: base.name,
+            timeline: Timeline(
+                videoTracks: base.timeline.videoTracks,
+                audioTracks: [
+                    Track(
+                        id: TrackID(rawValue: "a1"),
+                        name: "A1",
+                        items: [legacyAudio]
+                    )
+                ]
+            ),
+            createdAt: base.createdAt,
+            modifiedAt: base.modifiedAt
+        )
+        let editor = makeEditor(document: legacy)
+        editor.select(source.id)
+
+        editor.separateSelectedAudio()
+
+        #expect(editor.document.timeline.audioTracks[0].items.count == 1)
+        #expect(editor.selectedItem?.id == legacyAudio.id)
+        #expect(editor.document.timeline.video[0].detachedAudioItemID == legacyAudio.id)
+    }
+
+    @Test("Only sources with audio are exposed to the linked audio lane")
+    func linkedAudioAssetsExcludeSilentMedia() throws {
+        let editor = makeEditor(document: try document())
+        let silent = record(
+            id: "silent-photo",
+            displayName: "Still.png",
+            duration: RationalTime(seconds: 3),
+            hasAudio: false
+        )
+        let audible = record(
+            id: "audible-video",
+            displayName: "Interview.mov",
+            duration: RationalTime(seconds: 3),
+            hasAudio: true
+        )
+
+        #expect(editor.audioAssetIDs.contains(AssetID(rawValue: "asset")))
+        #expect(editor.insert(silent))
+        #expect(!editor.audioAssetIDs.contains(silent.id))
+        #expect(!editor.audioAssetIDs.contains(audible.id))
+
+        #expect(editor.insert(audible))
+        #expect(editor.audioAssetIDs.contains(audible.id))
+    }
+
+    @Test("Video and audio track creation targets canonical lanes and undoes exactly")
+    func addVideoAndAudioTracks() throws {
+        let original = try document()
+        let editor = makeEditor(document: original)
+
+        editor.addVideoTrack()
+
+        let videoTrackID = try #require(editor.targetedVideoTrackID)
+        #expect(editor.document.timeline.videoTracks.map(\.name) == ["V1", "V2"])
+        #expect(editor.targetedTrackKind == .video)
+        #expect(editor.canRemoveTrack(videoTrackID))
+
+        editor.addAudioTrack()
+
+        let audioTrackID = try #require(editor.targetedAudioTrackID)
+        #expect(editor.document.timeline.audioTracks.map(\.name) == ["A1"])
+        #expect(editor.document.timeline.audioTracks[0].items.isEmpty)
+        #expect(editor.document.timeline.videoTracks[0].items[0].detachedAudioItemID == nil)
+        #expect(editor.targetedTrackKind == .audio)
+        #expect(editor.canRemoveTrack(audioTrackID))
+
+        editor.undo()
+        #expect(editor.document.timeline.audioTracks.isEmpty)
+        #expect(editor.targetedAudioTrackID == nil)
+        editor.undo()
+        #expect(editor.document == original)
+
+        editor.redo()
+        #expect(editor.document.timeline.videoTracks.map(\.name) == ["V1", "V2"])
+        editor.redo()
+        #expect(editor.document.timeline.audioTracks.map(\.name) == ["A1"])
+    }
+
+    @Test("Only empty unlocked tracks are removable and removal is exactly undoable")
+    func removeEmptyTrack() throws {
+        let baseDocument = try document()
+        let item = try #require(baseDocument.timeline.video.first)
+        let removableID = TrackID(rawValue: "removable-video")
+        let lockedID = TrackID(rawValue: "locked-audio")
+        let original = try ProjectDocument(
+            id: ProjectID(rawValue: "track-removal"),
+            name: "Track removal",
+            timeline: Timeline(
+                videoTracks: [
+                    Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item]),
+                    Track(id: removableID, name: "V2"),
+                ],
+                audioTracks: [
+                    Track(id: TrackID(rawValue: "a1"), name: "A1"),
+                    Track(id: lockedID, name: "A2", isLocked: true),
+                ]
+            ),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+        let editor = makeEditor(document: original)
+
+        #expect(!editor.canRemoveTrack(TrackID(rawValue: "v1")))
+        #expect(!editor.canRemoveTrack(lockedID))
+        #expect(editor.canRemoveTrack(removableID))
+
+        editor.targetVideoTrack(removableID)
+        editor.removeTrack(removableID)
+
+        #expect(editor.document.timeline.videoTracks.map(\.name) == ["V1"])
+        #expect(editor.targetedVideoTrackID == TrackID(rawValue: "v1"))
+        editor.undo()
+        #expect(editor.document == original)
+        editor.redo()
+        #expect(editor.document.timeline.videoTracks.map(\.name) == ["V1"])
     }
 
     @Test("Timeline media moves across tracks and time in one exact undo")
@@ -315,6 +456,76 @@ struct EditorViewModelTests {
         #expect(editor.document.item(audioID)?.timelineStart == nextStart)
     }
 
+    @Test("Primary video moves to a snapped explicit time and preserves the gap through undo")
+    func primaryVideoMovesInTimeWithSnapping() throws {
+        let original = try document()
+        let editor = makeEditor(document: original)
+        let itemID = try #require(original.timeline.video.first?.id)
+        let trackID = try #require(original.timeline.videoTracks.first?.id)
+        let marker = SnapPoint(
+            id: "destination",
+            time: RationalTime(seconds: 2),
+            kind: .marker
+        )
+
+        let placement = TimelineMoveSnapper.snap(
+            proposedStart: RationalTime(seconds: 1.94),
+            duration: RationalTime(seconds: 6),
+            to: [marker],
+            threshold: RationalTime(seconds: 0.1)
+        )
+
+        #expect(placement.timelineStart == marker.time)
+        #expect(placement.point == marker)
+        #expect(editor.canMoveTimelineItem(itemID, to: trackID, at: placement.timelineStart))
+
+        editor.moveTimelineItem(itemID, to: trackID, at: placement.timelineStart)
+
+        #expect(editor.document.item(itemID)?.timelineStart == RationalTime(seconds: 2))
+        #expect(editor.document.duration == RationalTime(seconds: 8))
+        editor.undo()
+        #expect(editor.document == original)
+        editor.redo()
+        #expect(editor.document.item(itemID)?.timelineStart == RationalTime(seconds: 2))
+    }
+
+    @Test("Primary audio moves freely within A1 without becoming a reorder")
+    func primaryAudioMovesInTime() throws {
+        var original = try document()
+        let audioID = ItemID(rawValue: "primary-audio")
+        original.timeline.audioTracks = [
+            Track(
+                id: TrackID(rawValue: "a1"),
+                name: "A1",
+                items: [
+                    TimelineItem(
+                        id: audioID,
+                        assetID: AssetID(rawValue: "asset"),
+                        sourceRange: TimeRange(
+                            start: .zero,
+                            duration: RationalTime(seconds: 1)
+                        )
+                    )
+                ]
+            )
+        ]
+        let editor = makeEditor(document: original)
+        let start = RationalTime(seconds: 3)
+
+        #expect(
+            editor.canMoveTimelineItem(
+                audioID,
+                to: TrackID(rawValue: "a1"),
+                at: start
+            )
+        )
+        editor.moveTimelineItem(audioID, to: TrackID(rawValue: "a1"), at: start)
+
+        #expect(editor.document.item(audioID)?.timelineStart == start)
+        editor.undo()
+        #expect(editor.document == original)
+    }
+
     @Test("Timeline movement rejects overlaps and moves detached audio independently")
     func timelineMovementValidationAndAudio() throws {
         var original = try document()
@@ -370,8 +581,12 @@ struct EditorViewModelTests {
         #expect(editor.document.timeline.audioTracks[1].items.first?.id == audioID)
         #expect(editor.document.item(audioID)?.timelineStart == audioStart)
         #expect(editor.selectedTrackKind == .audio)
+        #expect(editor.targetedAudioTrackID == TrackID(rawValue: "a2"))
         editor.undo()
         #expect(editor.document == original)
+        editor.redo()
+        #expect(editor.document.timeline.audioTracks[1].items.first?.id == audioID)
+        #expect(editor.document.item(audioID)?.timelineStart == audioStart)
     }
 
     @Test("Nested media selects and deletes as one undoable group")

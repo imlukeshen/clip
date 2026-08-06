@@ -25,7 +25,7 @@ public actor IngestPipeline {
     ) {
         let stream = AsyncStream<IngestEvent>.makeStream()
         self.library = library
-        self.libraryRoot = libraryRoot.standardizedFileURL
+        self.libraryRoot = libraryRoot.resolvingSymlinksInPath().standardizedFileURL
         self.waiter = waiter
         self.probe = probe
         self.derivatives = derivatives

@@ -1,7 +1,8 @@
-import ConvertKit
 import CoreGraphics
 import Foundation
 import Testing
+
+@testable import ConvertKit
 
 @Suite("V5 LibreOffice", .serialized)
 struct V5LibreOfficeTests {
@@ -119,6 +120,57 @@ struct V5LibreOfficeTests {
         let data = try Data(contentsOf: output)
         #expect(data.count > 1_000)
         #expect(data.starts(with: [0x50, 0x4B]))
+    }
+
+    @Test("Runaway LibreOffice diagnostic output is stopped and bounded")
+    func runawayDiagnosticOutputIsStopped() async throws {
+        let folder = try fixtureFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let executable = folder.appendingPathComponent("soffice")
+        try Data(
+            """
+            #!/bin/sh
+            while :; do
+              printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' >&2
+            done
+            """.utf8
+        ).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable.path
+        )
+        let capabilities = ConversionCapabilities.direct(
+            libreOfficeExecutable: executable
+        )
+        let step = try #require(
+            ConversionPlanner(capabilities: capabilities)
+                .plan(from: ConversionFormats.pdf, to: ConversionFormats.docx)?
+                .steps.first
+        )
+        let input = folder.appendingPathComponent("brief.pdf")
+        try Data("%PDF-1.7\n".utf8).write(to: input)
+        let output = folder.appendingPathComponent("brief.docx")
+        let backend = LibreOfficeBackend(
+            capabilities: capabilities,
+            processTimeout: .seconds(2),
+            logSizeLimit: 1_024
+        )
+        let clock = ContinuousClock()
+        let started = clock.now
+
+        do {
+            for try await _ in await backend.run(step, input: input, output: output) {}
+            Issue.record("Runaway diagnostic output should be rejected")
+        } catch {
+            #expect(
+                error as? ConversionError
+                    == .conversionFailed(
+                        "LibreOffice produced too much diagnostic output and was stopped."
+                    )
+            )
+        }
+        #expect(started.duration(to: clock.now) < .seconds(2))
+        #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
     private func fixtureFolder() throws -> URL {

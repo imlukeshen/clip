@@ -10,15 +10,52 @@ import Foundation
 /// the user left it; and entries only leave via the limit, an explicit delete,
 /// or a clear.
 public actor CaptureHistory {
+    public static let maximumClipboardTextBytes = 1 * 1_024 * 1_024
+    public static let maximumClipboardImageBytes = 25 * 1_024 * 1_024
+    public static let maximumClipboardFileListBytes = 1 * 1_024 * 1_024
     private let directory: URL
     private let limit: CaptureHistoryLimit
     private let indexURL: URL
     private var cached: [CaptureHistoryItem]?
+    private var isClipboardRecordingEnabled = false
 
     public init(directory: URL, limit: CaptureHistoryLimit = .standard) {
         self.directory = directory.standardizedFileURL
         self.limit = limit
         self.indexURL = directory.appendingPathComponent("index.json")
+    }
+
+    /// Linearization point shared by preference changes and clipboard writes.
+    /// Because both run on this actor, disabling cannot interleave between a
+    /// clipboard entry's insertion and limit pruning.
+    public func setClipboardRecordingEnabled(_ isEnabled: Bool) {
+        isClipboardRecordingEnabled = isEnabled
+    }
+
+    @discardableResult
+    public func recordClipboard(text: String) throws -> CaptureHistoryItem {
+        guard isClipboardRecordingEnabled else { throw CancellationError() }
+        return try record(text: text)
+    }
+
+    @discardableResult
+    public func recordClipboard(
+        imageData: Data,
+        pathExtension: String,
+        displayName: String
+    ) throws -> CaptureHistoryItem {
+        guard isClipboardRecordingEnabled else { throw CancellationError() }
+        return try record(
+            imageData: imageData,
+            pathExtension: pathExtension,
+            displayName: displayName
+        )
+    }
+
+    @discardableResult
+    public func recordClipboard(fileURLs: [URL]) throws -> CaptureHistoryItem {
+        guard isClipboardRecordingEnabled else { throw CancellationError() }
+        return try record(fileURLs: fileURLs)
     }
 
     /// Entries still within the limit, newest first. Anything that has aged out
@@ -79,6 +116,9 @@ public actor CaptureHistory {
     @discardableResult
     public func record(text: String, capturedAt: Date = Date()) throws -> CaptureHistoryItem {
         let data = Data(text.utf8)
+        guard data.count <= Self.maximumClipboardTextBytes else {
+            throw CaptureError.payloadTooLarge("Copied text")
+        }
         let hash = Self.digest(of: data)
         if let renewed = renewHead(matching: hash, at: capturedAt) { return renewed }
         let id = UUID()
@@ -106,6 +146,9 @@ public actor CaptureHistory {
         displayName: String,
         capturedAt: Date = Date()
     ) throws -> CaptureHistoryItem {
+        guard imageData.count <= Self.maximumClipboardImageBytes else {
+            throw CaptureError.payloadTooLarge("Copied image")
+        }
         let hash = Self.digest(of: imageData)
         if let renewed = renewHead(matching: hash, at: capturedAt) { return renewed }
         let id = UUID()
@@ -132,6 +175,9 @@ public actor CaptureHistory {
         let paths = fileURLs.map { $0.standardizedFileURL.path }
         let joined = paths.joined(separator: "\n")
         let data = Data(joined.utf8)
+        guard data.count <= Self.maximumClipboardFileListBytes else {
+            throw CaptureError.payloadTooLarge("Copied file list")
+        }
         let hash = Self.digest(of: data)
         if let renewed = renewHead(matching: hash, at: capturedAt) { return renewed }
         let id = UUID()

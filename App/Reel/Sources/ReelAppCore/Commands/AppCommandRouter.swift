@@ -177,7 +177,7 @@ public enum AppCommandRouter {
         case "timeline.insert": model.editor?.insertSelectedSource(overwrite: false)
         case "timeline.overwrite": model.editor?.insertSelectedSource(overwrite: true)
         case "timeline.pasteAttributes": model.editor?.pasteAttributesToSelection()
-        case "timeline.targetTrack": model.editor?.cycleTargetVideoTrack()
+        case "timeline.targetTrack": model.editor?.cycleTargetTrack()
         case "timeline.crossDissolve": model.editor?.addCrossDissolve()
         case "timeline.audioFade": model.editor?.addAudioFade()
         default:

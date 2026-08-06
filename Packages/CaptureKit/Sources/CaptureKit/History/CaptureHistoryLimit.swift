@@ -8,11 +8,13 @@ import Foundation
 public struct CaptureHistoryLimit: Sendable, Equatable {
     public let maximumCount: Int
     public let maximumAge: TimeInterval
+    public let maximumBytes: Int64
 
     /// Fifty entries or seven days.
     public static let standard = CaptureHistoryLimit(
         maximumCount: 50,
-        maximumAge: 7 * 24 * 60 * 60
+        maximumAge: 7 * 24 * 60 * 60,
+        maximumBytes: 512 * 1_024 * 1_024
     )
 
     /// Two hundred entries or seven days, for the system-wide clipboard history.
@@ -22,12 +24,18 @@ public struct CaptureHistoryLimit: Sendable, Equatable {
     /// useful backlog; the seven-day age bound is unchanged.
     public static let clipboard = CaptureHistoryLimit(
         maximumCount: 200,
-        maximumAge: 7 * 24 * 60 * 60
+        maximumAge: 7 * 24 * 60 * 60,
+        maximumBytes: 512 * 1_024 * 1_024
     )
 
-    public init(maximumCount: Int, maximumAge: TimeInterval) {
+    public init(
+        maximumCount: Int,
+        maximumAge: TimeInterval,
+        maximumBytes: Int64 = .max
+    ) {
         self.maximumCount = maximumCount
         self.maximumAge = maximumAge
+        self.maximumBytes = maximumBytes
     }
 
     /// Splits entries into the ones still within both bounds, newest first, and
@@ -38,14 +46,19 @@ public struct CaptureHistoryLimit: Sendable, Equatable {
     ) -> (kept: [CaptureHistoryItem], expired: [CaptureHistoryItem]) {
         var kept: [CaptureHistoryItem] = []
         var expired: [CaptureHistoryItem] = []
+        var keptBytes: Int64 = 0
         for item in items.sorted(by: { $0.capturedAt > $1.capturedAt }) {
             // A capture dated in the future — a clock change, say — reads as
             // age zero rather than as instantly stale.
             let age = now.timeIntervalSince(item.capturedAt)
-            if age > maximumAge || kept.count >= maximumCount {
+            let itemBytes = max(item.byteSize, 0)
+            let exceedsByteLimit =
+                itemBytes > maximumBytes || keptBytes > maximumBytes - itemBytes
+            if age > maximumAge || kept.count >= maximumCount || exceedsByteLimit {
                 expired.append(item)
             } else {
                 kept.append(item)
+                keptBytes += itemBytes
             }
         }
         return (kept, expired)

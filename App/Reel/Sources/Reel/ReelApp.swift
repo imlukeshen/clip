@@ -136,7 +136,9 @@ struct ClipApp: App {
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {
-                    if model.textEditor != nil {
+                    if model.textEditor != nil || model.imageEditor != nil
+                        || model.pdfEditor != nil
+                    {
                         NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
                     } else {
                         AppCommandRouter.run("asset.selectAll", in: model)
@@ -151,7 +153,6 @@ struct ClipApp: App {
                 Button(commandTitle("asset.quickLook")) {
                     AppCommandRouter.run("asset.quickLook", in: model)
                 }
-                .keyboardShortcut(.space, modifiers: [])
                 .disabled(model.selection.selected.isEmpty)
                 Button(commandTitle("asset.reveal")) {
                     AppCommandRouter.run("asset.reveal", in: model)
@@ -169,15 +170,12 @@ struct ClipApp: App {
                 Button(commandTitle("timeline.toggleSnapping")) {
                     AppCommandRouter.run("timeline.toggleSnapping", in: model)
                 }
-                .keyboardShortcut("s", modifiers: [])
                 Button(commandTitle("timeline.razorTool")) {
                     AppCommandRouter.run("timeline.razorTool", in: model)
                 }
-                .keyboardShortcut("c", modifiers: [])
                 Button(commandTitle("timeline.rippleDelete")) {
                     AppCommandRouter.run("timeline.rippleDelete", in: model)
                 }
-                .keyboardShortcut(.delete, modifiers: .shift)
                 Divider()
                 Button(commandTitle("timeline.roll")) {
                     AppCommandRouter.run("timeline.roll", in: model)
@@ -199,32 +197,25 @@ struct ClipApp: App {
                 Button(commandTitle("timeline.shuttleBackward")) {
                     AppCommandRouter.run("timeline.shuttleBackward", in: model)
                 }
-                .keyboardShortcut("j", modifiers: [])
                 Button(commandTitle("timeline.shuttlePause")) {
                     AppCommandRouter.run("timeline.shuttlePause", in: model)
                 }
-                .keyboardShortcut("k", modifiers: [])
                 Button(commandTitle("timeline.shuttleForward")) {
                     AppCommandRouter.run("timeline.shuttleForward", in: model)
                 }
-                .keyboardShortcut("l", modifiers: [])
                 Divider()
                 Button(commandTitle("timeline.setIn")) {
                     AppCommandRouter.run("timeline.setIn", in: model)
                 }
-                .keyboardShortcut("i", modifiers: [])
                 Button(commandTitle("timeline.setOut")) {
                     AppCommandRouter.run("timeline.setOut", in: model)
                 }
-                .keyboardShortcut("o", modifiers: [])
                 Button(commandTitle("timeline.addMarker")) {
                     AppCommandRouter.run("timeline.addMarker", in: model)
                 }
-                .keyboardShortcut("m", modifiers: [])
                 Button(commandTitle("timeline.nextMarker")) {
                     AppCommandRouter.run("timeline.nextMarker", in: model)
                 }
-                .keyboardShortcut("m", modifiers: .shift)
                 Divider()
                 Button(commandTitle("timeline.insert")) {
                     AppCommandRouter.run("timeline.insert", in: model)

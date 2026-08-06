@@ -6,8 +6,9 @@ Project context for Claude Code. Read this before touching anything.
 
 ## What this is
 
-Reel is a local-first screen demo editor for macOS, written in Swift 6.4,
-targeting macOS 14+. Captures come from the **system** screenshot tools — there
+Clip is a local-first screen demo editor for macOS, using Swift 6 language mode
+and Swift 6.2 package manifests, targeting macOS 14+. Captures come from the
+**system** screenshot tools — there
 is no in-app recorder. The app ingests them, stitches them on a timeline, edits
 non-destructively, converts formats, and exposes an AI assistant that operates
 the editor through tool calls.
@@ -70,8 +71,12 @@ Standing rules for all subsequent UI work:
 Violating any of these produces bugs that look unrelated to their cause. If a
 task seems to require breaking one, stop and ask.
 
-**I1 — The video track is gapless and starts at zero.** Timeline position is
-derived from preceding items' durations, never stored.
+**I1 — Timeline items have explicit, nonnegative project starts.** Gaps are valid,
+items within one track must be sorted and non-overlapping, and enabled video
+tracks composite bottom to top. Gap closing and downstream time shifts happen
+only through explicit ripple operations. The legacy `video` and `audio`
+compatibility accessors expose V1/A1; they do not make those tracks implicitly
+gapless during ordinary moves.
 
 **I2 — Effect ranges are in clip-local source time**, never timeline time.
 Storing timeline time means every ripple edit silently invalidates every effect.

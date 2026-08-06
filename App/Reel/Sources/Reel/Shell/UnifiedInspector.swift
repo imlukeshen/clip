@@ -194,7 +194,7 @@ private struct PDFLayerInspector: View {
                 )
                 if text.sourceReference != nil {
                     Text(
-                        "This changes the original PDF text object and stays selectable on export."
+                        "This changes the source text object. It remains selectable when the export can preserve source objects; pages with flattened edits become image content."
                     )
                     .font(theme.type.micro.font)
                     .foregroundStyle(theme.palette.textTertiary)

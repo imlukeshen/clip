@@ -152,11 +152,7 @@ public struct CompositionBuilder: Sendable {
         itemsByTrackID: inout [CMPersistentTrackID: ItemID],
         resolving: @Sendable (AssetID) async throws -> URL
     ) async throws -> AVMutableAudioMix {
-        let usingFallback = document.timeline.audioTracks.isEmpty
-        let modelTracks =
-            usingFallback
-            ? Array(document.timeline.videoTracks.prefix(1))
-            : document.timeline.audioTracks
+        let modelTracks = Self.audioModelTracks(in: document.timeline)
         let anySolo = modelTracks.contains { $0.isEnabled && $0.isSolo }
         var parameters: [AVMutableAudioMixInputParameters] = []
 
@@ -263,6 +259,27 @@ public struct CompositionBuilder: Sendable {
         let mix = AVMutableAudioMix()
         mix.inputParameters = parameters
         return mix
+    }
+
+    static func audioModelTracks(in timeline: Timeline) -> [Track] {
+        let explicitItems = timeline.audioTracks.flatMap(\.items)
+        let embeddedTracks = timeline.videoTracks.compactMap { track -> Track? in
+            var embedded = track
+            embedded.items = track.items.filter { video in
+                guard video.detachedAudioItemID == nil else { return false }
+                // Documents saved before detachedAudioItemID existed used an
+                // identical explicit item as their separation marker.
+                return !explicitItems.contains { audio in
+                    audio.assetID == video.assetID
+                        && audio.sourceRange == video.sourceRange
+                        && audio.timelineStart == video.timelineStart
+                        && audio.speed == video.speed
+                }
+            }
+            return embedded.items.isEmpty ? nil : embedded
+        }
+        // Empty or standalone A lanes do not silence embedded video audio.
+        return embeddedTracks + timeline.audioTracks
     }
 
     private func linearGain(decibels: Double, audible: Bool) -> Float {

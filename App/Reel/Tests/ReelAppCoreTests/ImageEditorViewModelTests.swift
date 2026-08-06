@@ -36,6 +36,38 @@ import Testing
 }
 
 @MainActor
+@Test func liveTextCanBecomeOneUndoableEditableReplacement() throws {
+    let source = try temporaryImageSource()
+    defer { try? FileManager.default.removeItem(at: source) }
+    let original = try ImageDocument(
+        id: DocumentID(rawValue: "live-text-edit-test"),
+        sourceAssetID: AssetID(rawValue: "image-source"),
+        canvas: ImageCanvas(width: 1_200, height: 800)
+    )
+    let editor = ImageEditorViewModel(
+        document: original,
+        sourceURL: source,
+        persisting: { _ in }
+    )
+
+    editor.convertRecognizedTextToEditableLayer(
+        "Corrected title",
+        regions: [NormalizedRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1)]
+    )
+
+    #expect(editor.document.layers.count == 2)
+    guard case .text(let text)? = editor.document.layers.last else {
+        Issue.record("Expected an editable text layer")
+        return
+    }
+    #expect(text.text == "Corrected title")
+    #expect(editor.selectedLayerID == text.id)
+    editor.undo()
+    #expect(editor.document == original)
+    editor.stop()
+}
+
+@MainActor
 @Test func cropAnnotationAndPaddingEachUndoExactly() throws {
     let source = try temporaryImageSource()
     defer { try? FileManager.default.removeItem(at: source) }

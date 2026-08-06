@@ -183,6 +183,37 @@ import Testing
     }
 }
 
+@Test func oversizedBuildLogsAreStoppedBeforeTheyCanGrowWithoutBound() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            while :; do
+                printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' >&2
+            done
+            """
+    )
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+    let clock = ContinuousClock()
+    let started = clock.now
+
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(
+                    mainFile: fixture.mainFile,
+                    timeout: .seconds(2),
+                    logSizeLimit: 1_024
+                )
+            )
+        )
+        Issue.record("An oversized build log should be refused")
+    } catch {
+        #expect(error as? TeXEngineError == .logTooLarge(limit: 1_024))
+    }
+    #expect(started.duration(to: clock.now) < .seconds(2))
+}
+
 private func collect(
     _ stream: AsyncThrowingStream<TeXEvent, Error>
 ) async throws -> [TeXEvent] {

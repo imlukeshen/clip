@@ -74,6 +74,7 @@ public struct TeXJob: Sendable {
     public var packageAccess: TeXPackageAccess
     public var bundleURL: URL?
     public var outputSizeLimit: Int64
+    public var logSizeLimit: Int64
 
     public init(
         mainFile: URL,
@@ -86,7 +87,8 @@ public struct TeXJob: Sendable {
         timeout: Duration = .seconds(120),
         packageAccess: TeXPackageAccess = .cachedOnly,
         bundleURL: URL? = nil,
-        outputSizeLimit: Int64 = 500 * 1_024 * 1_024
+        outputSizeLimit: Int64 = 500 * 1_024 * 1_024,
+        logSizeLimit: Int64 = 8 * 1_024 * 1_024
     ) {
         let directory = workingDirectory ?? mainFile.deletingLastPathComponent()
         self.mainFile = mainFile.standardizedFileURL
@@ -100,6 +102,7 @@ public struct TeXJob: Sendable {
         self.packageAccess = packageAccess
         self.bundleURL = bundleURL?.standardizedFileURL
         self.outputSizeLimit = outputSizeLimit
+        self.logSizeLimit = logSizeLimit
     }
 }
 
@@ -129,6 +132,7 @@ public enum TeXEngineError: Error, Sendable, Equatable {
     case cancelled
     case missingOutput
     case outputTooLarge(limit: Int64)
+    case logTooLarge(limit: Int64)
 }
 
 extension TeXEngineError: LocalizedError {
@@ -156,6 +160,8 @@ extension TeXEngineError: LocalizedError {
             "The TeX engine finished without producing a PDF."
         case .outputTooLarge(let limit):
             "The compiled PDF exceeds Clip's \(limit / 1_024 / 1_024) MB safety limit."
+        case .logTooLarge(let limit):
+            "The LaTeX build log exceeds Clip's \(limit / 1_024) KB safety limit."
         }
     }
 }

@@ -18,6 +18,10 @@ struct MainWindow: View {
             // accent instead of the system blue.
             .tint(theme.palette.accent)
             .preferredColorScheme(model.appearance.colorScheme)
+            .background {
+                WorkspaceSingleKeyShortcutMonitor(onCommand: handleSingleKeyShortcut)
+                    .frame(width: 0, height: 0)
+            }
             .alert(
                 "Move to Trash?",
                 isPresented: Binding(
@@ -55,6 +59,38 @@ struct MainWindow: View {
             get: { model.pendingMigrationPlan },
             set: { if $0 == nil { model.deferMigration() } }
         )
+    }
+
+    private func handleSingleKeyShortcut(_ command: WorkspaceSingleKeyCommand) -> Bool {
+        guard let editor = model.editor else {
+            guard command == .togglePlayback,
+                model.imageEditor == nil,
+                model.pdfEditor == nil,
+                model.textEditor == nil,
+                !model.selection.selected.isEmpty
+            else {
+                return false
+            }
+            model.quickLookSelection()
+            return true
+        }
+
+        switch command {
+        case .selectTool: editor.selectTool(.select)
+        case .razorTool: editor.selectTool(.razor)
+        case .toggleSnapping: editor.toggleSnapping()
+        case .deleteSelected: editor.deleteSelected()
+        case .rippleDelete: editor.rippleDeleteSelected()
+        case .togglePlayback: editor.togglePlayback()
+        case .shuttleBackward: editor.shuttleBackward()
+        case .shuttlePause: editor.shuttlePause()
+        case .shuttleForward: editor.shuttleForward()
+        case .setInPoint: editor.setInPoint()
+        case .setOutPoint: editor.setOutPoint()
+        case .addMarker: editor.addMarkerAtPlayhead()
+        case .nextMarker: editor.goToNextMarker()
+        }
+        return true
     }
 
     private var trashWarning: String {
