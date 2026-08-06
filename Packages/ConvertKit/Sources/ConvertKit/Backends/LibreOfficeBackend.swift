@@ -258,7 +258,7 @@ private actor LibreOfficeProcessBox {
 
     private nonisolated static func launchAndWait(_ process: Process) async throws -> Int32 {
         try Task.checkCancellation()
-        try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { finished in
                 continuation.resume(returning: finished.terminationStatus)
             }
