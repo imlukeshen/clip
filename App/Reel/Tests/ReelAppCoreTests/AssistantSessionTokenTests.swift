@@ -1,3 +1,4 @@
+import AIKit
 import CoreModel
 import Foundation
 import Testing

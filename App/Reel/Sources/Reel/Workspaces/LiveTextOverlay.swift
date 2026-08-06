@@ -212,7 +212,7 @@ final class LiveTextSelectionView: NSView {
     }
 
     /// Makes the standard Select All action useful while this overlay has focus.
-    @objc func selectAll(_ sender: Any?) {
+    @objc override func selectAll(_ sender: Any?) {
         guard let first = textFrame.spans.indices.first,
             let last = textFrame.spans.indices.last
         else { return }

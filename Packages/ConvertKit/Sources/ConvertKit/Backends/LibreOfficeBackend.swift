@@ -287,7 +287,8 @@ private actor LibreOfficeProcessBox {
     }
 
     private nonisolated static func logSize(at url: URL) throws -> Int64 {
-        Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private nonisolated static func readLog(at url: URL, limit: Int64) throws -> String {
