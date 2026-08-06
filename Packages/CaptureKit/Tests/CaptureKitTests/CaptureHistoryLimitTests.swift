@@ -67,7 +67,7 @@ struct CaptureHistoryLimitTests {
     func expiresByAggregateBytes() {
         let limit = CaptureHistoryLimit(
             maximumCount: 10,
-            maximumAge: 60,
+            maximumAge: 7 * 24 * 60 * 60,
             maximumBytes: 2_000
         )
         let newest = item(ageInDays: 0.1, byteSize: 1_200)
