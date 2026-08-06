@@ -41,6 +41,13 @@ private struct CoordinatorFixture {
     let fixture = try await CoordinatorFixture(named: "clip-coordinator-rename-tests")
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     let probe = AssociationProbe()
+    let events = IngestEventProbe()
+    let eventTask = Task {
+        for await event in fixture.pipeline.events {
+            await events.record(event)
+        }
+    }
+    defer { eventTask.cancel() }
     let coordinator = IngestCoordinator(
         pipeline: fixture.pipeline,
         libraryInboxes: [fixture.watcher(fixture.inboxURL)],
@@ -59,10 +66,15 @@ private struct CoordinatorFixture {
 
     let folders = LibraryFolders(root: fixture.root, library: fixture.library)
     let renamed = try await folders.renameAsset(original.id, to: "Renamed.mov")
-    try await Task.sleep(for: .seconds(1))
+    for _ in 0..<50 where !(await events.sawDuplicate(for: original.id)) {
+        try await Task.sleep(for: .milliseconds(100))
+    }
     await coordinator.stop()
+    eventTask.cancel()
+    _ = await eventTask.result
 
     #expect(renamed.displayName == "Renamed.mov")
+    #expect(await events.sawDuplicate(for: original.id))
     #expect(await probe.count == 1)
     #expect(
         FileManager.default.fileExists(
@@ -192,6 +204,19 @@ private actor AssociationProbe {
 
     func record(_ record: AssetRecord, url: URL?) {
         records.append((record, url))
+    }
+}
+
+private actor IngestEventProbe {
+    private var duplicateIDs: Set<AssetID> = []
+
+    func record(_ event: IngestEvent) {
+        guard case .duplicate(let record) = event else { return }
+        duplicateIDs.insert(record.id)
+    }
+
+    func sawDuplicate(for assetID: AssetID) -> Bool {
+        duplicateIDs.contains(assetID)
     }
 }
 

@@ -424,7 +424,10 @@ public actor AppRuntime {
 
     public func renameAsset(_ id: AssetID, to name: String) async throws -> AssetRecord {
         let renamed = try await folders.renameAsset(id, to: name)
-        await indexPipeline.enqueue(renamed.id, stages: Self.indexStages(for: renamed))
+        // Keyword search follows the asset table's FTS update trigger. Semantic
+        // chunks also include the display name, so replace the completed
+        // embedding job rather than using the idempotent ingest-time enqueue.
+        await indexPipeline.reindex(renamed.id, stages: [.embedding])
         return renamed
     }
 

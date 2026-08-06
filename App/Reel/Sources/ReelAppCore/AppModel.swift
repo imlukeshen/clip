@@ -2541,6 +2541,7 @@ public final class AppModel {
             assets = snapshot
             await refreshFolderTree()
         } catch {
+            guard generation == assetRefreshGeneration else { return }
             lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
         }
     }
