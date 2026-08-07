@@ -176,10 +176,10 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
         if languageChanged, language == .latex {
-            // Expanding the persistent PDF slot changes the source viewport
-            // after this representable update. Refresh that geometry once the
-            // split settles, even when a language menu owns focus. Only restore
-            // first responder status when the source editor previously owned it.
+            // Adding the PDF preview changes the source viewport after this
+            // representable update. Refresh that geometry once the split
+            // settles, even when a language menu owns focus. Only restore first
+            // responder status when the source editor previously owned it.
             context.coordinator.restoreEditingAfterWorkspaceTransition(
                 in: container,
                 restoreFocus: shouldRestoreEditing
