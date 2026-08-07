@@ -990,9 +990,7 @@ struct CodeEditor: NSViewRepresentable {
             else { return }
             let visibleRange = visibleCharacterRange(in: textView)
             let selectedLocation = min(textView.selectedRange().location, storage.length - 1)
-            let selectedLine = (textView.string as NSString).lineRange(
-                for: NSRange(location: selectedLocation, length: 0)
-            )
+            let selectedProbe = NSRange(location: selectedLocation, length: 1)
             let background = textView.backgroundColor.usingColorSpace(.sRGB)
             func needsRepair(in range: NSRange) -> Bool {
                 guard range.length > 0 else { return false }
@@ -1026,10 +1024,10 @@ struct CodeEditor: NSViewRepresentable {
                 applyVisibleBaseStyle(in: visibleRange, to: textView)
                 repaired = true
             }
-            if NSIntersectionRange(visibleRange, selectedLine).length == 0,
-                needsRepair(in: selectedLine)
+            if !NSLocationInRange(selectedLocation, visibleRange),
+                needsRepair(in: selectedProbe)
             {
-                applyVisibleBaseStyle(in: selectedLine, to: textView)
+                applyVisibleBaseStyle(in: selectedProbe, to: textView)
                 repaired = true
             }
             guard repaired else { return }

@@ -67,10 +67,6 @@ final class CodeEditorContainerView: NSView {
             viewportRepairScheduled = false
             needsLayout = true
             layoutSubtreeIfNeeded()
-            guard let textView = scrollView.documentView as? NSTextView,
-                let textContainer = textView.textContainer
-            else { return }
-            repairVisibleViewport(in: textView, textContainer: textContainer)
         }
     }
 
