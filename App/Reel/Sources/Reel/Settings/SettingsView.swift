@@ -101,13 +101,17 @@ private struct SettingsContent: View {
                             model.texPackageCacheURL
                         ])
                     }
-                    Button("Clear cache…", role: .destructive) {
+                    Button(
+                        model.isTeXPackageCacheResetting ? "Clearing cache…" : "Clear cache…",
+                        role: .destructive
+                    ) {
                         confirmsTeXCacheClear = true
                     }
+                    .disabled(model.isTeXPackageCacheResetting)
                 }
                 Text(
-                    "Package downloads happen only after your one-time choice and are recorded "
-                        + "in the egress ledger. Clearing the cache may require downloading packages again."
+                    "Package downloads happen only after your explicit choice and are recorded "
+                        + "in the egress ledger. Clearing the cache resets that choice, so the next build asks again."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)

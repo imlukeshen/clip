@@ -126,9 +126,14 @@ public final class TextEditorViewModel {
     public private(set) var texLog = ""
     /// Parsed diagnostics emitted by the engine.
     public private(set) var texDiagnostics: [TeXDiagnostic] = []
-    /// Whether the editor is waiting for the one-time package-network choice.
+    /// Whether the editor is waiting for an initial or recovery package-network choice.
     public private(set) var needsTeXPackageConsent = false
-    /// `nil` until the user chooses whether Tectonic may fetch packages.
+    /// The cached resource that blocked the most recent offline build.
+    /// Non-nil only while the package-access alert is offering a network retry.
+    public private(set) var texPackageRecoveryResource: String?
+    /// Package-cache maintenance blocks compilation until deletion and recreation finish.
+    public private(set) var isTeXPackageCacheResetting = false
+    /// `nil` until the user first chooses whether Tectonic may fetch packages.
     public private(set) var texPackageAccess: TeXPackageAccess?
     /// Dependency graph for the active LaTeX folder.
     public private(set) var texProjectAnalysis: TeXProjectAnalysis?
@@ -630,7 +635,12 @@ public final class TextEditorViewModel {
     /// Requests a build, showing the package-network decision before first use.
     public func requestTeXCompile() {
         guard language == .latex else { return }
+        guard !isTeXPackageCacheResetting else {
+            texCompilationState = .paused("The LaTeX package cache is being cleared.")
+            return
+        }
         guard texPackageAccess != nil else {
+            texPackageRecoveryResource = nil
             needsTeXPackageConsent = true
             return
         }
@@ -639,18 +649,76 @@ public final class TextEditorViewModel {
 
     /// Persists the package-network choice and resumes the requested build.
     public func resolveTeXPackageConsent(allowNetwork: Bool) {
-        let access: TeXPackageAccess = allowNetwork ? .allowNetwork : .cachedOnly
-        if let previous = texPackageAccess, previous != access {
-            invalidateTeXBuildIdentity()
+        let isOfflineRecovery = texPackageRecoveryResource != nil
+        if isOfflineRecovery, !allowNetwork {
+            texPackageRecoveryResource = nil
+            needsTeXPackageConsent = false
+            return
         }
-        texPackageAccess = access
-        texPreferences.set(access.rawValue, forKey: "clip.tex.packageAccess")
-        needsTeXPackageConsent = false
+        let access: TeXPackageAccess = allowNetwork ? .allowNetwork : .cachedOnly
+        setTeXPackageAccess(access)
         beginTeXCompilation()
     }
 
     public func cancelTeXPackageConsent() {
+        texPackageRecoveryResource = nil
         needsTeXPackageConsent = false
+    }
+
+    /// Changes the persisted package policy without starting a build. The
+    /// inspector uses this to make the one-time choice reversible.
+    public func setTeXPackageAccess(_ access: TeXPackageAccess) {
+        guard !isTeXPackageCacheResetting else { return }
+        if let previous = texPackageAccess, previous != access {
+            invalidateTeXPackagePolicy()
+        }
+        texPackageAccess = access
+        texPreferences.set(access.rawValue, forKey: "clip.tex.packageAccess")
+        texPackageRecoveryResource = nil
+        needsTeXPackageConsent = false
+    }
+
+    /// Clears the persisted package policy after the package cache is removed.
+    /// The next explicit build asks again instead of deterministically failing
+    /// in cached-only mode against an empty cache.
+    public func resetTeXPackageAccess() {
+        if texPackageAccess != nil {
+            invalidateTeXPackagePolicy()
+        }
+        texPackageAccess = nil
+        texPreferences.removeObject(forKey: "clip.tex.packageAccess")
+        texPackageRecoveryResource = nil
+        needsTeXPackageConsent = false
+        texCompilationState = texPDFURL == nil ? .idle : .succeeded
+    }
+
+    /// Cancels and joins the active compiler before cache maintenance starts.
+    public func prepareForTeXPackageCacheReset() async {
+        isTeXPackageCacheResetting = true
+        let activeCompile = texCompileTask
+        cancelTeXCompilation(resetState: false)
+        if let activeCompile { _ = await activeCompile.value }
+        if let activityAwaitingEngine = texEngine as? any TeXEngineActivityAwaiting {
+            await activityAwaitingEngine.waitUntilIdle()
+        }
+        resetTeXPackageAccess()
+        texCompilationState = .paused("The LaTeX package cache is being cleared.")
+    }
+
+    /// Applies AppModel's cache-maintenance state to a newly opened editor.
+    public func setTeXPackageCacheResetting(_ isResetting: Bool) {
+        guard isResetting != isTeXPackageCacheResetting else { return }
+        if isResetting {
+            isTeXPackageCacheResetting = true
+            texPackageRecoveryResource = nil
+            needsTeXPackageConsent = false
+            texCompilationState = .paused("The LaTeX package cache is being cleared.")
+        } else {
+            isTeXPackageCacheResetting = false
+            if case .paused = texCompilationState {
+                texCompilationState = texPDFURL == nil ? .idle : .succeeded
+            }
+        }
     }
 
     public func cancelTeXCompilation() {
@@ -962,7 +1030,16 @@ public final class TextEditorViewModel {
 
     private func beginTeXCompilation() {
         guard !isStopped else { return }
-        if texCompilationState == .succeeded, texPDFURL != nil,
+        guard !isTeXPackageCacheResetting else {
+            texCompilationState = .paused("The LaTeX package cache is being cleared.")
+            return
+        }
+        // A scratch project is fully represented by textBuffers, so an
+        // unchanged explicit build can safely reuse its PDF. Disk-backed
+        // projects may include externally changed .bib, style, image, or
+        // generated inputs at the same URLs and must be restaged.
+        if sourceURLs.isEmpty, projectFileURLs.isEmpty,
+            texCompilationState == .succeeded, texPDFURL != nil,
             texSuccessfulSources == textBuffers,
             texSuccessfulBuildIdentity == currentTeXBuildIdentity()
         {
@@ -1074,6 +1151,13 @@ public final class TextEditorViewModel {
             } catch TeXEngineError.cancelled {
                 guard let self, texCompileGeneration == generation else { return }
                 texCompilationState = texPDFURL == nil ? .idle : .succeeded
+            } catch TeXEngineError.packageUnavailableOffline(let resource) {
+                guard let self, texCompileGeneration == generation else { return }
+                texPackageRecoveryResource = resource
+                needsTeXPackageConsent = true
+                texCompilationState = .paused(
+                    "\(resource) is not cached. Allow package downloads to finish this build."
+                )
             } catch is CancellationError {
                 guard let self, texCompileGeneration == generation else { return }
                 texCompilationState = texPDFURL == nil ? .idle : .succeeded
@@ -1097,7 +1181,11 @@ public final class TextEditorViewModel {
         texCompileTask = nil
         hasPendingTeXCompileRequest = false
         texCompileGeneration = UUID()
-        if resetState { texCompilationState = .idle }
+        if resetState {
+            texCompilationState = .idle
+            texPackageRecoveryResource = nil
+            needsTeXPackageConsent = false
+        }
     }
 
     private func replaceTeXResults(pdf: URL, synctex: URL?) {
@@ -1455,6 +1543,15 @@ public final class TextEditorViewModel {
     private func invalidateTeXBuildIdentity() {
         cancelTeXCompilation(resetState: true)
         removeTeXResults()
+    }
+
+    /// Package policy changes require another compile but do not make the last
+    /// successful PDF unsafe to display while that compile is pending.
+    private func invalidateTeXPackagePolicy() {
+        cancelTeXCompilation(resetState: false)
+        texSuccessfulSources = nil
+        texSuccessfulBuildIdentity = nil
+        texCompilationState = texPDFURL == nil ? .idle : .succeeded
     }
 
     private struct TeXInputSnapshot {

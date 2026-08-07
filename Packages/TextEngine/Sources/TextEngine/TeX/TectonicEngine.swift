@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public struct TectonicEngine: TeXEngine {
+public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
     public static let version = "0.16.9"
 
     public let id: EngineID = .tectonic
@@ -9,6 +9,7 @@ public struct TectonicEngine: TeXEngine {
     public let executableURL: URL
     public let cacheDirectory: URL
     private let networkAccessObserver: @Sendable () async -> Void
+    private let activity = TeXEngineActivity()
 
     public init(
         executableURL: URL? = nil,
@@ -24,9 +25,15 @@ public struct TectonicEngine: TeXEngine {
         FileManager.default.isExecutableFile(atPath: executableURL.path)
     }
 
+    public func waitUntilIdle() async {
+        await activity.waitUntilIdle()
+    }
+
     public func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
         AsyncThrowingStream { continuation in
+            activity.begin()
             let task = Task {
+                defer { activity.end() }
                 guard isAvailable else {
                     continuation.finish(throwing: TeXEngineError.unavailable)
                     return
@@ -38,7 +45,7 @@ public struct TectonicEngine: TeXEngine {
                     return
                 }
                 do {
-                    let workspace = try TeXWorkspaceSandbox.prepare(job)
+                    var workspace = try TeXWorkspaceSandbox.prepare(job)
                     defer { workspace.remove() }
                     try FileManager.default.createDirectory(
                         at: cacheDirectory,
@@ -46,8 +53,15 @@ public struct TectonicEngine: TeXEngine {
                     )
                     continuation.yield(.pass(1, of: 1))
                     let controller = TeXProcessController()
+                    let clock = ContinuousClock()
+                    let deadline = clock.now.advanced(by: job.timeout)
+                    func remainingTimeout() throws -> Duration {
+                        let remaining = clock.now.duration(to: deadline)
+                        guard remaining > .zero else { throw TeXEngineError.timedOut }
+                        return remaining
+                    }
                     let result: TeXProcessResult
-                    if job.packageAccess == .allowNetwork, isCacheReady {
+                    if job.packageAccess == .allowNetwork, isCacheReady(for: job) {
                         // Most builds need no network once their packages are cached. Trying
                         // the confined cache first avoids a remote bundle check on every click.
                         // A genuine cache miss retries once with the user's existing consent.
@@ -58,28 +72,30 @@ public struct TectonicEngine: TeXEngine {
                             arguments: arguments(for: cachedJob, workspace: workspace),
                             currentDirectory: workspace.source,
                             environment: environment(for: cachedJob),
-                            timeout: job.timeout,
+                            timeout: try remainingTimeout(),
                             logDirectory: workspace.root.appendingPathComponent(
                                 "cached-attempt", isDirectory: true
                             ),
                             logSizeLimit: job.logSizeLimit
                         )
                         if cachedResult.status == 0
-                            || !Self.requiresNetworkRetry(cachedResult.combinedOutput)
+                            || Self.cachedResourceMiss(in: cachedResult.combinedOutput) == nil
                         {
                             result = cachedResult
                         } else {
-                            try workspace.resetOutput()
+                            // A compiler may leave auxiliary or generated files beside the
+                            // source. Restage the immutable job rather than letting those
+                            // side effects leak into the network-enabled attempt.
+                            workspace.remove()
+                            workspace = try TeXWorkspaceSandbox.prepare(job)
                             await networkAccessObserver()
                             result = try await controller.run(
                                 executableURL: executableURL,
                                 arguments: arguments(for: job, workspace: workspace),
                                 currentDirectory: workspace.source,
                                 environment: environment(for: job),
-                                timeout: job.timeout,
-                                logDirectory: workspace.root.appendingPathComponent(
-                                    "network-attempt", isDirectory: true
-                                ),
+                                timeout: try remainingTimeout(),
+                                logDirectory: workspace.root,
                                 logSizeLimit: job.logSizeLimit
                             )
                         }
@@ -94,7 +110,7 @@ public struct TectonicEngine: TeXEngine {
                             arguments: arguments(for: job, workspace: workspace),
                             currentDirectory: workspace.source,
                             environment: environment(for: job),
-                            timeout: job.timeout,
+                            timeout: try remainingTimeout(),
                             logDirectory: workspace.root,
                             logSizeLimit: job.logSizeLimit
                         )
@@ -107,12 +123,19 @@ public struct TectonicEngine: TeXEngine {
                     for diagnostic in TeXLogParser.diagnostics(in: result.combinedOutput) {
                         continuation.yield(.diagnostic(diagnostic))
                     }
+                    try Task.checkCancellation()
+                    if result.status != 0, job.packageAccess == .cachedOnly,
+                        let resource = Self.cachedResourceMiss(in: result.combinedOutput)
+                    {
+                        throw TeXEngineError.packageUnavailableOffline(resource: resource)
+                    }
                     guard result.status == 0 else {
                         throw TeXEngineError.compilationFailed(
                             status: result.status,
                             message: Self.failureSummary(result.combinedOutput)
                         )
                     }
+                    try Task.checkCancellation()
                     let name = URL(fileURLWithPath: workspace.mainRelativePath)
                         .deletingPathExtension().lastPathComponent
                     let pdf = workspace.output.appendingPathComponent("\(name).pdf")
@@ -122,8 +145,8 @@ public struct TectonicEngine: TeXEngine {
                         synctex: job.synctex ? synctex : nil,
                         sizeLimit: job.outputSizeLimit
                     )
-                    markCacheReady()
                     try Task.checkCancellation()
+                    markCacheReady(for: job)
                     continuation.yield(
                         .finished(pdf: resultURLs.pdf, synctex: resultURLs.synctex)
                     )
@@ -155,16 +178,19 @@ public struct TectonicEngine: TeXEngine {
         return caches.appendingPathComponent("Clip/Tectonic", isDirectory: true)
     }
 
-    private var cacheReadyMarkerURL: URL {
-        cacheDirectory.appendingPathComponent(".clip-cache-ready", isDirectory: false)
+    private func cacheReadyMarkerURL(for job: TeXJob) -> URL {
+        cacheDirectory.appendingPathComponent(
+            ".clip-cache-ready-\(Self.version)-\(job.format.rawValue)",
+            isDirectory: false
+        )
     }
 
-    private var isCacheReady: Bool {
-        FileManager.default.isReadableFile(atPath: cacheReadyMarkerURL.path)
+    private func isCacheReady(for job: TeXJob) -> Bool {
+        FileManager.default.isReadableFile(atPath: cacheReadyMarkerURL(for: job).path)
     }
 
-    private func markCacheReady() {
-        try? Data().write(to: cacheReadyMarkerURL, options: .atomic)
+    private func markCacheReady(for job: TeXJob) {
+        try? Data().write(to: cacheReadyMarkerURL(for: job), options: .atomic)
     }
 
     private func arguments(for job: TeXJob, workspace: TeXWorkspaceSandbox) -> [String] {
@@ -239,19 +265,71 @@ public struct TectonicEngine: TeXEngine {
         return lines.suffix(8).joined(separator: "\n")
     }
 
-    static func requiresNetworkRetry(_ output: String) -> Bool {
+    static func cachedResourceMiss(in output: String) -> String? {
         let normalized = output.lowercased()
-        if normalized.contains("this bundle isn't cached")
-            || normalized.contains("could not get bundle")
-            || normalized.contains("not available in the cache")
-            || normalized.contains("failed to retrieve")
-        {
-            return true
+        guard normalized.contains("using only cached resource files") else { return nil }
+        if normalized.contains("this bundle isn't cached") {
+            return "The LaTeX package bundle"
         }
-        guard normalized.contains("using only cached resource files") else { return false }
-        return normalized.contains("not found")
-            || normalized.contains("not loadable")
-            || normalized.contains("missing resource")
+        if normalized.contains("tectonic-format-latex.tex") {
+            return "The LaTeX format"
+        }
+        if normalized.contains("could not open format file")
+            || normalized.contains("cannot open format file")
+        {
+            return "The LaTeX format"
+        }
+
+        let packagePattern =
+            #"(?i)file\s+[`'\"]([^`'\"]+\.(?:sty|cls|clo|def|fd|cfg|fmt|ini|tfm|ofm|otf|ttf|pfb|enc|map|tec|ltx|lua|dat|pat))[`'\"]\s+not\s+found"#
+        guard let expression = try? NSRegularExpression(pattern: packagePattern) else {
+            return nil
+        }
+        let range = NSRange(output.startIndex..., in: output)
+        guard let match = expression.firstMatch(in: output, range: range),
+            let resourceRange = Range(match.range(at: 1), in: output)
+        else {
+            return nil
+        }
+        return String(output[resourceRange])
+    }
+
+    static func requiresNetworkRetry(_ output: String) -> Bool {
+        cachedResourceMiss(in: output) != nil
+    }
+}
+
+private final class TeXEngineActivity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeCount = 0
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func begin() {
+        lock.lock()
+        activeCount += 1
+        lock.unlock()
+    }
+
+    func end() {
+        lock.lock()
+        activeCount -= 1
+        let waiters = activeCount == 0 ? idleWaiters : []
+        if activeCount == 0 { idleWaiters.removeAll() }
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilIdle() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if activeCount == 0 {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                idleWaiters.append(continuation)
+                lock.unlock()
+            }
+        }
     }
 }
 
@@ -383,7 +461,9 @@ final class TeXProcessController: @unchecked Sendable {
         guard Int64(data.count) <= limit else {
             throw TeXEngineError.logTooLarge(limit: limit)
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        // Compiler diagnostics may contain a filename in a legacy encoding.
+        // Preserve the rest of the log instead of erasing every diagnostic.
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func launchAndWait(_ process: Process) async throws -> Int32 {
@@ -408,10 +488,17 @@ final class TeXProcessController: @unchecked Sendable {
     }
 
     private func killProcess() {
-        lock.withLock {
-            guard let process, process.isRunning else { return }
-            kill(process.processIdentifier, SIGKILL)
+        let runningProcess: Process? = lock.withLock {
+            guard let process, process.isRunning else { return nil }
+            self.process = nil
+            return process
         }
+        guard let runningProcess else { return }
+        kill(runningProcess.processIdentifier, SIGKILL)
+        // Cache maintenance joins the outer compile task before deleting its
+        // directory. Make cancellation deterministic by not returning until
+        // the child can no longer write into that cache.
+        runningProcess.waitUntilExit()
     }
 }
 

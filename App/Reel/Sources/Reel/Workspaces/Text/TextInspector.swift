@@ -176,6 +176,8 @@ struct TextInspector: View {
                     value: editor.texProjectAnalysis?.bibliography.inspectorTitle ?? "None",
                     symbol: "books.vertical"
                 )
+                rowDivider
+                texPackageAccessMenu
                 if let analysis = editor.texProjectAnalysis,
                     !analysis.missingDependencies.isEmpty
                 {
@@ -187,6 +189,56 @@ struct TextInspector: View {
                     )
                 }
             }
+        }
+    }
+
+    private var texPackageAccessMenu: some View {
+        HStack(spacing: theme.metrics.spacing.md) {
+            settingIcon("shippingbox")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Package access")
+                    .font(theme.type.label.font)
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
+                Text("Used by future builds")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
+            Spacer(minLength: theme.metrics.spacing.sm)
+            Menu {
+                packageAccessButton("Cached only", access: .cachedOnly)
+                packageAccessButton("Allow downloads", access: .allowNetwork)
+            } label: {
+                menuValue(texPackageAccessTitle)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(editor.isTeXPackageCacheResetting)
+            .accessibilityIdentifier("text-inspector-tex-package-access")
+        }
+        .padding(.horizontal, theme.metrics.spacing.md)
+        .frame(minHeight: 50)
+    }
+
+    private func packageAccessButton(_ title: String, access: TeXPackageAccess) -> some View {
+        Button {
+            editor.setTeXPackageAccess(access)
+        } label: {
+            if editor.texPackageAccess == access {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private var texPackageAccessTitle: String {
+        switch editor.texPackageAccess {
+        case .some(.cachedOnly): "Cached only"
+        case .some(.allowNetwork): "Downloads allowed"
+        case nil: "Ask on build"
         }
     }
 

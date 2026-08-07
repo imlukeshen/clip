@@ -27,7 +27,15 @@ struct TeXPDFPreview: View {
             } else {
                 emptyState
             }
-            if case .failed(let message) = editor.texCompilationState,
+            if case .paused(let message) = editor.texCompilationState,
+                editor.texPDFURL != nil
+            {
+                buildBanner(
+                    title: "Build paused",
+                    detail: message,
+                    symbol: "shippingbox"
+                )
+            } else if case .failed(let message) = editor.texCompilationState,
                 editor.texPDFURL != nil
             {
                 buildBanner(
@@ -73,6 +81,7 @@ struct TeXPDFPreview: View {
                     .frame(maxWidth: 420)
                 Button("Build Again", action: editor.requestTeXCompile)
                     .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(editor.isTeXPackageCacheResetting)
             }
         case .paused(let message):
             VStack(spacing: theme.metrics.spacing.md) {
@@ -85,6 +94,7 @@ struct TeXPDFPreview: View {
                     .multilineTextAlignment(.center)
                 Button("Build", action: editor.requestTeXCompile)
                     .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(editor.isTeXPackageCacheResetting)
             }
         case .idle, .succeeded:
             VStack(spacing: theme.metrics.spacing.md) {
@@ -98,6 +108,7 @@ struct TeXPDFPreview: View {
                     .foregroundStyle(theme.palette.textSecondary)
                 Button("Build", action: editor.requestTeXCompile)
                     .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(editor.isTeXPackageCacheResetting)
             }
         }
     }
@@ -117,6 +128,7 @@ struct TeXPDFPreview: View {
             Spacer()
             Button("Build Again", action: editor.requestTeXCompile)
                 .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.isTeXPackageCacheResetting)
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(minHeight: 54)

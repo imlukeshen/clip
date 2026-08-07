@@ -162,9 +162,210 @@ import Testing
     )
     #expect(
         TectonicEngine.requiresNetworkRetry(
-            "using only cached resource files\nerror: required bundle file not found"
+            "using only cached resource files\nthis bundle isn't cached"
         )
     )
+    #expect(
+        !TectonicEngine.requiresNetworkRetry(
+            "using only cached resource files\ndocument: failed to retrieve data\nerror: undefined control sequence"
+        )
+    )
+}
+
+@Test func realTectonicPackageMissIsClassifiedWithoutTreatingLocalSourcesAsPackages() {
+    let packageOutput = """
+        note: using only cached resource files
+        ! LaTeX Error: File `tikz.sty' not found.
+        error: halted on potentially-recoverable error as specified
+        """
+    #expect(TectonicEngine.cachedResourceMiss(in: packageOutput) == "tikz.sty")
+    #expect(
+        TectonicEngine.cachedResourceMiss(
+            in: "note: using only cached resource files\nFile `tectonic-format-latex.tex' not found"
+        ) == "The LaTeX format"
+    )
+    #expect(
+        TectonicEngine.cachedResourceMiss(
+            in: "note: using only cached resource files\nFile `chapters/missing.tex' not found"
+        ) == nil
+    )
+    #expect(
+        TectonicEngine.cachedResourceMiss(
+            in: "note: using only cached resource files\nFile `references.bib' not found"
+        ) == nil
+    )
+}
+
+@Test func explicitOfflinePackageMissProducesARecoverableError() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            printf 'note: using only cached resource files\n' >&2
+            printf "! LaTeX Error: File \\`tikz.sty' not found.\n" >&2
+            exit 1
+            """
+    )
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(
+                    mainFile: fixture.mainFile,
+                    timeout: .seconds(2),
+                    packageAccess: .cachedOnly
+                )
+            )
+        )
+        Issue.record("An uncached package should pause for package-download consent")
+    } catch {
+        #expect(
+            error as? TeXEngineError == .packageUnavailableOffline(resource: "tikz.sty")
+        )
+    }
+}
+
+@Test func networkRetryUsesAFreshSourceWorkspace() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            case " $* " in
+                *" --only-cached "*)
+                    : > probe-leak.aux
+                    printf 'using only cached resource files\n' >&2
+                    printf "this bundle isn't cached\n" >&2
+                    exit 1
+                    ;;
+            esac
+            if [ -e probe-leak.aux ]; then
+                printf 'cached probe leaked into network retry\n' >&2
+                exit 9
+            fi
+            outdir=""
+            input=""
+            previous=""
+            for argument in "$@"; do
+                if [ "$previous" = "--outdir" ]; then outdir="$argument"; fi
+                previous="$argument"
+                input="$argument"
+            done
+            name="${input##*/}"
+            name="${name%.tex}"
+            printf '%%PDF-1.4\n' > "$outdir/$name.pdf"
+            """
+    )
+    defer { fixture.remove() }
+    let observer = NetworkObserver()
+    let engine = TectonicEngine(
+        executableURL: fixture.executable,
+        cacheDirectory: fixture.cache,
+        networkAccessObserver: { await observer.record() }
+    )
+    let job = TeXJob(
+        mainFile: fixture.mainFile,
+        timeout: .seconds(2),
+        packageAccess: .allowNetwork
+    )
+
+    for _ in 0..<2 {
+        let events = try await collect(engine.compile(job))
+        if case .finished(let pdf, _) = events.last {
+            try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+        }
+    }
+
+    #expect(await observer.count == 2)
+}
+
+@Test func cacheProbeAndNetworkRetryShareOneTimeoutBudget() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            case " $* " in
+                *" --only-cached "*)
+                    sleep 0.2
+                    printf 'using only cached resource files\n' >&2
+                    printf "this bundle isn't cached\n" >&2
+                    exit 1
+                    ;;
+            esac
+            sleep 0.2
+            outdir=""
+            input=""
+            previous=""
+            for argument in "$@"; do
+                if [ "$previous" = "--outdir" ]; then outdir="$argument"; fi
+                previous="$argument"
+                input="$argument"
+            done
+            name="${input##*/}"
+            name="${name%.tex}"
+            printf '%%PDF-1.4\n' > "$outdir/$name.pdf"
+            """
+    )
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    let warmEvents = try await collect(
+        engine.compile(
+            TeXJob(
+                mainFile: fixture.mainFile,
+                timeout: .seconds(2),
+                packageAccess: .allowNetwork
+            )
+        )
+    )
+    if case .finished(let pdf, _) = warmEvents.last {
+        try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+    }
+
+    let clock = ContinuousClock()
+    let started = clock.now
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(
+                    mainFile: fixture.mainFile,
+                    timeout: .milliseconds(300),
+                    packageAccess: .allowNetwork
+                )
+            )
+        )
+        Issue.record("The shared compile timeout should expire during the retry")
+    } catch {
+        #expect(error as? TeXEngineError == .timedOut)
+    }
+    #expect(started.duration(to: clock.now) < .seconds(1))
+}
+
+@Test func invalidUTF8DoesNotEraseCompilerDiagnostics() async throws {
+    let fixture = try TeXFixture(
+        script: """
+            #!/bin/sh
+            printf '\\377compiler diagnostic survives\n' >&2
+            exit 1
+            """
+    )
+    defer { fixture.remove() }
+    let engine = TectonicEngine(executableURL: fixture.executable, cacheDirectory: fixture.cache)
+
+    do {
+        _ = try await collect(
+            engine.compile(
+                TeXJob(
+                    mainFile: fixture.mainFile,
+                    timeout: .seconds(2),
+                    packageAccess: .allowNetwork
+                )
+            )
+        )
+        Issue.record("The fixture should fail")
+    } catch TeXEngineError.compilationFailed(_, let message) {
+        #expect(message.contains("compiler diagnostic survives"))
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
 }
 
 @Test func bundledTectonicExplainsThatBiberNeedsTheDirectBuild() async throws {

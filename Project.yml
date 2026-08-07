@@ -78,14 +78,53 @@ targets:
       - name: Sign bundled Tectonic
         basedOnDependencyAnalysis: false
         script: |
-          TEXT_ENGINE_BUNDLE="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TextEngine_TextEngine.bundle"
-          TECTONIC_PATH="$TEXT_ENGINE_BUNDLE/Contents/Resources/Resources/Tectonic/tectonic"
-          if [[ -x "$TECTONIC_PATH" && "$CODE_SIGNING_ALLOWED" != "NO" ]]; then
-            SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
-            /usr/bin/codesign --remove-signature "$TECTONIC_PATH" 2>/dev/null || true
-            /usr/bin/codesign --force --options runtime --timestamp=none --sign "$SIGNING_IDENTITY" "$TECTONIC_PATH"
-            /usr/bin/codesign --force --timestamp=none --sign "$SIGNING_IDENTITY" "$TEXT_ENGINE_BUNDLE"
+          set -eu
+          if [[ "${CODE_SIGNING_ALLOWED:-NO}" == "NO" ]]; then
+            exit 0
           fi
+
+          RESOURCES_ROOT="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          TECTONIC_ENTITLEMENTS="$SRCROOT/App/Reel/Config/TectonicHelper.entitlements"
+          if [[ ! -d "$RESOURCES_ROOT" ]]; then
+            echo "error: Missing built resource directory at $RESOURCES_ROOT" >&2
+            exit 1
+          fi
+          TECTONIC_PATH="$(/usr/bin/find "$RESOURCES_ROOT" -type f -path '*/TextEngine_TextEngine.bundle/*/Tectonic/tectonic' -print -quit)"
+          if [[ -z "$TECTONIC_PATH" || ! -x "$TECTONIC_PATH" ]]; then
+            echo "error: Unable to locate the executable bundled Tectonic tool below $RESOURCES_ROOT" >&2
+            exit 1
+          fi
+
+          TEXT_ENGINE_BUNDLE="$(/usr/bin/dirname "$TECTONIC_PATH")"
+          while [[ "${TEXT_ENGINE_BUNDLE##*/}" != "TextEngine_TextEngine.bundle" ]]; do
+            PARENT_BUNDLE="$(/usr/bin/dirname "$TEXT_ENGINE_BUNDLE")"
+            if [[ "$PARENT_BUNDLE" == "$TEXT_ENGINE_BUNDLE" || "$PARENT_BUNDLE" == "/" ]]; then
+              echo "error: Tectonic is not inside TextEngine_TextEngine.bundle: $TECTONIC_PATH" >&2
+              exit 1
+            fi
+            TEXT_ENGINE_BUNDLE="$PARENT_BUNDLE"
+          done
+
+          SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
+          /usr/bin/codesign --remove-signature "$TECTONIC_PATH" 2>/dev/null || true
+          if [[ "${CONFIGURATION:-}" == AppStore* ]]; then
+            if [[ ! -f "$TECTONIC_ENTITLEMENTS" ]]; then
+              echo "error: Missing Tectonic helper entitlements at $TECTONIC_ENTITLEMENTS" >&2
+              exit 1
+            fi
+            /usr/bin/codesign --force --options runtime --timestamp=none \
+              --identifier "$PRODUCT_BUNDLE_IDENTIFIER.tectonic" \
+              --entitlements "$TECTONIC_ENTITLEMENTS" \
+              --sign "$SIGNING_IDENTITY" "$TECTONIC_PATH"
+          else
+            # The direct build is not sandboxed. Giving its child an inherited
+            # sandbox signature causes macOS to abort the tool at launch.
+            /usr/bin/codesign --force --options runtime --timestamp=none \
+              --identifier "$PRODUCT_BUNDLE_IDENTIFIER.tectonic" \
+              --sign "$SIGNING_IDENTITY" "$TECTONIC_PATH"
+          fi
+          /usr/bin/codesign --verify --strict "$TECTONIC_PATH"
+          /usr/bin/codesign --force --timestamp=none --sign "$SIGNING_IDENTITY" "$TEXT_ENGINE_BUNDLE"
 
   ReelUITests:
     type: bundle.ui-testing

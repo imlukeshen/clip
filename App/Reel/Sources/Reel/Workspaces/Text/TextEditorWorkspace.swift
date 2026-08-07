@@ -99,25 +99,47 @@ struct TextEditorWorkspace: View {
             }
         }
         .alert(
-            "Allow LaTeX Package Downloads?",
+            texPackageAlertTitle,
             isPresented: Binding(
                 get: { editor.needsTeXPackageConsent },
                 set: { if !$0 { editor.cancelTeXPackageConsent() } }
             )
         ) {
-            Button("Cached packages only") {
-                editor.resolveTeXPackageConsent(allowNetwork: false)
+            if editor.texPackageRecoveryResource != nil {
+                Button("Allow Downloads and Retry") {
+                    editor.resolveTeXPackageConsent(allowNetwork: true)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Stay Offline", role: .cancel) {
+                    editor.resolveTeXPackageConsent(allowNetwork: false)
+                }
+            } else {
+                Button("Cached Packages Only") {
+                    editor.resolveTeXPackageConsent(allowNetwork: false)
+                }
+                Button("Allow Downloads") {
+                    editor.resolveTeXPackageConsent(allowNetwork: true)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel, action: editor.cancelTeXPackageConsent)
             }
-            Button("Allow downloads") {
-                editor.resolveTeXPackageConsent(allowNetwork: true)
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel, action: editor.cancelTeXPackageConsent)
         } message: {
-            Text(
-                "Tectonic may need to download LaTeX packages. Clip records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
-            )
+            Text(texPackageAlertMessage)
         }
+    }
+
+    private var texPackageAlertTitle: String {
+        editor.texPackageRecoveryResource == nil
+            ? "Allow LaTeX Package Downloads?" : "A LaTeX Package Is Missing"
+    }
+
+    private var texPackageAlertMessage: String {
+        if let resource = editor.texPackageRecoveryResource {
+            return
+                "\(resource) is not available in Clip's package cache. Allow downloads to fetch it and retry this build, or stay offline without retrying."
+        }
+        return
+            "Tectonic may need to download LaTeX packages. Clip records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
     }
 
     private var editorSurface: some View {
@@ -302,6 +324,7 @@ struct TextEditorWorkspace: View {
                     }
                     .buttonStyle(ReelProminentButtonStyle())
                     .keyboardShortcut("b", modifiers: .command)
+                    .disabled(editor.isTeXPackageCacheResetting)
                     .help("Build the current LaTeX source (Command-B)")
                     .accessibilityIdentifier("latex-compile")
                 }

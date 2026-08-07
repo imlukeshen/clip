@@ -18,9 +18,15 @@ disabled, restrictive `openin_any` and `openout_any` settings, an isolated copy
 of the explicitly declared project files, a hard timeout, cancellation by process
 termination, and a 500 MB PDF output ceiling.
 
+Cache-only probes and network retries use separately staged workspaces under one
+deadline. The App Store copy of the bundled command-line tool is signed with only
+the App Sandbox and sandbox-inheritance entitlements, so the child retains the
+parent application's restrictions.
+
 Tectonic's package cache lives in the active Clip library. Network package
-resolution is disabled until the user makes a one-time explicit choice; allowed
-attempts are recorded in the egress ledger. A local bundle may be supplied for
+resolution is disabled until the user makes an explicit, reversible choice; allowed
+attempts are recorded in the egress ledger. Missing offline packages pause and offer
+an explicit download-and-retry action. A local bundle may be supplied for
 offline compilation. The direct build may explicitly opt into a detected
 `latexmk` installation, but that adapter also disables shell escape and is never
 used by the App Store build.
