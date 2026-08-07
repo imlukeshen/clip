@@ -285,6 +285,23 @@ struct CodeEditorAppearanceTests {
         #expect(visibleGlyphRect.width > 0)
         #expect(visibleGlyphRect.height > 0)
         #expect(renderedForegroundPixelCount(in: promotedTextView, rect: visibleGlyphRect) > 20)
+
+        model.showsProjectSidebar = true
+        await settle(hostingView)
+
+        let projectTextView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let projectContainer = try #require(
+            descendant(CodeEditorContainerView.self, in: hostingView)
+        )
+        #expect(projectTextView === originalTextView)
+        #expect(projectContainer.bounds.width >= 250)
+        #expect(projectContainer.scrollView.contentView.documentVisibleRect.width > 0)
+        #expect(
+            renderedForegroundPixelCount(
+                in: projectTextView,
+                rect: projectContainer.scrollView.contentView.documentVisibleRect
+            ) > 20
+        )
     }
 
     @Test("Initially LaTeX source remains painted after workspace layout changes")
@@ -492,6 +509,15 @@ private final class CodeEditorPromotionModel {
     var text = ""
     var language: LanguageID = .plainText
     var showsBuildOutput = false
+    var showsProjectSidebar = false
+}
+
+private enum CodeEditorPromotionPane: Hashable, Identifiable {
+    case project
+    case source
+    case preview
+
+    var id: Self { self }
 }
 
 private struct CodeEditorPromotionHarness: View {
@@ -501,37 +527,8 @@ private struct CodeEditorPromotionHarness: View {
     var body: some View {
         VStack(spacing: 0) {
             HSplitView {
-                CodeEditor(
-                    text: $model.text,
-                    language: model.language,
-                    settings: EditorSettings(fontSize: 13),
-                    documentIdentity: CodeEditorDocumentIdentity(
-                        documentID: DocumentID(rawValue: "latex-appearance-document"),
-                        fileID: FileID(rawValue: "latex-appearance-file")
-                    ),
-                    fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
-                    isReadOnly: false,
-                    undoManager: undoManager,
-                    onSave: {},
-                    onLongLineModeChange: { _ in },
-                    onLargePaste: {},
-                    onPasteRefused: {},
-                    onPasteIntoEmptyBuffer: { _ in },
-                    onSnippetNotice: { _ in },
-                    diagnostics: [],
-                    scrollToLine: nil,
-                    navigation: nil,
-                    onVisibleLineChange: { _ in },
-                    onSelectionChange: { _ in },
-                    onMarkdownDocumentChange: { _, _ in },
-                    onCursorChange: { _, _ in }
-                )
-                .frame(minWidth: model.language == .latex ? 340 : 0)
-
-                if model.language == .latex {
-                    Color.black
-                        .frame(minWidth: 340)
-                        .accessibilityIdentifier("latex-preview-test-double")
+                ForEach(panes) { pane in
+                    paneView(pane)
                 }
             }
 
@@ -545,5 +542,57 @@ private struct CodeEditorPromotionHarness: View {
                     .accessibilityIdentifier("latex-build-output-test-double")
             }
         }
+    }
+
+    private var panes: [CodeEditorPromotionPane] {
+        guard model.language == .latex else { return [.source] }
+        return model.showsProjectSidebar
+            ? [.project, .source, .preview] : [.source, .preview]
+    }
+
+    @ViewBuilder
+    private func paneView(_ pane: CodeEditorPromotionPane) -> some View {
+        switch pane {
+        case .project:
+            Color.gray
+                .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
+                .accessibilityIdentifier("latex-project-test-double")
+        case .source:
+            sourceEditor
+                .frame(minWidth: model.language == .latex ? 300 : 0, maxWidth: .infinity)
+                .layoutPriority(1)
+        case .preview:
+            Color.black
+                .frame(minWidth: model.showsProjectSidebar ? 300 : 340)
+                .accessibilityIdentifier("latex-preview-test-double")
+        }
+    }
+
+    private var sourceEditor: some View {
+        CodeEditor(
+            text: $model.text,
+            language: model.language,
+            settings: EditorSettings(fontSize: 13),
+            documentIdentity: CodeEditorDocumentIdentity(
+                documentID: DocumentID(rawValue: "latex-appearance-document"),
+                fileID: FileID(rawValue: "latex-appearance-file")
+            ),
+            fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
+            isReadOnly: false,
+            undoManager: undoManager,
+            onSave: {},
+            onLongLineModeChange: { _ in },
+            onLargePaste: {},
+            onPasteRefused: {},
+            onPasteIntoEmptyBuffer: { _ in },
+            onSnippetNotice: { _ in },
+            diagnostics: [],
+            scrollToLine: nil,
+            navigation: nil,
+            onVisibleLineChange: { _ in },
+            onSelectionChange: { _ in },
+            onMarkdownDocumentChange: { _, _ in },
+            onCursorChange: { _, _ in }
+        )
     }
 }

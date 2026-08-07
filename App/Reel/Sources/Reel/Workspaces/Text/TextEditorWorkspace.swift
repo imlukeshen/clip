@@ -8,6 +8,14 @@ import TextEngine
 import UniformTypeIdentifiers
 
 struct TextEditorWorkspace: View {
+    private enum EditorPane: Hashable, Identifiable {
+        case project
+        case source
+        case preview
+
+        var id: Self { self }
+    }
+
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: TextEditorViewModel
@@ -143,28 +151,43 @@ struct TextEditorWorkspace: View {
     }
 
     private var editorSurface: some View {
-        // Keep the native text editor under one split-view hierarchy. Automatic
-        // language detection can promote a scratch buffer to LaTeX while AppKit
-        // is delivering a key sequence, so the editor itself must remain the
-        // same child while the optional project and preview panes appear.
+        // Stable pane IDs let SwiftUI move the native source editor without
+        // recreating it when LaTeX adds a preview or project navigator. Inactive
+        // panes are omitted instead of being represented by zero-width split
+        // children, which can collapse the source pane in NSSplitView.
         HSplitView {
-            if editor.language == .latex, editor.document.files.count > 1 {
-                TeXProjectSidebar(editor: editor)
-                    .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
-            }
-            codeEditor
-                .frame(minWidth: latexPaneMinimumWidth)
-            if editor.language == .latex {
-                TeXPDFPreview(
-                    editor: editor,
-                    forwardSearch: texForwardSearch,
-                    onInverseSearch: runInverseSearch
-                )
-                .frame(minWidth: latexPaneMinimumWidth)
+            ForEach(editorPanes) { pane in
+                editorPane(pane)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+    }
+
+    private var editorPanes: [EditorPane] {
+        guard editor.language == .latex else { return [.source] }
+        return editor.document.files.count > 1
+            ? [.project, .source, .preview] : [.source, .preview]
+    }
+
+    @ViewBuilder
+    private func editorPane(_ pane: EditorPane) -> some View {
+        switch pane {
+        case .project:
+            TeXProjectSidebar(editor: editor)
+                .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
+        case .source:
+            codeEditor
+                .frame(minWidth: latexPaneMinimumWidth, maxWidth: .infinity)
+                .layoutPriority(1)
+        case .preview:
+            TeXPDFPreview(
+                editor: editor,
+                forwardSearch: texForwardSearch,
+                onInverseSearch: runInverseSearch
+            )
+            .frame(minWidth: latexPaneMinimumWidth)
+        }
     }
 
     /// The shell guarantees editors 760 points beside the inspector. Leave

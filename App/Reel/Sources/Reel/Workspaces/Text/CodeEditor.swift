@@ -175,11 +175,13 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.ruler?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
+        if language == .latex {
+            container.scheduleViewportRepair()
+        }
         if languageChanged, language == .latex {
-            // Adding the PDF preview changes the source viewport after this
-            // representable update. Refresh that geometry once the split
-            // settles, even when a language menu owns focus. Only restore first
-            // responder status when the source editor previously owned it.
+            // Only restore first responder status when the source editor
+            // previously owned it. Viewport repair is scheduled for every LaTeX
+            // update and coalesced by the container.
             context.coordinator.restoreEditingAfterWorkspaceTransition(
                 in: container,
                 restoreFocus: shouldRestoreEditing
@@ -244,6 +246,7 @@ struct CodeEditor: NSViewRepresentable {
         fileprivate var presentedLanguage: LanguageID
         fileprivate var isTextEditorActive = false
         private var focusRetirementGeneration = 0
+        private var selectionReportGeneration = 0
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -578,6 +581,7 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         func stopObserving() {
+            selectionReportGeneration += 1
             lineIndexTask?.cancel()
             lineIndexTask = nil
             syntaxTask?.cancel()
@@ -594,6 +598,8 @@ struct CodeEditor: NSViewRepresentable {
             in container: CodeEditorContainerView,
             restoreFocus: Bool
         ) {
+            container.scheduleViewportRepair()
+            guard restoreFocus else { return }
             guard
                 let expectedTextView = container.scrollView.documentView as? CodeTextView
             else { return }
@@ -604,32 +610,7 @@ struct CodeEditor: NSViewRepresentable {
                     container.scrollView.documentView === textView,
                     let window = container.window
                 else { return }
-                container.needsLayout = true
-                container.layoutSubtreeIfNeeded()
-                container.scrollView.needsLayout = true
-                container.scrollView.layoutSubtreeIfNeeded()
-                container.scrollView.contentView.needsLayout = true
-                container.scrollView.contentView.layoutSubtreeIfNeeded()
-                updateAppearance(
-                    textView: textView,
-                    scrollView: container.scrollView,
-                    theme: parent.theme,
-                    language: parent.language,
-                    settings: parent.settings
-                )
-                applyVisibleBaseStyle(in: nil, to: textView)
-                textView.needsLayout = true
-                textView.layoutSubtreeIfNeeded()
-                if let textContainer = textView.textContainer {
-                    textView.layoutManager?.ensureLayout(for: textContainer)
-                }
-                textView.needsDisplay = true
-                container.scrollView.contentView.needsDisplay = true
-                container.scrollView.needsDisplay = true
-                container.needsDisplay = true
-                if restoreFocus {
-                    window.makeFirstResponder(textView)
-                }
+                window.makeFirstResponder(textView)
             }
         }
 
@@ -739,9 +720,20 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         private func reportSelection(_ selection: NSRange) {
-            let position = lineIndex.position(at: selection.location)
-            parent.onSelectionChange(selection)
-            parent.onCursorChange(position.line, position.column)
+            selectionReportGeneration += 1
+            let generation = selectionReportGeneration
+            let identity = documentIdentity
+            // NSTextView can report selection synchronously while SwiftUI is
+            // reconciling this representable. Publish on the next run-loop turn
+            // so cursor state never mutates its parent during a view update.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, selectionReportGeneration == generation,
+                    documentIdentity == identity
+                else { return }
+                let position = lineIndex.position(at: selection.location)
+                parent.onSelectionChange(selection)
+                parent.onCursorChange(position.line, position.column)
+            }
         }
 
         private func reportVisibleLine(in textView: NSTextView) {
@@ -1001,34 +993,46 @@ struct CodeEditor: NSViewRepresentable {
             let selectedLine = (textView.string as NSString).lineRange(
                 for: NSRange(location: selectedLocation, length: 0)
             )
-            let inspectedRange = NSUnionRange(visibleRange, selectedLine)
-            guard inspectedRange.length > 0 else { return }
             let background = textView.backgroundColor.usingColorSpace(.sRGB)
-            var needsRepair = false
-            storage.enumerateAttribute(
-                .foregroundColor,
-                in: inspectedRange,
-                options: [.longestEffectiveRangeNotRequired]
-            ) { value, _, stop in
-                guard let color = value as? NSColor,
-                    let foreground = color.usingColorSpace(.sRGB),
-                    let background
-                else {
-                    needsRepair = true
-                    stop.pointee = true
-                    return
+            func needsRepair(in range: NSRange) -> Bool {
+                guard range.length > 0 else { return false }
+                var needsRepair = false
+                storage.enumerateAttribute(
+                    .foregroundColor,
+                    in: range,
+                    options: [.longestEffectiveRangeNotRequired]
+                ) { value, _, stop in
+                    guard let color = value as? NSColor,
+                        let foreground = color.usingColorSpace(.sRGB),
+                        let background
+                    else {
+                        needsRepair = true
+                        stop.pointee = true
+                        return
+                    }
+                    let red = foreground.redComponent - background.redComponent
+                    let green = foreground.greenComponent - background.greenComponent
+                    let blue = foreground.blueComponent - background.blueComponent
+                    let distance = (red * red + green * green + blue * blue).squareRoot()
+                    if foreground.alphaComponent < 0.35 || distance < 0.16 {
+                        needsRepair = true
+                        stop.pointee = true
+                    }
                 }
-                let red = foreground.redComponent - background.redComponent
-                let green = foreground.greenComponent - background.greenComponent
-                let blue = foreground.blueComponent - background.blueComponent
-                let distance = (red * red + green * green + blue * blue).squareRoot()
-                if foreground.alphaComponent < 0.35 || distance < 0.16 {
-                    needsRepair = true
-                    stop.pointee = true
-                }
+                return needsRepair
             }
-            guard needsRepair else { return }
-            applyVisibleBaseStyle(in: inspectedRange, to: textView)
+            var repaired = false
+            if needsRepair(in: visibleRange) {
+                applyVisibleBaseStyle(in: visibleRange, to: textView)
+                repaired = true
+            }
+            if NSIntersectionRange(visibleRange, selectedLine).length == 0,
+                needsRepair(in: selectedLine)
+            {
+                applyVisibleBaseStyle(in: selectedLine, to: textView)
+                repaired = true
+            }
+            guard repaired else { return }
             scheduleHighlight(for: textView.string)
         }
 
