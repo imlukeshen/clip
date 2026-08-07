@@ -962,6 +962,13 @@ public final class TextEditorViewModel {
 
     private func beginTeXCompilation() {
         guard !isStopped else { return }
+        if texCompilationState == .succeeded, texPDFURL != nil,
+            texSuccessfulSources == textBuffers,
+            texSuccessfulBuildIdentity == currentTeXBuildIdentity()
+        {
+            notice = "PDF is already up to date."
+            return
+        }
         if texCompileTask != nil {
             // There is one compiler per document. Coalesce repeated explicit
             // Build requests into exactly one immutable follow-up snapshot.
