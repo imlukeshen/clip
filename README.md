@@ -82,6 +82,10 @@ To work in Xcode, generate and open the canonical project with:
 make xcode
 ```
 
+Run `make xcode` again after pulling changes that add, remove, or rename Swift
+files. `Clip.xcodeproj` is generated locally and is intentionally not committed,
+so an already-open project does not discover those source changes automatically.
+
 Keep only `Clip.xcodeproj` open. The pre-rename `Reel.xcodeproj` and individual
 package workspaces refer to the same local Swift packages, so opening them beside
 Clip makes Xcode reject the duplicate package ownership.
