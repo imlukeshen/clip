@@ -19,7 +19,10 @@ public actor LibraryStore {
         bookmarks: BookmarkStore,
         trashManager: any FileTrashManaging = SystemTrashManager()
     ) async throws {
-        let normalizedRoot = root.standardizedFileURL
+        // Keep every derived path in one canonical namespace. A user may open
+        // the library through a Finder alias or symbolic-link path; mixing that
+        // lexical path with canonical safety checks breaks valid relative paths.
+        let normalizedRoot = root.resolvingSymlinksInPath().standardizedFileURL
         do {
             try Self.prepareLayout(at: normalizedRoot)
         } catch {
@@ -56,6 +59,7 @@ public actor LibraryStore {
 
     /// Inserts durable asset metadata and indexes its immutable media file.
     public func insert(_ asset: AssetRecord) async throws {
+        try LibraryPathSafety.validateIdentifier(asset.id.rawValue)
         let mediaURL = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
         guard FileManager.default.fileExists(atPath: mediaURL.path) else {
             throw LibraryError.assetFileMissing(asset.relativePath)
@@ -69,7 +73,7 @@ public actor LibraryStore {
 
         do {
             try MetadataCodec.encode(asset).write(
-                to: metadataURL(for: asset.id),
+                to: try metadataURL(for: asset.id),
                 options: .atomic
             )
             // Text assets are the one editable kind (invariant I5's documented
@@ -148,6 +152,11 @@ public actor LibraryStore {
         guard !records.isEmpty else { return }
         var originals: [AssetRecord] = []
         for record in records {
+            try LibraryPathSafety.validateIdentifier(record.id.rawValue)
+            _ = try resolvedURL(forRelativePath: record.relativePath, under: assetsURL)
+            if let eventTrackPath = record.eventTrackPath {
+                _ = try resolvedURL(forRelativePath: eventTrackPath, under: root)
+            }
             guard let original = try await asset(id: record.id) else {
                 throw LibraryError.assetNotFound(record.id)
             }
@@ -156,7 +165,7 @@ public actor LibraryStore {
         do {
             for record in records {
                 try MetadataCodec.encode(record).write(
-                    to: metadataURL(for: record.id),
+                    to: try metadataURL(for: record.id),
                     options: .atomic
                 )
             }
@@ -176,15 +185,14 @@ public actor LibraryStore {
             }
         } catch {
             for original in originals {
-                try? MetadataCodec.encode(original).write(
-                    to: metadataURL(for: original.id),
-                    options: .atomic
-                )
+                if let url = try? metadataURL(for: original.id) {
+                    try? MetadataCodec.encode(original).write(to: url, options: .atomic)
+                }
             }
             throw LibraryError.databaseOperationFailed("update asset locations")
         }
         for record in records {
-            let url = root.appendingPathComponent(record.relativePath)
+            let url = try resolvedURL(forRelativePath: record.relativePath, under: assetsURL)
             try? await bookmarks.storeFileReference(url, key: bookmarkKey(for: record.id))
             changeContinuation.yield(.assetUpdated(record.id))
         }
@@ -239,7 +247,15 @@ public actor LibraryStore {
                 }
                 continue
             }
-            let recorded = root.appendingPathComponent(record.relativePath)
+            guard
+                let recorded = try? resolvedURL(
+                    forRelativePath: record.relativePath,
+                    under: assetsURL
+                )
+            else {
+                if !record.isMissing { try? await setMissing(.now, for: record) }
+                continue
+            }
             if FileManager.default.fileExists(atPath: recorded.path) {
                 try? await bookmarks.storeFileReference(recorded, key: bookmarkKey(for: record.id))
                 if record.isMissing { try? await setMissing(nil, for: record) }
@@ -304,7 +320,7 @@ public actor LibraryStore {
                 ofItemAtPath: mediaURL.path
             )
             try MetadataCodec.encode(asset).write(
-                to: metadataURL(for: asset.id),
+                to: try metadataURL(for: asset.id),
                 options: .atomic
             )
         } catch {
@@ -339,7 +355,7 @@ public actor LibraryStore {
         do {
             try MetadataCodec.encode(track).write(to: eventURL, options: .atomic)
             try MetadataCodec.encode(asset).write(
-                to: metadataURL(for: asset.id),
+                to: try metadataURL(for: asset.id),
                 options: .atomic
             )
         } catch {
@@ -497,6 +513,7 @@ public actor LibraryStore {
 
     /// Loads a project document from its package.
     public func loadProject(id: ProjectID) async throws -> ProjectDocument {
+        try LibraryPathSafety.validateIdentifier(id.rawValue)
         let packagePath: String?
         do {
             packagePath = try await database.read { db in
@@ -515,7 +532,9 @@ public actor LibraryStore {
         let packageURL = try resolvedURL(forRelativePath: packagePath, under: projectsURL)
         do {
             let data = try Data(contentsOf: packageURL.appendingPathComponent("project.json"))
-            return try ProjectDocument.decodeJSON(data)
+            let document = try ProjectDocument.decodeJSON(data)
+            guard document.id == id else { throw LibraryError.corruptMetadata(packagePath) }
+            return document
         } catch let error as ModelError {
             throw error
         } catch {
@@ -525,13 +544,17 @@ public actor LibraryStore {
 
     /// Atomically saves a project package and refreshes its index summary.
     public func saveProject(_ document: ProjectDocument) async throws {
+        try LibraryPathSafety.validateIdentifier(document.id.rawValue)
         do {
             try document.validate()
         } catch {
             throw LibraryError.corruptMetadata("project \(document.id.rawValue)")
         }
         let relativePackagePath = "Projects/\(document.id.rawValue).reelproj"
-        let packageURL = root.appendingPathComponent(relativePackagePath, isDirectory: true)
+        let packageURL = try resolvedURL(
+            forRelativePath: relativePackagePath,
+            under: projectsURL
+        )
         do {
             try FileManager.default.createDirectory(
                 at: packageURL.appendingPathComponent("history", isDirectory: true),
@@ -561,9 +584,10 @@ public actor LibraryStore {
 
     /// Appends an inverse patch and keeps the newest 200 history entries.
     public func appendHistory(_ inverse: GraphPatch, project: ProjectID) async throws {
-        let packageURL = projectsURL.appendingPathComponent(
-            "\(project.rawValue).reelproj",
-            isDirectory: true
+        try LibraryPathSafety.validateIdentifier(project.rawValue)
+        let packageURL = try resolvedURL(
+            forRelativePath: "Projects/\(project.rawValue).reelproj",
+            under: projectsURL
         )
         let historyURL = packageURL.appendingPathComponent("history", isDirectory: true)
         guard FileManager.default.fileExists(atPath: packageURL.path) else {
@@ -680,7 +704,7 @@ extension LibraryStore {
         let sidecars = try [record.eventTrackPath, record.thumbnailPath, record.peaksPath]
             .compactMap { $0 }
             .map { try resolvedURL(forRelativePath: $0, under: root) }
-        return [mediaURL, metadataURL(for: record.id)] + sidecars
+        return [mediaURL, try metadataURL(for: record.id)] + sidecars
     }
 
     private func referencingProjectIDs(for assetID: AssetID) async throws -> [ProjectID] {
@@ -739,19 +763,15 @@ extension LibraryStore {
     }
 
     private func resolvedURL(forRelativePath path: String, under boundary: URL) throws -> URL {
-        guard !path.hasPrefix("/") else {
-            throw LibraryError.invalidRelativePath(path)
-        }
-        let candidate = root.appendingPathComponent(path).standardizedFileURL
-        let boundaryPath = boundary.standardizedFileURL.path + "/"
-        guard candidate.path.hasPrefix(boundaryPath) else {
-            throw LibraryError.invalidRelativePath(path)
-        }
-        return candidate
+        try LibraryPathSafety.resolve(path, root: root, boundary: boundary)
     }
 
-    private func metadataURL(for assetID: AssetID) -> URL {
-        LibraryLayout.metadata(in: root).appendingPathComponent("\(assetID.rawValue).json")
+    private func metadataURL(for assetID: AssetID) throws -> URL {
+        try LibraryPathSafety.validateIdentifier(assetID.rawValue)
+        return try resolvedURL(
+            forRelativePath: ".reel/assets/\(assetID.rawValue).json",
+            under: LibraryLayout.metadata(in: root)
+        )
     }
 
     private func bookmarkKey(for assetID: AssetID) -> String {
@@ -766,7 +786,7 @@ extension LibraryStore {
         var updated = record
         updated.missingSince = date
         try MetadataCodec.encode(updated).write(
-            to: metadataURL(for: record.id),
+            to: try metadataURL(for: record.id),
             options: .atomic
         )
         try await database.write { db in
@@ -791,10 +811,21 @@ extension LibraryStore {
         var records: [AssetRecord] = []
         for case let url as URL in enumerator where url.pathExtension == "json" {
             do {
+                let safeMetadataURL = try resolvedURL(
+                    forRelativePath: relativePath(url),
+                    under: LibraryLayout.metadata(in: root)
+                )
                 let record = try MetadataCodec.decode(
                     AssetRecord.self,
-                    from: Data(contentsOf: url)
+                    from: Data(contentsOf: safeMetadataURL)
                 )
+                try LibraryPathSafety.validateIdentifier(record.id.rawValue)
+                guard
+                    safeMetadataURL.deletingPathExtension().lastPathComponent
+                        == record.id.rawValue
+                else {
+                    throw LibraryError.corruptMetadata(safeMetadataURL.path)
+                }
                 let mediaURL = try resolvedURL(
                     forRelativePath: record.relativePath,
                     under: assetsURL
@@ -819,12 +850,21 @@ extension LibraryStore {
             options: [.skipsHiddenFiles]
         ).filter { $0.pathExtension == "reelproj" }
         return try packages.map { packageURL in
-            let documentURL = packageURL.appendingPathComponent("project.json")
             do {
+                let safePackageURL = try resolvedURL(
+                    forRelativePath: "Projects/\(packageURL.lastPathComponent)",
+                    under: projectsURL
+                )
+                let documentURL = safePackageURL.appendingPathComponent("project.json")
                 let document = try ProjectDocument.decodeJSON(Data(contentsOf: documentURL))
-                return (document, "Projects/\(packageURL.lastPathComponent)")
+                try LibraryPathSafety.validateIdentifier(document.id.rawValue)
+                guard
+                    safePackageURL.deletingPathExtension().lastPathComponent
+                        == document.id.rawValue
+                else { throw LibraryError.corruptMetadata(documentURL.path) }
+                return (document, "Projects/\(safePackageURL.lastPathComponent)")
             } catch {
-                throw LibraryError.corruptMetadata(documentURL.path)
+                throw LibraryError.corruptMetadata(packageURL.path)
             }
         }
     }

@@ -1,11 +1,26 @@
+import Darwin
 import Foundation
 
 /// Optional Office-output backend for the unsandboxed direct-download build.
 public struct LibreOfficeBackend: ConversionBackend {
     public let capabilities: ConversionCapabilities
+    private let processTimeout: Duration
+    private let logSizeLimit: Int64
 
     public init(capabilities: ConversionCapabilities) {
         self.capabilities = capabilities
+        self.processTimeout = .seconds(300)
+        self.logSizeLimit = 8 * 1_024 * 1_024
+    }
+
+    init(
+        capabilities: ConversionCapabilities,
+        processTimeout: Duration,
+        logSizeLimit: Int64
+    ) {
+        self.capabilities = capabilities
+        self.processTimeout = processTimeout
+        self.logSizeLimit = logSizeLimit
     }
 
     public var id: BackendID { .libreOffice }
@@ -135,7 +150,9 @@ public struct LibreOfficeBackend: ConversionBackend {
             executableURL: capabilities.libreOfficeExecutable,
             arguments: arguments,
             standardOutputURL: standardOutputURL,
-            standardErrorURL: standardErrorURL
+            standardErrorURL: standardErrorURL,
+            timeout: processTimeout,
+            logSizeLimit: logSizeLimit
         )
         try Task.checkCancellation()
         guard result.status == 0,
@@ -169,7 +186,9 @@ private actor LibreOfficeProcessBox {
         executableURL: URL,
         arguments: [String],
         standardOutputURL: URL,
-        standardErrorURL: URL
+        standardErrorURL: URL,
+        timeout: Duration,
+        logSizeLimit: Int64
     ) async throws -> (status: Int32, outputText: String, errorText: String) {
         _ = FileManager.default.createFile(atPath: standardOutputURL.path, contents: nil)
         _ = FileManager.default.createFile(atPath: standardErrorURL.path, contents: nil)
@@ -186,30 +205,109 @@ private actor LibreOfficeProcessBox {
         process.standardError = standardError
         self.process = process
         defer { self.process = nil }
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
+        let status = try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Int32.self) { group in
+                group.addTask {
+                    try await Self.launchAndWait(process)
+                }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    throw ConversionError.conversionFailed(
+                        "LibreOffice exceeded its safety time limit and was stopped."
+                    )
+                }
+                group.addTask {
+                    while true {
+                        try Task.checkCancellation()
+                        try Self.validateLogSize(
+                            outputURL: standardOutputURL,
+                            errorURL: standardErrorURL,
+                            limit: logSizeLimit
+                        )
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                do {
+                    guard let status = try await group.next() else {
+                        throw ConversionError.conversionFailed(
+                            "LibreOffice ended without reporting a status."
+                        )
+                    }
+                    group.cancelAll()
+                    return status
+                } catch {
+                    Self.kill(process)
+                    group.cancelAll()
+                    throw error
+                }
+            }
+        } onCancel: {
+            Self.kill(process)
+        }
+        try standardOutput.synchronize()
+        try standardError.synchronize()
+        try Self.validateLogSize(
+            outputURL: standardOutputURL,
+            errorURL: standardErrorURL,
+            limit: logSizeLimit
+        )
+        let outputText = try Self.readLog(at: standardOutputURL, limit: logSizeLimit)
+        let errorText = try Self.readLog(at: standardErrorURL, limit: logSizeLimit)
+        return (status, outputText, errorText)
+    }
+
+    private nonisolated static func launchAndWait(_ process: Process) async throws -> Int32 {
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { finished in
                 continuation.resume(returning: finished.terminationStatus)
             }
             do {
+                try Task.checkCancellation()
                 try process.run()
+                if Task.isCancelled { kill(process) }
             } catch {
                 process.terminationHandler = nil
                 continuation.resume(throwing: error)
             }
         }
-        try standardOutput.synchronize()
-        try standardError.synchronize()
-        let outputText =
-            String(
-                data: try Data(contentsOf: standardOutputURL),
-                encoding: .utf8
-            ) ?? ""
-        let errorText =
-            String(
-                data: try Data(contentsOf: standardErrorURL),
-                encoding: .utf8
-            ) ?? ""
-        return (status, outputText, errorText)
+    }
+
+    private nonisolated static func validateLogSize(
+        outputURL: URL,
+        errorURL: URL,
+        limit: Int64
+    ) throws {
+        guard limit >= 0 else { throw oversizedLogError }
+        let outputSize = try logSize(at: outputURL)
+        let errorSize = try logSize(at: errorURL)
+        guard outputSize <= limit, errorSize <= limit - outputSize else {
+            throw oversizedLogError
+        }
+    }
+
+    private nonisolated static func logSize(at url: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private nonisolated static func readLog(at url: URL, limit: Int64) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let safeLimit = min(limit, Int64(Int.max - 1))
+        guard safeLimit >= 0 else { throw oversizedLogError }
+        let data = try handle.read(upToCount: Int(safeLimit) + 1) ?? Data()
+        guard Int64(data.count) <= limit else { throw oversizedLogError }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private nonisolated static var oversizedLogError: ConversionError {
+        .conversionFailed("LibreOffice produced too much diagnostic output and was stopped.")
+    }
+
+    private nonisolated static func kill(_ process: Process) {
+        guard process.isRunning else { return }
+        Darwin.kill(process.processIdentifier, SIGKILL)
     }
 
     func terminate() {

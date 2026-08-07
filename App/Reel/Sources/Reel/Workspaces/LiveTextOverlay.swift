@@ -8,11 +8,13 @@ struct LiveTextOverlay: NSViewRepresentable {
     let spans: [OCRSpan]
     let onSearch: (String) -> Void
     let onRedact: ([NormalizedRect]) -> Void
+    let onEdit: (String, [NormalizedRect]) -> Void
 
     func makeNSView(context: Context) -> LiveTextSelectionView {
         let view = LiveTextSelectionView()
         view.onSearch = onSearch
         view.onRedact = onRedact
+        view.onEdit = onEdit
         view.setSpans(spans)
         return view
     }
@@ -20,6 +22,7 @@ struct LiveTextOverlay: NSViewRepresentable {
     func updateNSView(_ view: LiveTextSelectionView, context: Context) {
         view.onSearch = onSearch
         view.onRedact = onRedact
+        view.onEdit = onEdit
         view.setSpans(spans)
     }
 }
@@ -28,6 +31,8 @@ struct LiveTextOverlay: NSViewRepresentable {
 final class LiveTextSelectionView: NSView {
     var onSearch: (String) -> Void = { _ in }
     var onRedact: ([NormalizedRect]) -> Void = { _ in }
+    var onEdit: (String, [NormalizedRect]) -> Void = { _, _ in }
+    var pasteboard = NSPasteboard.general
 
     private var textFrame = LiveTextFrame(spans: [])
     private var selection: ClosedRange<Int>?
@@ -48,7 +53,9 @@ final class LiveTextSelectionView: NSView {
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
         setAccessibilityLabel("Live Text")
-        setAccessibilityHelp("Drag across recognized text to select it, then press Command-C.")
+        setAccessibilityHelp(
+            "Drag across recognized text to select it, then copy it or use the context menu to convert it into an editable layer."
+        )
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -118,13 +125,9 @@ final class LiveTextSelectionView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard event.charactersIgnoringModifiers?.lowercased() == "c",
-            modifiers.contains(.command)
+            modifiers.intersection([.command, .shift, .option, .control]) == [.command]
         else { return super.performKeyEquivalent(with: event) }
-        if modifiers.contains(.shift) {
-            copyAllText()
-        } else {
-            copySelectedText()
-        }
+        copy(nil)
         return true
     }
 
@@ -137,8 +140,9 @@ final class LiveTextSelectionView: NSView {
         guard !selectedText.isEmpty else { return nil }
 
         let menu = NSMenu(title: "Live Text")
-        menu.addItem(item("Copy", action: #selector(copySelectedText)))
+        menu.addItem(item("Copy", action: #selector(copy(_:))))
         menu.addItem(item("Copy All Text", action: #selector(copyAllText)))
+        menu.addItem(item("Convert to Editable Text", action: #selector(editSelection)))
         menu.addItem(item("Search Library", action: #selector(searchSelection)))
 
         detectedURL = nil
@@ -202,8 +206,18 @@ final class LiveTextSelectionView: NSView {
         return item
     }
 
-    @objc private func copySelectedText() {
+    /// Standard responder-chain action used by the app's Edit > Copy command.
+    @objc func copy(_ sender: Any?) {
         writeToPasteboard(selectedText)
+    }
+
+    /// Makes the standard Select All action useful while this overlay has focus.
+    @objc override func selectAll(_ sender: Any?) {
+        guard let first = textFrame.spans.indices.first,
+            let last = textFrame.spans.indices.last
+        else { return }
+        selection = first...last
+        needsDisplay = true
     }
 
     @objc private func copyAllText() {
@@ -220,6 +234,11 @@ final class LiveTextSelectionView: NSView {
         onRedact(selectedRegions)
     }
 
+    @objc private func editSelection() {
+        guard !selectedText.isEmpty, !selectedRegions.isEmpty else { return }
+        onEdit(selectedText, selectedRegions)
+    }
+
     @objc private func openDetectedURL() {
         if let detectedURL { NSWorkspace.shared.open(detectedURL) }
     }
@@ -234,8 +253,8 @@ final class LiveTextSelectionView: NSView {
 
     private func writeToPasteboard(_ text: String) {
         guard !text.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func regionIndex(at point: NSPoint) -> Int? {

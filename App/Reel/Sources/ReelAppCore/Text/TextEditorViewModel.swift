@@ -435,8 +435,12 @@ public final class TextEditorViewModel {
             Self.isDefaultScratchName(activeFile.relativePath),
             let pathExtension = Self.preferredScratchExtension(for: language)
         {
+            let destination =
+                language == .latex
+                ? Self.availableScratchTeXPath(in: document, excluding: activeFileID)
+                : "Untitled.\(pathExtension)"
             perform(
-                .renameFile(activeFileID, "Untitled.\(pathExtension)"),
+                .renameFile(activeFileID, destination),
                 actionName: "Set Language"
             )
         }
@@ -823,7 +827,31 @@ public final class TextEditorViewModel {
         else { return }
         let previous = activeFile.language
         do {
-            _ = try document.apply(.setLanguage(activeFile.id, detected, explicit: false))
+            var updatedDocument = document
+            _ = try updatedDocument.apply(
+                .setLanguage(activeFile.id, detected, explicit: false)
+            )
+            let promotedScratchToTeX =
+                detected == .latex
+                && sourceURL == nil
+                && Self.isDefaultScratchName(activeFile.relativePath)
+                && activeFile.relativePath.caseInsensitiveCompare("Untitled.tex") != .orderedSame
+            if promotedScratchToTeX {
+                // A default .txt scratch name carries no user intent. Promote it
+                // with the detected language so project analysis can immediately
+                // recognize the buffer as a compilable TeX main file.
+                _ = try updatedDocument.apply(
+                    .renameFile(
+                        activeFile.id,
+                        Self.availableScratchTeXPath(
+                            in: updatedDocument,
+                            excluding: activeFile.id
+                        )
+                    )
+                )
+            }
+            document = updatedDocument
+            if promotedScratchToTeX { invalidateTeXBuildIdentity() }
             rebuildTeXProjectAnalysis()
             persistStructureNow()
             if detected == .latex {
@@ -834,6 +862,20 @@ public final class TextEditorViewModel {
         } catch {
             notice = "Clip could not update the detected language."
         }
+    }
+
+    private static func availableScratchTeXPath(
+        in document: TextDocument,
+        excluding fileID: FileID
+    ) -> String {
+        let occupied = Set(
+            document.files.lazy.filter { $0.id != fileID }
+                .map { $0.relativePath.lowercased() }
+        )
+        if !occupied.contains("untitled.tex") { return "Untitled.tex" }
+        var suffix = 2
+        while occupied.contains("untitled \(suffix).tex") { suffix += 1 }
+        return "Untitled \(suffix).tex"
     }
 
     /// Explicitly normalizes mixed separators and keeps text plus metadata in one undo step.
@@ -1554,7 +1596,14 @@ public final class TextEditorViewModel {
     }
 
     private static func isDefaultScratchName(_ path: String) -> Bool {
-        ["untitled", "untitled.txt", "untitled.md", "untitled.tex"].contains(path.lowercased())
+        guard !path.contains("/") else { return false }
+        let name = path.lowercased()
+        if ["untitled", "untitled.txt", "untitled.md", "untitled.tex"].contains(name) {
+            return true
+        }
+        guard name.hasPrefix("untitled "), name.hasSuffix(".tex") else { return false }
+        let suffix = name.dropFirst("untitled ".count).dropLast(".tex".count)
+        return Int(suffix).map { $0 >= 2 } == true
     }
 
     private static func preferredScratchExtension(for language: LanguageID) -> String? {

@@ -8,6 +8,7 @@ public enum CaptureError: Error, Sendable, Equatable {
     case hotKeyUnavailable
     case unsupportedCapture(String)
     case historyUnavailable(String)
+    case payloadTooLarge(String)
 }
 
 extension CaptureError: LocalizedError {
@@ -25,6 +26,8 @@ extension CaptureError: LocalizedError {
             "\(name) is not a format the capture history can hold."
         case .historyUnavailable(let name):
             "\(name) could not be copied into the capture history."
+        case .payloadTooLarge(let name):
+            "\(name) is too large to store safely in the capture history."
         }
     }
 }

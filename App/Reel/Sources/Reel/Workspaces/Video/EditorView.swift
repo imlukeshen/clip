@@ -152,7 +152,7 @@ struct EditorView: View {
             .accessibilityIdentifier("video-add-media-menu")
 
             Menu {
-                Section("Target video track") {
+                Section("Video target") {
                     ForEach(editor.document.timeline.videoTracks) { track in
                         Button {
                             editor.targetVideoTrack(track.id)
@@ -165,21 +165,56 @@ struct EditorView: View {
                         }
                     }
                 }
+                Section("Audio target") {
+                    ForEach(editor.document.timeline.audioTracks) { track in
+                        Button {
+                            editor.targetAudioTrack(track.id)
+                        } label: {
+                            if track.id == editor.targetedAudioTrackID {
+                                Label(track.name, systemImage: "checkmark")
+                            } else {
+                                Text(track.name)
+                            }
+                        }
+                    }
+                }
                 Divider()
-                Button("New Overlay Track", systemImage: "square.stack.3d.up.badge.plus") {
-                    editor.addOverlayTrack()
+                Button("New Video Track", systemImage: "square.stack.3d.up.badge.plus") {
+                    editor.addVideoTrack()
+                }
+                Button("New Audio Track", systemImage: "waveform.badge.plus") {
+                    editor.addAudioTrack()
+                }
+                Divider()
+                if let track = editor.targetedVideoTrack {
+                    Button("Remove Empty \(track.name)", systemImage: "minus.square") {
+                        editor.removeTrack(track.id)
+                    }
+                    .disabled(!editor.canRemoveTrack(track.id))
+                }
+                if let track = editor.targetedAudioTrack {
+                    Button("Remove Empty \(track.name)", systemImage: "minus.square") {
+                        editor.removeTrack(track.id)
+                    }
+                    .disabled(!editor.canRemoveTrack(track.id))
                 }
             } label: {
                 if isCompact {
                     Image(systemName: "square.stack.3d.up")
                         .frame(width: 24, height: 24)
                 } else {
-                    Label(targetedTrackName, systemImage: "square.stack.3d.up")
+                    Label(targetedTrackSummary, systemImage: "square.stack.3d.up")
                 }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Choose where added video appears, or create an overlay track")
+            .help(
+                "Target V and A tracks for new media, add tracks, or remove an empty unlocked track"
+            )
+            .accessibilityLabel("Timeline track targets")
+            .accessibilityHint(
+                "Choose video and audio targets, add tracks, or remove an empty unlocked track."
+            )
             .accessibilityIdentifier("video-track-target-menu")
 
             if editor.isExporting {
@@ -270,17 +305,16 @@ struct EditorView: View {
                 ) {
                     editor.selectTool(.razor)
                 }
-                .keyboardShortcut("c", modifiers: [])
                 ToolButton(
                     systemName: "magnet",
                     title: "Snapping",
-                    detail: "Snap edits to clips and markers · S",
+                    detail:
+                        "Align clip edges to the playhead, other clips, markers, and clicks · S",
                     identifier: "video-tool-snapping",
                     isActive: editor.isSnappingEnabled
                 ) {
                     editor.toggleSnapping()
                 }
-                .keyboardShortcut("s", modifiers: [])
                 ToolButton(
                     systemName: "scissors.badge.ellipsis",
                     title: "Split at Playhead",
@@ -299,7 +333,6 @@ struct EditorView: View {
                 ) {
                     editor.deleteSelected()
                 }
-                .keyboardShortcut(.delete, modifiers: [])
                 ToolButton(
                     systemName: "delete.forward",
                     title: "Ripple Delete",
@@ -309,7 +342,6 @@ struct EditorView: View {
                 ) {
                     editor.rippleDeleteSelected()
                 }
-                .keyboardShortcut(.delete, modifiers: .shift)
                 ToolButton(
                     systemName: "speaker.wave.2",
                     title: "Separate Audio",
@@ -341,7 +373,6 @@ struct EditorView: View {
                 ) {
                     editor.addMarkerAtPlayhead()
                 }
-                .keyboardShortcut("m", modifiers: [])
                 ToolButton(
                     systemName: "magnifyingglass",
                     title: "Zoom Effect",
@@ -393,7 +424,8 @@ struct EditorView: View {
                                 editor.redactCurrentRegions(
                                     regions.map(LiveTextFrame.canvasRect(for:))
                                 )
-                            }
+                            },
+                            onEdit: { _, _ in }
                         )
                         .frame(width: contentSize.width, height: contentSize.height)
                         .scaleEffect(previewScale)
@@ -494,7 +526,6 @@ struct EditorView: View {
                     Image(systemName: editor.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                 }
                 .buttonStyle(ReelPlainButtonStyle())
-                .keyboardShortcut(.space, modifiers: [])
                 .help(editor.isPlaying ? "Pause · Space" : "Play · Space")
                 .accessibilityIdentifier("video-playback-toggle")
                 Button {
@@ -503,7 +534,6 @@ struct EditorView: View {
                     Image(systemName: "backward.fill")
                 }
                 .buttonStyle(ReelPlainButtonStyle())
-                .keyboardShortcut("j", modifiers: [])
                 Button {
                     editor.shuttlePause()
                 } label: {
@@ -511,21 +541,17 @@ struct EditorView: View {
                         .frame(width: 18)
                 }
                 .buttonStyle(ReelPlainButtonStyle())
-                .keyboardShortcut("k", modifiers: [])
                 Button {
                     editor.shuttleForward()
                 } label: {
                     Image(systemName: "forward.fill")
                 }
                 .buttonStyle(ReelPlainButtonStyle())
-                .keyboardShortcut("l", modifiers: [])
                 Button("I") { editor.setInPoint() }
                     .buttonStyle(ReelPlainButtonStyle())
-                    .keyboardShortcut("i", modifiers: [])
                     .help("Set In point")
                 Button("O") { editor.setOutPoint() }
                     .buttonStyle(ReelPlainButtonStyle())
-                    .keyboardShortcut("o", modifiers: [])
                     .help("Set Out point")
                 Spacer()
                 Text(timecode(editor.duration))
@@ -645,6 +671,12 @@ struct EditorView: View {
             .foregroundStyle(
                 editor.isSnappingEnabled ? theme.palette.accent : theme.palette.textTertiary
             )
+            .help(
+                "Snapping aligns moving or trimmed clip edges to the playhead, other clip edges, markers, and recorded clicks."
+            )
+            .accessibilityHint(
+                "When enabled, moving and trimming clips aligns their edges to nearby timeline points."
+            )
 
             Spacer(minLength: 12)
 
@@ -750,6 +782,7 @@ struct EditorView: View {
             timeline: editor.document.timeline,
             names: editor.assetNames,
             assetDurations: editor.assetDurations,
+            audioAssetIDs: editor.audioAssetIDs,
             missingAssetIDs: editor.missingAssetIDs,
             selection: editor.selection,
             playhead: editor.playhead,
@@ -759,6 +792,9 @@ struct EditorView: View {
             clickMarkers: editor.timelineClickMarkers,
             isSnappingEnabled: editor.isSnappingEnabled,
             activeTool: editor.activeTool,
+            targetedVideoTrackID: editor.targetedVideoTrackID,
+            targetedAudioTrackID: editor.targetedAudioTrackID,
+            targetedTrackKind: editor.targetedTrackKind,
             // The timeline is always dark, so it takes the dark tokens whichever
             // appearance the rest of the app is using.
             accent: NSColor(Theme.dark.palette.accent),
@@ -776,7 +812,7 @@ struct EditorView: View {
             onSelect: editor.select,
             onSeek: editor.seek,
             onScrubbing: editor.setScrubbing,
-            onReorder: editor.reorder,
+            onTargetTrack: editor.targetTrack,
             canMove: editor.canMoveTimelineItem,
             onMove: editor.moveTimelineItem,
             onTrim: editor.trim,
@@ -785,11 +821,11 @@ struct EditorView: View {
         )
         .accessibilityIdentifier("video-timeline")
         .help(
-            "Drag clips in time or between video and audio lanes. Drag an edge to trim; pinch or Option-scroll to zoom."
+            "Drag clips in time or between compatible V or A tracks. Occupied ranges overwrite without rippling; drag an edge to trim."
         )
         .accessibilityLabel("Project timeline")
         .accessibilityHint(
-            "Drag clips in time or between compatible tracks. Drag clip edges to trim, scroll to pan, and pinch to zoom."
+            "Select V or A track labels to target them. Drag media in time or between compatible tracks; occupied ranges overwrite without rippling."
         )
     }
 
@@ -803,10 +839,12 @@ struct EditorView: View {
         timelineZoom = TimelineViewport.clampedZoom(zoom)
     }
 
-    private var targetedTrackName: String {
-        editor.document.timeline.videoTracks.first {
-            $0.id == editor.targetedVideoTrackID
-        }?.name ?? "V1"
+    private var targetedTrackSummary: String {
+        let video = editor.targetedVideoTrack?.name ?? "V–"
+        let audio = editor.targetedAudioTrack?.name ?? "A–"
+        return editor.targetedTrackKind == .video
+            ? "\(video) active · \(audio)"
+            : "\(video) · \(audio) active"
     }
 
     private func timecode(_ time: RationalTime) -> String {
@@ -1185,7 +1223,7 @@ private struct TargetTrackInspectorSection: View {
     @Bindable var editor: EditorViewModel
 
     var body: some View {
-        if let track = editor.targetedVideoTrack {
+        if let track = editor.targetedTrack {
             SectionLabel("Target track · \(track.name)")
             HStack(spacing: 6) {
                 EffectButton(track.isEnabled ? "Disable" : "Enable") {
@@ -1194,24 +1232,36 @@ private struct TargetTrackInspectorSection: View {
                 EffectButton(track.isLocked ? "Unlock" : "Lock") {
                     editor.toggleTargetTrackLocked()
                 }
-                EffectButton(track.isMuted ? "Unmute" : "Mute") {
-                    editor.toggleTargetTrackMuted()
-                }
-                EffectButton(track.isSolo ? "Unsolo" : "Solo") {
-                    editor.toggleTargetTrackSolo()
+                if editor.targetedTrackKind == .audio
+                    || editor.targetedVideoTrackHasEmbeddedAudio
+                {
+                    EffectButton(track.isMuted ? "Unmute" : "Mute") {
+                        editor.toggleTargetTrackMuted()
+                    }
+                    EffectButton(track.isSolo ? "Unsolo" : "Solo") {
+                        editor.toggleTargetTrackSolo()
+                    }
                 }
             }
-            KeyframeSlider(
-                title: "Gain",
-                value: Binding(
-                    get: { editor.targetedGain },
-                    set: { value in editor.setTargetedGain(value) }
-                ),
-                range: -60...12,
-                suffix: " dB",
-                hasKeyframe: editor.hasGainKeyframeAtPlayhead,
-                addKeyframe: { editor.setGainKeyframe() }
-            )
+            if editor.targetedTrackKind == .audio
+                || editor.targetedVideoTrackHasEmbeddedAudio
+            {
+                KeyframeSlider(
+                    title: editor.targetedTrackKind == .audio ? "Gain" : "Embedded audio gain",
+                    value: Binding(
+                        get: { editor.targetedGain },
+                        set: { value in editor.setTargetedGain(value) }
+                    ),
+                    range: -60...12,
+                    suffix: " dB",
+                    hasKeyframe: editor.hasGainKeyframeAtPlayhead,
+                    addKeyframe: { editor.setGainKeyframe() }
+                )
+            } else {
+                Text("Target an audio track to adjust gain.")
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+            }
             Divider().overlay(theme.palette.line)
         }
     }

@@ -54,7 +54,8 @@ public struct TectonicEngine: TeXEngine {
                         currentDirectory: workspace.source,
                         environment: environment(for: job),
                         timeout: job.timeout,
-                        logDirectory: workspace.root
+                        logDirectory: workspace.root,
+                        logSizeLimit: job.logSizeLimit
                     )
                     for line in result.combinedOutput.components(separatedBy: .newlines)
                     where !line.isEmpty {
@@ -206,7 +207,8 @@ final class TeXProcessController: @unchecked Sendable {
         currentDirectory: URL,
         environment: [String: String],
         timeout: Duration,
-        logDirectory: URL
+        logDirectory: URL,
+        logSizeLimit: Int64
     ) async throws -> TeXProcessResult {
         let outputURL = logDirectory.appendingPathComponent("stdout.log")
         let errorURL = logDirectory.appendingPathComponent("stderr.log")
@@ -238,6 +240,17 @@ final class TeXProcessController: @unchecked Sendable {
                     try await Task.sleep(for: timeout)
                     throw TeXEngineError.timedOut
                 }
+                group.addTask {
+                    while true {
+                        try Task.checkCancellation()
+                        try Self.validateLogSize(
+                            outputURL: outputURL,
+                            errorURL: errorURL,
+                            limit: logSizeLimit
+                        )
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
                 do {
                     guard let status = try await group.next() else {
                         throw TeXEngineError.launchFailed("The process ended unexpectedly")
@@ -256,20 +269,60 @@ final class TeXProcessController: @unchecked Sendable {
 
         try output.synchronize()
         try error.synchronize()
+        try Self.validateLogSize(
+            outputURL: outputURL,
+            errorURL: errorURL,
+            limit: logSizeLimit
+        )
         return TeXProcessResult(
             status: status,
-            outputText: String(data: try Data(contentsOf: outputURL), encoding: .utf8) ?? "",
-            errorText: String(data: try Data(contentsOf: errorURL), encoding: .utf8) ?? ""
+            outputText: try Self.readLog(at: outputURL, limit: logSizeLimit),
+            errorText: try Self.readLog(at: errorURL, limit: logSizeLimit)
         )
     }
 
+    private static func validateLogSize(
+        outputURL: URL,
+        errorURL: URL,
+        limit: Int64
+    ) throws {
+        guard limit >= 0 else { throw TeXEngineError.logTooLarge(limit: limit) }
+        let outputSize = try logSize(at: outputURL)
+        let errorSize = try logSize(at: errorURL)
+        guard outputSize <= limit, errorSize <= limit - outputSize else {
+            throw TeXEngineError.logTooLarge(limit: limit)
+        }
+    }
+
+    private static func logSize(at url: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private static func readLog(at url: URL, limit: Int64) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let safeLimit = min(limit, Int64(Int.max - 1))
+        guard safeLimit >= 0 else { throw TeXEngineError.logTooLarge(limit: limit) }
+        let data = try handle.read(upToCount: Int(safeLimit) + 1) ?? Data()
+        guard Int64(data.count) <= limit else {
+            throw TeXEngineError.logTooLarge(limit: limit)
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     private static func launchAndWait(_ process: Process) async throws -> Int32 {
-        try await withCheckedThrowingContinuation { continuation in
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { finished in
                 continuation.resume(returning: finished.terminationStatus)
             }
             do {
+                try Task.checkCancellation()
                 try process.run()
+                if Task.isCancelled, process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
             } catch {
                 process.terminationHandler = nil
                 continuation.resume(

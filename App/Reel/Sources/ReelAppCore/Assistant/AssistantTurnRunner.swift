@@ -16,17 +16,44 @@ public struct AssistantMessage: Sendable, Equatable, Identifiable {
     }
 }
 
+/// Identifies the exact editor document state that originated an assistant turn.
+/// A project ID alone is insufficient because the same project can be reopened
+/// or edited while an earlier asynchronous response is still pending.
+public struct AssistantSessionToken: Sendable, Equatable {
+    public enum Document: Sendable, Equatable {
+        case timeline(ProjectID)
+        case text(DocumentID)
+    }
+
+    public var document: Document
+    public var generation: UInt64
+    public var revision: Data
+
+    public init(document: Document, generation: UInt64, revision: Data = Data()) {
+        self.document = document
+        self.generation = generation
+        self.revision = revision
+    }
+}
+
 /// A resolved edit waiting for explicit review.
 public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
     public var id: String { result.callID }
     public var name: String
     public var result: ToolResult
     public var invocation: ToolInvocation?
+    public var session: AssistantSessionToken
 
-    public init(name: String, result: ToolResult, invocation: ToolInvocation? = nil) {
+    public init(
+        name: String,
+        result: ToolResult,
+        invocation: ToolInvocation? = nil,
+        session: AssistantSessionToken
+    ) {
         self.name = name
         self.result = result
         self.invocation = invocation
+        self.session = session
     }
 }
 

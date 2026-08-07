@@ -68,6 +68,111 @@ struct TextEditorViewModelTests {
         #expect(editor.activeFile?.languageIsExplicit == false)
     }
 
+    @Test("Auto-detected LaTeX promotes a scratch file and builds without a manual selection")
+    func autoDetectedLatexPromotesAndBuildsScratch() async throws {
+        let file = TextFile(id: FileID(rawValue: "auto-latex"), relativePath: "Untitled.txt")
+        let recorder = TeXJobRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in },
+            texPreferences: try makeTeXPreferences(packageAccess: .cachedOnly)
+        )
+        editor.configureTeXEngine(RecordingTeXEngine(recorder: recorder))
+
+        editor.text = "\\documentclass{article}\\begin{document}Clip\\end{document}"
+        for _ in 0..<30 where editor.activeFile?.relativePath != "Untitled.tex" {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(editor.language == .latex)
+        #expect(editor.activeFile?.languageIsExplicit == false)
+        #expect(editor.activeFile?.relativePath == "Untitled.tex")
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+
+        let job = try #require(recorder.job)
+        #expect(job.mainFile.lastPathComponent == "Untitled.tex")
+        #expect(recorder.mainSource?.contains("\\documentclass{article}") == true)
+        editor.stop()
+    }
+
+    @Test("Auto-detected LaTeX chooses a unique scratch filename")
+    func autoDetectedLatexAvoidsFilenameCollision() async throws {
+        let scratchID = FileID(rawValue: "auto-latex-collision")
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [
+                TextFile(id: scratchID, relativePath: "Untitled.txt"),
+                TextFile(id: FileID(rawValue: "existing-tex"), relativePath: "Untitled.tex"),
+            ]),
+            text: "",
+            activeFileID: scratchID,
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in }
+        )
+
+        editor.text = "\\documentclass{article}\\begin{document}Clip\\end{document}"
+        for _ in 0..<30 where editor.activeFile?.relativePath != "Untitled 2.tex" {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(editor.language == .latex)
+        #expect(editor.activeFile?.relativePath == "Untitled 2.tex")
+
+        editor.text = ""
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(editor.language == .plainText)
+        editor.stop()
+    }
+
+    @Test("An explicit LaTeX choice also avoids an existing scratch filename")
+    func explicitLatexAvoidsFilenameCollision() throws {
+        let scratchID = FileID(rawValue: "explicit-latex-collision")
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [
+                TextFile(id: scratchID, relativePath: "Untitled.txt"),
+                TextFile(
+                    id: FileID(rawValue: "existing-explicit-tex"),
+                    relativePath: "Untitled.tex"
+                ),
+            ]),
+            text: "",
+            activeFileID: scratchID,
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in }
+        )
+
+        editor.setLanguage(.latex)
+
+        #expect(editor.language == .latex)
+        #expect(editor.activeFile?.languageIsExplicit == true)
+        #expect(editor.activeFile?.relativePath == "Untitled 2.tex")
+        editor.stop()
+    }
+
+    @Test("A nested user file is never treated as a generated scratch name")
+    func nestedUntitledFileKeepsItsPath() throws {
+        let file = TextFile(
+            id: FileID(rawValue: "nested-untitled"),
+            relativePath: "chapters/Untitled.txt"
+        )
+        let editor = try makeEditor(file: file, text: "")
+
+        editor.setLanguage(.latex)
+
+        #expect(editor.language == .latex)
+        #expect(editor.activeFile?.relativePath == "chapters/Untitled.txt")
+        editor.stop()
+    }
+
     @Test("An explicit language choice is not replaced while typing")
     func explicitLanguageWinsOverDetection() async throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Untitled.txt")

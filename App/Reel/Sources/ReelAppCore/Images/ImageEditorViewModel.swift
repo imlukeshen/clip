@@ -212,6 +212,52 @@ public final class ImageEditorViewModel {
         }
     }
 
+    /// Converts recognized raster text into an ordinary editable text layer,
+    /// covering the source pixels first so the replacement never overlaps the
+    /// original. The two layers share one undo step.
+    public func convertRecognizedTextToEditableLayer(
+        _ text: String,
+        regions: [NormalizedRect]
+    ) {
+        let rects = regions.compactMap { region -> CGRect? in
+            let rect = CGRect(
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height
+            ).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            return isUsable(rect) ? rect : nil
+        }
+        let replacement = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !replacement.isEmpty, let first = rects.first else { return }
+        let frame = rects.dropFirst().reduce(first) { $0.union($1) }
+        let cover = Layer.redaction(
+            RedactionLayer(regions: rects, style: .solid(.black))
+        )
+        let editable = Layer.text(
+            TextLayer(
+                text: replacement,
+                frame: frame,
+                color: RGBA(r: 1, g: 1, b: 1, a: 1),
+                fontSize: min(max(frame.height * Double(document.canvas.height) * 0.72, 8), 120)
+            )
+        )
+        do {
+            let index = document.layers.count
+            try perform(
+                [
+                    .addLayer(cover, atIndex: index),
+                    .addLayer(editable, atIndex: index + 1),
+                ],
+                actionName: "Convert Live Text"
+            )
+            selectedLayerID = editable.id
+            notice = "Editable text layer added over the source text."
+        } catch {
+            notice = "The recognized text could not be converted."
+        }
+    }
+
     public func commitGesture(from start: CGPoint, to end: CGPoint) {
         commitGesture(points: [start, end])
     }

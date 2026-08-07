@@ -44,7 +44,8 @@ public struct SystemTeXEngine: TeXEngine {
                         currentDirectory: workspace.source,
                         environment: environment,
                         timeout: job.timeout,
-                        logDirectory: workspace.root
+                        logDirectory: workspace.root,
+                        logSizeLimit: job.logSizeLimit
                     )
                     for line in result.combinedOutput.components(separatedBy: .newlines)
                     where !line.isEmpty {

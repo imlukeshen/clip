@@ -7,14 +7,18 @@ import Testing
 struct CaptureHistoryLimitTests {
     private let now = Date(timeIntervalSince1970: 1_000_000)
 
-    private func item(ageInDays: Double, id: UUID = UUID()) -> CaptureHistoryItem {
+    private func item(
+        ageInDays: Double,
+        id: UUID = UUID(),
+        byteSize: Int64 = 1_024
+    ) -> CaptureHistoryItem {
         CaptureHistoryItem(
             id: id,
             fileName: "\(id.uuidString).png",
             displayName: "Screenshot.png",
             kind: .image,
             capturedAt: now.addingTimeInterval(-ageInDays * 24 * 60 * 60),
-            byteSize: 1024
+            byteSize: byteSize
         )
     }
 
@@ -57,5 +61,19 @@ struct CaptureHistoryLimitTests {
         let result = limit.apply(to: [future], now: now)
         #expect(result.kept.map(\.id) == [future.id])
         #expect(result.expired.isEmpty)
+    }
+
+    @Test("Newest entries are retained within the aggregate byte budget")
+    func expiresByAggregateBytes() {
+        let limit = CaptureHistoryLimit(
+            maximumCount: 10,
+            maximumAge: 7 * 24 * 60 * 60,
+            maximumBytes: 2_000
+        )
+        let newest = item(ageInDays: 0.1, byteSize: 1_200)
+        let older = item(ageInDays: 0.2, byteSize: 1_000)
+        let result = limit.apply(to: [older, newest], now: now)
+        #expect(result.kept.map(\.id) == [newest.id])
+        #expect(result.expired.map(\.id) == [older.id])
     }
 }

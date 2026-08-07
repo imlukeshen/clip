@@ -93,6 +93,7 @@ import Testing
         id: ItemID(rawValue: "item"),
         assetID: AssetID(rawValue: "asset"),
         sourceRange: range,
+        detachedAudioItemID: ItemID(rawValue: "detached-audio"),
         nestID: "nest-1"
     )
     let effect = Effect.cursor(

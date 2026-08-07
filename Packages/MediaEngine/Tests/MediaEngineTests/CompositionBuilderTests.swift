@@ -337,7 +337,7 @@ struct CompositionBuilderTests {
         )
     }
 
-    @Test("Builder emits overlapping V1 and V2 source tracks and ignores disabled tracks")
+    @Test("Builder emits overlapping V1/V2 video and embedded-audio lanes")
     func builderCreatesV2Instructions() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
             "reel-v2-\(UUID().uuidString)",
@@ -390,6 +390,8 @@ struct CompositionBuilderTests {
         )
 
         #expect(built.composition.tracks(withMediaType: .video).count == 2)
+        #expect(built.composition.tracks(withMediaType: .audio).count == 2)
+        #expect(built.audioMix.inputParameters.count == 2)
         #expect(
             instruction.layers.map(\.item.id) == [
                 ItemID(rawValue: "v1"), ItemID(rawValue: "v2"),
@@ -468,6 +470,52 @@ struct CompositionBuilderTests {
         )
         #expect(abs(gainRamp.start - 0.501_187) < 0.001)
         #expect(abs(gainRamp.end - 1) < 0.001)
+    }
+
+    @Test("An empty A lane does not silence embedded video audio")
+    func emptyAudioLaneKeepsEmbeddedAudio() {
+        let range = TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+        let video = TimelineItem(
+            id: ItemID(rawValue: "video-with-audio"),
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: range
+        )
+        let timeline = Timeline(
+            videoTracks: [Track(id: TrackID(rawValue: "v1"), name: "V1", items: [video])],
+            audioTracks: [Track(id: TrackID(rawValue: "a1"), name: "A1")]
+        )
+
+        let tracks = CompositionBuilder.audioModelTracks(in: timeline)
+
+        #expect(tracks.count == 2)
+        #expect(tracks[0].items.map(\.id) == [video.id])
+        #expect(tracks[1].items.isEmpty)
+    }
+
+    @Test("Detached audio suppresses only its original embedded copy")
+    func detachedAudioDoesNotDouble() {
+        let range = TimeRange(start: .zero, duration: RationalTime(seconds: 2))
+        let audioID = ItemID(rawValue: "detached-audio")
+        let video = TimelineItem(
+            id: ItemID(rawValue: "video-source"),
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: range,
+            detachedAudioItemID: audioID
+        )
+        let audio = TimelineItem(
+            id: audioID,
+            assetID: video.assetID,
+            sourceRange: range
+        )
+        let timeline = Timeline(
+            videoTracks: [Track(id: TrackID(rawValue: "v1"), name: "V1", items: [video])],
+            audioTracks: [Track(id: TrackID(rawValue: "a1"), name: "A1", items: [audio])]
+        )
+
+        let tracks = CompositionBuilder.audioModelTracks(in: timeline)
+
+        #expect(tracks.count == 1)
+        #expect(tracks[0].items.map(\.id) == [audioID])
     }
 
     private func renderBytes(_ image: CIImage, bounds: CGRect) -> [UInt8] {

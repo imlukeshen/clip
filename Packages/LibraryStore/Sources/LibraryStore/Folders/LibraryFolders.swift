@@ -12,8 +12,9 @@ public actor LibraryFolders {
         library: LibraryStore,
         trashManager: any FileTrashManaging = SystemTrashManager()
     ) {
-        self.root = root.standardizedFileURL
-        self.media = LibraryLayout.media(in: root.standardizedFileURL)
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        self.root = canonicalRoot
+        self.media = LibraryLayout.media(in: canonicalRoot)
         self.library = library
         self.trashManager = trashManager
     }
@@ -52,7 +53,11 @@ public actor LibraryFolders {
         guard var asset = try await library.asset(id: assetID) else {
             throw LibraryError.assetNotFound(assetID)
         }
-        let source = root.appendingPathComponent(asset.relativePath)
+        let source = try LibraryPathSafety.resolve(
+            asset.relativePath,
+            root: root,
+            boundary: media
+        )
         let requestedName = try normalizedAssetName(proposedName, source: source)
         guard requestedName != source.lastPathComponent else { return asset }
 
@@ -76,7 +81,11 @@ public actor LibraryFolders {
             asset.displayName = destination.lastPathComponent
 
             if let eventPath = asset.eventTrackPath {
-                let eventSource = root.appendingPathComponent(eventPath)
+                let eventSource = try LibraryPathSafety.resolve(
+                    eventPath,
+                    root: root,
+                    boundary: root
+                )
                 if FileManager.default.fileExists(atPath: eventSource.path) {
                     let eventDestination = eventSidecarURL(for: destination)
                     try moveItem(at: eventSource, to: eventDestination, recording: &moves)
@@ -126,7 +135,11 @@ public actor LibraryFolders {
                 guard var asset = try await library.asset(id: id) else {
                     throw LibraryError.assetNotFound(id)
                 }
-                let source = root.appendingPathComponent(asset.relativePath)
+                let source = try LibraryPathSafety.resolve(
+                    asset.relativePath,
+                    root: root,
+                    boundary: media
+                )
                 let proposed = destinationFolder.appendingPathComponent(source.lastPathComponent)
                 guard source.standardizedFileURL != proposed.standardizedFileURL else {
                     updated.append(asset)
@@ -143,7 +156,11 @@ public actor LibraryFolders {
                 asset.displayName = destination.lastPathComponent
 
                 if let eventPath = asset.eventTrackPath {
-                    let eventSource = root.appendingPathComponent(eventPath)
+                    let eventSource = try LibraryPathSafety.resolve(
+                        eventPath,
+                        root: root,
+                        boundary: root
+                    )
                     if FileManager.default.fileExists(atPath: eventSource.path) {
                         let eventDestination = destination.deletingPathExtension()
                             .appendingPathExtension("events.json")
@@ -291,16 +308,17 @@ public actor LibraryFolders {
     }
 
     private func folderURL(_ relativePath: String) throws -> URL {
-        guard !relativePath.hasPrefix("/"), !relativePath.split(separator: "/").contains("..")
-        else {
+        let path = relativePath.isEmpty ? "Media" : "Media/\(relativePath)"
+        let url = try LibraryPathSafety.resolve(
+            path,
+            root: root,
+            boundary: media,
+            allowBoundary: relativePath.isEmpty
+        )
+        guard FileManager.default.fileExists(atPath: url.path) else {
             throw LibraryError.invalidRelativePath(relativePath)
         }
-        let url = relativePath.isEmpty ? media : media.appendingPathComponent(relativePath)
-        let boundary = media.path + "/"
-        guard url.standardizedFileURL == media || url.standardizedFileURL.path.hasPrefix(boundary),
-            FileManager.default.fileExists(atPath: url.path)
-        else { throw LibraryError.invalidRelativePath(relativePath) }
-        return url.standardizedFileURL
+        return url
     }
 
     private func validateMutableFolder(_ relativePath: String) throws {

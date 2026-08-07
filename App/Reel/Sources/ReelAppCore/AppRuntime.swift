@@ -38,6 +38,7 @@ public actor AppRuntime {
     private let scratchTextStore: ScratchTextStore
     private let clipboardWatcher = ClipboardWatcher()
     private var clipboardTask: Task<Void, Never>?
+    private var isClipboardCaptureEnabled: Bool
     private var captureDirectory: URL
 
     private let didCaptureClipboard: @Sendable () async -> Void
@@ -51,11 +52,12 @@ public actor AppRuntime {
     public init(
         libraryRoot: URL,
         conversionCapabilities: ConversionCapabilities = .appStore,
+        isClipboardCaptureEnabled: Bool = false,
         didAutomaticallyIngest: @escaping @Sendable (AssetRecord) async -> Void = { _ in },
         didCaptureSystemFile: @escaping @Sendable (URL) async -> Void = { _ in },
         didCaptureClipboard: @escaping @Sendable () async -> Void = {}
     ) async throws {
-        let root = libraryRoot.standardizedFileURL
+        let root = libraryRoot.resolvingSymlinksInPath().standardizedFileURL
         if let plan = try LibraryMigration.plan(at: root) {
             throw AppRuntimeError.migrationRequired(plan)
         }
@@ -110,6 +112,7 @@ public actor AppRuntime {
         let clickTracking = EventTrackAssociator(library: library)
 
         self.didCaptureClipboard = didCaptureClipboard
+        self.isClipboardCaptureEnabled = isClipboardCaptureEnabled
         self.converter = Converter(capabilities: conversionCapabilities)
         self.libraryRoot = root
         self.library = library
@@ -206,7 +209,10 @@ public actor AppRuntime {
         await indexPipeline.resumePending()
         libraryWatcher.start()
         _ = await clickTracking.start()
-        beginClipboardCapture()
+        if isClipboardCaptureEnabled {
+            await history.setClipboardRecordingEnabled(true)
+            beginClipboardCapture()
+        }
         do {
             let activeDirectories = try await coordinator.start()
             return CaptureDirectoryStatus(
@@ -232,20 +238,36 @@ public actor AppRuntime {
         }
     }
 
+    /// Enables or disables clipboard observation without affecting the global
+    /// panel shortcut. Disabling immediately stops polling and recording.
+    public func setClipboardCaptureEnabled(_ isEnabled: Bool) async {
+        isClipboardCaptureEnabled = isEnabled
+        await history.setClipboardRecordingEnabled(isEnabled)
+        if isEnabled {
+            beginClipboardCapture()
+        } else {
+            clipboardTask?.cancel()
+            clipboardTask = nil
+            await clipboardWatcher.stop()
+        }
+    }
+
     private func recordClipboardChange(_ change: ClipboardChange) async {
+        guard isClipboardCaptureEnabled, !Task.isCancelled else { return }
         do {
             switch change {
             case .text(let text):
-                try await history.record(text: text)
+                try await history.recordClipboard(text: text)
             case .image(let data, let pathExtension):
-                try await history.record(
+                try await history.recordClipboard(
                     imageData: data,
                     pathExtension: pathExtension,
                     displayName: "Copied image"
                 )
             case .fileURLs(let urls):
-                try await history.record(fileURLs: urls)
+                try await history.recordClipboard(fileURLs: urls)
             }
+            guard isClipboardCaptureEnabled, !Task.isCancelled else { return }
             await didCaptureClipboard()
         } catch {
             // A copy the history cannot store is not worth interrupting for; the
@@ -308,6 +330,7 @@ public actor AppRuntime {
         clipboardTask?.cancel()
         clipboardTask = nil
         await clipboardWatcher.stop()
+        await history.setClipboardRecordingEnabled(false)
         await coordinator.stop()
         await clickTracking.stop()
         await indexPipeline.stop()

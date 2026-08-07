@@ -56,6 +56,7 @@ private struct PDFEditorView: View {
     @State private var dragStart: CGPoint?
     @State private var editingTextObjectID: Int?
     @State private var textDraft = ""
+    @State private var zoomLevel = CanvasZoom.fit
     @FocusState private var isInlineTextFocused: Bool
 
     var body: some View {
@@ -114,9 +115,25 @@ private struct PDFEditorView: View {
             Button("Markdown…", action: saveAsMarkdown)
                 .buttonStyle(ReelBorderedButtonStyle())
                 .disabled(editor.isExportingMarkdown)
-            Button("Save As PDF…", action: saveAsPDF)
+            Button(editor.derivativeURL == nil ? "Save As PDF…" : "Save PDF", action: savePDF)
                 .buttonStyle(ReelBorderedButtonStyle())
                 .disabled(editor.isExporting)
+                .keyboardShortcut("s", modifiers: .command)
+                .accessibilityIdentifier("pdf-save")
+                .help(
+                    editor.derivativeURL == nil
+                        ? "Choose a safe destination for the edited copy"
+                        : "Save to \(editor.derivativeURL?.lastPathComponent ?? "the edited copy")"
+                )
+            Menu {
+                Button("Save As PDF…", action: saveAsPDF)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 24)
+            .disabled(editor.isExporting)
+            .help("Save the edited PDF to a different destination")
             Button {
                 editor.undo()
             } label: {
@@ -168,11 +185,21 @@ private struct PDFEditorView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .help("Add a blank page")
+                Button {
+                    editor.duplicateSelectedPage()
+                } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .help("Duplicate selected page")
+                .accessibilityLabel("Duplicate selected page")
+                .accessibilityIdentifier("pdf-duplicate-page")
                 Button {
                     editor.deleteSelectedPage()
                 } label: {
                     Image(systemName: "trash")
                 }
+                .help("Delete selected page")
             }
             .buttonStyle(ReelPlainButtonStyle())
             .padding(.bottom, 10)
@@ -186,27 +213,48 @@ private struct PDFEditorView: View {
             ForEach(PDFEditorTool.allCases) { tool in
                 PDFToolButton(
                     systemName: tool.symbol,
+                    title: tool.title,
                     help: tool.help,
-                    isActive: editor.activeTool == tool
+                    isActive: editor.activeTool == tool,
+                    accessibilityIdentifier: "pdf-tool-\(tool.rawValue)"
                 ) {
                     editor.activeTool = tool
                 }
             }
             Divider().overlay(theme.palette.line).padding(.vertical, 5)
-            PDFToolButton(systemName: "rotate.right", help: "Rotate page") {
+            PDFToolButton(systemName: "rotate.right", title: "Rotate", help: "Rotate page") {
                 editor.rotateSelectedPage()
             }
-            PDFToolButton(systemName: "arrow.up", help: "Move page earlier") {
+            PDFToolButton(
+                systemName: "arrow.up",
+                title: "Move Earlier",
+                help: "Move page earlier"
+            ) {
                 editor.moveSelectedPage(by: -1)
             }
-            PDFToolButton(systemName: "arrow.down", help: "Move page later") {
+            PDFToolButton(systemName: "arrow.down", title: "Move Later", help: "Move page later") {
                 editor.moveSelectedPage(by: 1)
             }
+            PDFToolButton(
+                systemName: "plus.square.on.square",
+                title: "Duplicate",
+                help: "Duplicate selected page"
+            ) {
+                editor.duplicateSelectedPage()
+            }
             Divider().overlay(theme.palette.line).padding(.vertical, 5)
-            PDFToolButton(systemName: "doc.text.magnifyingglass", help: "OCR this page") {
+            PDFToolButton(
+                systemName: "doc.text.magnifyingglass",
+                title: "OCR",
+                help: "OCR this page"
+            ) {
                 editor.recognizeSelectedPage()
             }
-            PDFToolButton(systemName: "text.document", help: "Export Markdown") {
+            PDFToolButton(
+                systemName: "text.document",
+                title: "Export Markdown",
+                help: "Export Markdown"
+            ) {
                 saveAsMarkdown()
             }
             Spacer()
@@ -218,44 +266,100 @@ private struct PDFEditorView: View {
 
     private var canvas: some View {
         GeometryReader { proxy in
-            ZStack {
-                theme.palette.surfaceSunken
-                if let image = editor.renderedPage {
-                    let frame = fittedRect(
-                        imageSize: CGSize(width: image.width, height: image.height),
-                        container: proxy.size
-                    )
-                    Image(decorative: image, scale: 1)
-                        .resizable()
-                        .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
-                        .shadow(color: .black.opacity(0.28), radius: 16, y: 7)
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
-                        .gesture(editGesture(in: frame))
-                        .onTapGesture {
-                            commitInlineTextEdit()
-                            editor.selectSourceTextBlock(nil)
-                            editor.selectLayer(nil)
+            if let image = editor.renderedPage {
+                let fit = fittedSize(
+                    imageSize: CGSize(width: image.width, height: image.height),
+                    container: proxy.size
+                )
+                let pageSize = CGSize(
+                    width: fit.width * zoomLevel,
+                    height: fit.height * zoomLevel
+                )
+                let workspaceSize = CGSize(
+                    width: max(proxy.size.width, pageSize.width + 128),
+                    height: max(proxy.size.height, pageSize.height + 128)
+                )
+                ScrollViewReader { scroller in
+                    ScrollView([.horizontal, .vertical]) {
+                        ZStack {
+                            theme.palette.surfaceSunken
+                            pageCanvas(image, size: pageSize)
+                                .position(
+                                    x: workspaceSize.width / 2,
+                                    y: workspaceSize.height / 2
+                                )
+                            Color.clear
+                                .frame(width: 1, height: 1)
+                                .position(
+                                    x: workspaceSize.width / 2,
+                                    y: workspaceSize.height / 2
+                                )
+                                .id(Self.pageCenterAnchor)
                         }
-                    if editor.activeTool == .select {
-                        ForEach(editor.editableTextBlocks) { block in
-                            sourceTextOverlay(block, pageFrame: frame)
-                        }
+                        .frame(width: workspaceSize.width, height: workspaceSize.height)
+                        .background(PDFMagnificationBridge(zoomLevel: $zoomLevel))
                     }
-                } else if editor.isRendering {
-                    ProgressView()
+                    .scrollIndicators(.visible)
+                    .background(theme.palette.surfaceSunken)
+                    .overlay(alignment: .topLeading) {
+                        activeToolHint
+                            .padding(12)
+                            .allowsHitTesting(false)
+                    }
+                    .overlay(alignment: .bottom) {
+                        zoomControls(scroller: scroller)
+                            .padding(.bottom, 14)
+                    }
+                }
+            } else {
+                ZStack {
+                    theme.palette.surfaceSunken
+                    if editor.isRendering { ProgressView() }
                 }
             }
         }
-        .padding(24)
         .onChange(of: isInlineTextFocused) { _, focused in
             if !focused { commitInlineTextEdit() }
         }
         .onExitCommand {
             cancelInlineTextEdit()
+        }
+    }
+
+    private func pageCanvas(_ image: CGImage, size: CGSize) -> some View {
+        let frame = CGRect(origin: .zero, size: size)
+        return ZStack {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: size.width, height: size.height)
+                .gesture(editGesture(in: frame))
+                .simultaneousGesture(
+                    SpatialTapGesture()
+                        .onEnded { value in
+                            handlePageTap(value.location, in: size)
+                        }
+                )
+            if editor.activeTool == .select {
+                ForEach(editor.editableTextBlocks) { block in
+                    sourceTextOverlay(block, pageFrame: frame)
+                }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .background(Color.white)
+        .shadow(color: .black.opacity(0.28), radius: 16, y: 7)
+    }
+
+    private func handlePageTap(_ point: CGPoint, in size: CGSize) {
+        commitInlineTextEdit()
+        editor.selectSourceTextBlock(nil)
+        if editor.activeTool == .text {
+            _ = editor.addText(at: normalized(point, in: size))
+        } else {
+            editor.selectLayer(nil)
         }
     }
 
@@ -423,19 +527,112 @@ private struct PDFEditorView: View {
         )
     }
 
-    private func fittedRect(imageSize: CGSize, container: CGSize) -> CGRect {
+    private var activeToolHint: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: editor.activeTool.symbol)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(editor.activeTool.title)
+                    .font(theme.type.label.font)
+                Text(editor.activeTool.help)
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .foregroundStyle(theme.palette.textPrimary)
+        .padding(.vertical, 7)
+        .padding(.horizontal, 9)
+        .frame(maxWidth: 340, alignment: .leading)
+        .background(theme.palette.surfacePanel.opacity(0.94))
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+                .strokeBorder(theme.palette.line, lineWidth: theme.metrics.hairline)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(editor.activeTool.help)
+    }
+
+    private func zoomControls(scroller: ScrollViewProxy) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                setZoom(CanvasZoom.zoomedOut(from: zoomLevel))
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel <= CanvasZoom.minimum)
+            .help("Zoom out")
+
+            Slider(
+                value: Binding(
+                    get: { CanvasZoom.exponent(for: zoomLevel) },
+                    set: { setZoom(CanvasZoom.value(forExponent: $0)) }
+                ),
+                in: CanvasZoom.exponentRange
+            )
+            .frame(width: 112)
+            .accessibilityLabel("PDF zoom")
+            .accessibilityValue(zoomPercentage)
+
+            Button {
+                setZoom(CanvasZoom.zoomedIn(from: zoomLevel))
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(zoomLevel >= CanvasZoom.maximum)
+            .help("Zoom in")
+
+            Text(zoomPercentage)
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textSecondary)
+                .frame(width: 42, alignment: .trailing)
+
+            Button("Fit") {
+                setZoom(CanvasZoom.fit)
+                scroller.scrollTo(Self.pageCenterAnchor, anchor: .center)
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .font(theme.type.caption.font)
+            .help("Fit the whole page")
+        }
+        .padding(5)
+        .background(theme.palette.surfacePanel.opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+    }
+
+    private static let pageCenterAnchor = "pdf-page-center"
+
+    private var zoomPercentage: String {
+        "\(Int((zoomLevel * 100).rounded()))%"
+    }
+
+    private func setZoom(_ value: Double) {
+        withAnimation(.smooth(duration: 0.18)) {
+            zoomLevel = CanvasZoom.clamped(value)
+        }
+    }
+
+    private func fittedSize(imageSize: CGSize, container: CGSize) -> CGSize {
         let available = CGSize(
-            width: max(container.width - 48, 1),
-            height: max(container.height - 48, 1)
+            width: max(container.width - 80, 120),
+            height: max(container.height - 80, 120)
         )
         let scale = min(available.width / imageSize.width, available.height / imageSize.height)
-        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-        return CGRect(
-            x: (container.width - size.width) / 2,
-            y: (container.height - size.height) / 2,
-            width: size.width,
-            height: size.height
-        )
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    }
+
+    private func savePDF() {
+        if !editor.saveToLastDerivative() { saveAsPDF() }
     }
 
     private func saveAsPDF() {
@@ -456,6 +653,97 @@ private struct PDFEditorView: View {
             guard response == .OK, let url = panel.url else { return }
             editor.exportMarkdown(to: url)
         }
+    }
+}
+
+private struct PDFMagnificationBridge: NSViewRepresentable {
+    @Binding var zoomLevel: Double
+
+    func makeNSView(context: Context) -> PDFMagnificationCaptureView {
+        let view = PDFMagnificationCaptureView()
+        update(view)
+        return view
+    }
+
+    func updateNSView(_ view: PDFMagnificationCaptureView, context: Context) {
+        update(view)
+    }
+
+    static func dismantleNSView(_ view: PDFMagnificationCaptureView, coordinator: ()) {
+        view.stopMonitoring()
+    }
+
+    private func update(_ view: PDFMagnificationCaptureView) {
+        view.currentZoom = { zoomLevel }
+        view.setZoom = { zoomLevel = CanvasZoom.clamped($0) }
+    }
+}
+
+@MainActor
+private final class PDFMagnificationCaptureView: NSView {
+    var currentZoom: () -> Double = { CanvasZoom.fit }
+    var setZoom: (Double) -> Void = { _ in }
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopMonitoring()
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+            guard let self, consume(event) else { return event }
+            return nil
+        }
+    }
+
+    func stopMonitoring() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+    }
+
+    private func consume(_ event: NSEvent) -> Bool {
+        guard event.window === window,
+            let scrollView = enclosingScrollView,
+            let documentView = scrollView.documentView
+        else { return false }
+        let clipView = scrollView.contentView
+        let clipPoint = clipView.convert(event.locationInWindow, from: nil)
+        guard clipView.bounds.contains(clipPoint) else { return false }
+
+        let oldBounds = documentView.bounds
+        guard oldBounds.width > 0, oldBounds.height > 0 else { return false }
+        let documentPoint = documentView.convert(event.locationInWindow, from: nil)
+        let normalized = CGPoint(
+            x: (documentPoint.x - oldBounds.minX) / oldBounds.width,
+            y: (documentPoint.y - oldBounds.minY) / oldBounds.height
+        )
+        let viewportOffset = CGPoint(
+            x: clipPoint.x - clipView.bounds.minX,
+            y: clipPoint.y - clipView.bounds.minY
+        )
+        let factor = exp(Double(event.magnification) * 0.9)
+        let next = CanvasZoom.clamped(currentZoom() * factor)
+        guard abs(next - currentZoom()) > 0.000_001 else { return true }
+        setZoom(next)
+
+        DispatchQueue.main.async { [weak scrollView, weak documentView] in
+            guard let scrollView, let documentView else { return }
+            let clipView = scrollView.contentView
+            let newBounds = documentView.bounds
+            let newPoint = CGPoint(
+                x: newBounds.minX + normalized.x * newBounds.width,
+                y: newBounds.minY + normalized.y * newBounds.height
+            )
+            let proposed = NSRect(
+                x: newPoint.x - viewportOffset.x,
+                y: newPoint.y - viewportOffset.y,
+                width: clipView.bounds.width,
+                height: clipView.bounds.height
+            )
+            clipView.scroll(to: clipView.constrainBoundsRect(proposed).origin)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+        return true
     }
 }
 
@@ -503,8 +791,10 @@ private struct PDFPageThumbnail: View {
 
 private struct PDFToolButton: View {
     let systemName: String
+    let title: String
     let help: String
     var isActive = false
+    var accessibilityIdentifier: String?
     let action: () -> Void
 
     var body: some View {
@@ -513,6 +803,9 @@ private struct PDFToolButton: View {
                 .frame(width: 30, height: 28)
         }
         .buttonStyle(ReelIconButtonStyle(isActive: isActive))
-        .help(help)
+        .help("\(title) — \(help)")
+        .accessibilityLabel(title)
+        .accessibilityHint(help)
+        .accessibilityIdentifier(accessibilityIdentifier ?? "pdf-action-\(title)")
     }
 }

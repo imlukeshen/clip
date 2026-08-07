@@ -49,6 +49,18 @@ private struct SettingsContent: View {
             }
             Section("Capture") {
                 Toggle(
+                    "Save system clipboard history",
+                    isOn: clipboardCaptureBinding
+                )
+                .accessibilityIdentifier("settings-clipboard-capture")
+                Text(
+                    "Off by default. When enabled, Clip stores eligible copied text, images, "
+                        + "and file locations locally for up to seven days. Sensitive, transient, "
+                        + "and oversized pasteboard items are ignored. Disable this at any time to stop watching."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                Toggle(
                     "Global Clip Clipboard shortcut (Command-Shift-C)",
                     isOn: clipboardShortcutBinding
                 )
@@ -140,9 +152,22 @@ private struct SettingsContent: View {
                 TextField("Model", text: $settings.model)
                 if settings.selectedProvider == .openAICompatible {
                     TextField("Base URL", text: $settings.compatibleBaseURL)
-                    Text("Ollama and LM Studio work without an API key.")
-                        .font(theme.type.caption.font)
-                        .foregroundStyle(theme.palette.textTertiary)
+                    HStack {
+                        Button("Test connection") {
+                            Task { await settings.testCompatibleProvider() }
+                        }
+                        .disabled(settings.isCheckingCompatibleProvider)
+                        if settings.isCheckingCompatibleProvider {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                    Text(
+                        "Ollama defaults to localhost:11434. Start Ollama and install the selected "
+                            + "model first (for example: `ollama pull llama3.2`). LM Studio also works "
+                            + "through its OpenAI-compatible server."
+                    )
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
                 } else {
                     HStack {
                         SecureField("API key", text: credentialBinding)
@@ -150,11 +175,18 @@ private struct SettingsContent: View {
                             let value = credentialBinding.wrappedValue
                             let provider = settings.selectedProvider
                             Task {
-                                await settings.saveCredential(value, provider: provider)
-                                credentialBinding.wrappedValue = ""
+                                if await settings.saveCredential(value, provider: provider) {
+                                    credentialBinding.wrappedValue = ""
+                                }
                             }
                         }
                     }
+                }
+                if let notice = settings.notice {
+                    Text(notice)
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.textSecondary)
+                        .textSelection(.enabled)
                 }
                 Picker("Confirm edits", selection: $settings.confirmationPolicy) {
                     Text("Destructive edits").tag(ConfirmationPolicy.confirmDestructive)
@@ -234,6 +266,13 @@ private struct SettingsContent: View {
         )
     }
 
+    private var clipboardCaptureBinding: Binding<Bool> {
+        Binding(
+            get: { model.isClipboardCaptureEnabled },
+            set: { model.setClipboardCaptureEnabled($0) }
+        )
+    }
+
     private var pdfFontDownloadBinding: Binding<Bool> {
         Binding(
             get: { model.isPDFFontAutoDownloadEnabled },
@@ -242,7 +281,7 @@ private struct SettingsContent: View {
     }
 
     private var providerBinding: Binding<ProviderID> {
-        Binding(get: { settings.selectedProvider }, set: { settings.selectedProvider = $0 })
+        Binding(get: { settings.selectedProvider }, set: { settings.selectProvider($0) })
     }
 
     private var credentialBinding: Binding<String> {

@@ -42,6 +42,8 @@ public final class EditorViewModel {
     public private(set) var inPoint: RationalTime?
     public private(set) var outPoint: RationalTime?
     public private(set) var targetedVideoTrackID: TrackID?
+    public private(set) var targetedAudioTrackID: TrackID?
+    public private(set) var targetedTrackKind: TrackKind
     public let undoManager = UndoManager()
     public let player = AVPlayer()
 
@@ -78,6 +80,10 @@ public final class EditorViewModel {
         self.isSnappingEnabled =
             UserDefaults.standard.object(forKey: "reel.timeline.snapping") as? Bool ?? true
         self.targetedVideoTrackID = document.timeline.videoTracks.first?.id
+        self.targetedAudioTrackID = document.timeline.audioTracks.first?.id
+        self.targetedTrackKind =
+            document.timeline.videoTracks.isEmpty && !document.timeline.audioTracks.isEmpty
+            ? .audio : .video
         self.undoManager.groupsByEvent = false
     }
 
@@ -130,6 +136,12 @@ public final class EditorViewModel {
             .first(where: { track in track.items.contains(where: { $0.id == itemID }) })?.name
     }
 
+    public var selectedTrackID: TrackID? {
+        guard let itemID = selectedItem?.id else { return nil }
+        return (document.timeline.videoTracks + document.timeline.audioTracks)
+            .first(where: { track in track.items.contains(where: { $0.id == itemID }) })?.id
+    }
+
     public var selectedNestID: String? { selectedItem?.nestID }
 
     public var canNestSelection: Bool { selection.count > 1 }
@@ -147,6 +159,23 @@ public final class EditorViewModel {
 
     public var targetedVideoTrack: Track? {
         document.timeline.videoTracks.first { $0.id == targetedVideoTrackID }
+    }
+
+    public var targetedAudioTrack: Track? {
+        document.timeline.audioTracks.first { $0.id == targetedAudioTrackID }
+    }
+
+    public var targetedTrack: Track? {
+        switch targetedTrackKind {
+        case .video: targetedVideoTrack
+        case .audio: targetedAudioTrack
+        }
+    }
+
+    public var targetedVideoTrackHasEmbeddedAudio: Bool {
+        targetedVideoTrack?.items.contains { item in
+            item.detachedAudioItemID == nil && assets[item.assetID]?.hasAudio == true
+        } == true
     }
 
     public var selectedLocalTime: RationalTime {
@@ -172,7 +201,7 @@ public final class EditorViewModel {
     }
 
     public var targetedGain: Double {
-        targetedVideoTrack?.gain.value(at: playhead) ?? 0
+        targetedTrack?.gain.value(at: playhead) ?? 0
     }
 
     public var hasOpacityKeyframeAtPlayhead: Bool {
@@ -184,7 +213,7 @@ public final class EditorViewModel {
     }
 
     public var hasGainKeyframeAtPlayhead: Bool {
-        targetedVideoTrack?.gain.keyframes.contains { $0.time == playhead } == true
+        targetedTrack?.gain.keyframes.contains { $0.time == playhead } == true
     }
 
     public var assetNames: [AssetID: String] {
@@ -193,6 +222,11 @@ public final class EditorViewModel {
 
     public var assetDurations: [AssetID: RationalTime] {
         assets.compactMapValues(\.duration)
+    }
+
+    /// Source assets that can legitimately paint an embedded-audio lane.
+    public var audioAssetIDs: Set<AssetID> {
+        Set(assets.values.lazy.filter(\.hasAudio).map(\.id))
     }
 
     public var missingAssetIDs: Set<AssetID> {
@@ -395,11 +429,13 @@ public final class EditorViewModel {
         } else {
             selection = related
         }
+        targetOwningTrack(of: itemID)
     }
 
     public func selectItem(at time: RationalTime) {
         if let item = document.item(at: time)?.item {
             selection = [item.id]
+            targetOwningTrack(of: item.id)
         }
     }
 
@@ -536,8 +572,14 @@ public final class EditorViewModel {
         for index in audioTracks.indices {
             audioTracks[index].items.removeAll { deleting.contains($0.id) }
         }
-        videoTracks = removingUnusedTracks(videoTracks, primaryName: "V1")
-        audioTracks = removingUnusedTracks(audioTracks, primaryName: "A1")
+        videoTracks = namedTracks(
+            removingUnusedTracks(videoTracks, primaryName: "V1"),
+            prefix: "V"
+        )
+        audioTracks = namedTracks(
+            removingUnusedTracks(audioTracks, primaryName: "A1"),
+            prefix: "A"
+        )
         var operations: [GraphOp] = []
         if videoTracks != document.timeline.videoTracks {
             operations.append(.setVideoTracks(videoTracks))
@@ -554,48 +596,87 @@ public final class EditorViewModel {
             {
                 self.targetedVideoTrackID = document.timeline.videoTracks.first?.id
             }
+            if let targetedAudioTrackID,
+                !document.timeline.audioTracks.contains(where: { $0.id == targetedAudioTrackID })
+            {
+                self.targetedAudioTrackID = document.timeline.audioTracks.first?.id
+            }
             notice = deleting.count == 1 ? "Media deleted." : "Selected media deleted."
         } catch {
             notice = "Locked media could not be deleted."
         }
     }
 
-    /// Materializes source audio into explicit A tracks. This keeps every
-    /// audible clip present, then selects the detached audio matching the video.
+    /// Separates only the selected video's embedded audio into an explicit A
+    /// lane and marks the video so playback cannot emit both copies.
     public func separateSelectedAudio() {
         guard canSeparateSelectedAudio, let source = selectedItem else {
             notice = "Select a video clip that contains audio."
             return
         }
-        if let existing = matchingAudioItem(for: source, in: document.timeline.audioTracks) {
+        if let detachedID = source.detachedAudioItemID,
+            let existing = document.timeline.audioTracks.lazy.flatMap(\.items)
+                .first(where: { $0.id == detachedID })
+        {
             selection = [existing.id]
+            targetOwningTrack(of: existing.id)
             notice = "Selected the separated audio."
             return
         }
-        var result = materializedAudioTracks()
-        if !document.timeline.audioTracks.isEmpty {
-            result.tracks = document.timeline.audioTracks
-            let audioItem = audioCopy(of: source)
-            insert(audioItem, intoFirstAvailableTrack: &result.tracks, prefix: "A")
-            result.sourceMap[source.id] = audioItem.id
-        }
-        guard !result.tracks.isEmpty else {
-            notice = "This project has no source audio to separate."
+        if let existing = legacySeparatedAudioItem(for: source) {
+            guard
+                let sourceTrack = document.timeline.videoTracks.first(where: {
+                    $0.items.contains(where: { $0.id == source.id })
+                })
+            else { return }
+            var videoItems = sourceTrack.items
+            guard let sourceIndex = videoItems.firstIndex(where: { $0.id == source.id }) else {
+                return
+            }
+            videoItems[sourceIndex].detachedAudioItemID = existing.id
+            do {
+                try perform(
+                    GraphPatch(
+                        ops: [.setTrackItems(sourceTrack.id, videoItems)],
+                        label: "Link Separated Audio",
+                        origin: .user
+                    )
+                )
+                selection = [existing.id]
+                targetOwningTrack(of: existing.id)
+                notice = "Selected the separated audio."
+            } catch {
+                notice = "The separated audio could not be selected."
+            }
             return
         }
+        let audioItem = audioCopy(of: source)
+        var audioTracks = document.timeline.audioTracks
+        if audioTracks.isEmpty {
+            audioTracks = [Track(id: TrackID(rawValue: "a1"), name: "A1")]
+        }
+        insert(audioItem, intoFirstAvailableTrack: &audioTracks, prefix: "A")
+        guard
+            let sourceTrack = document.timeline.videoTracks.first(where: {
+                $0.items.contains(where: { $0.id == source.id })
+            })
+        else { return }
+        var videoItems = sourceTrack.items
+        guard let sourceIndex = videoItems.firstIndex(where: { $0.id == source.id }) else { return }
+        videoItems[sourceIndex].detachedAudioItemID = audioItem.id
         do {
             try perform(
                 GraphPatch(
-                    ops: [.setAudioTracks(result.tracks)],
+                    ops: [
+                        .setTrackItems(sourceTrack.id, videoItems),
+                        .setAudioTracks(audioTracks),
+                    ],
                     label: "Separate Audio",
                     origin: .user
                 )
             )
-            if let detachedID = result.sourceMap[source.id]
-                ?? matchingAudioItem(for: source, in: result.tracks)?.id
-            {
-                selection = [detachedID]
-            }
+            selection = [audioItem.id]
+            targetOwningTrack(of: audioItem.id)
             notice = "Audio separated onto editable audio tracks."
         } catch {
             notice = "The audio could not be separated."
@@ -742,34 +823,158 @@ public final class EditorViewModel {
         guard !tracks.isEmpty else { return }
         let current = tracks.firstIndex { $0.id == targetedVideoTrackID } ?? -1
         targetedVideoTrackID = tracks[(current + 1) % tracks.count].id
+        targetedTrackKind = .video
         notice = "Targeting \(tracks[(current + 1) % tracks.count].name)."
+    }
+
+    public func cycleTargetTrack() {
+        let tracks =
+            targetedTrackKind == .audio && !document.timeline.audioTracks.isEmpty
+            ? document.timeline.audioTracks : document.timeline.videoTracks
+        guard !tracks.isEmpty else { return }
+        let currentID = targetedTrackKind == .audio ? targetedAudioTrackID : targetedVideoTrackID
+        let current = tracks.firstIndex { $0.id == currentID } ?? -1
+        targetTrack(tracks[(current + 1) % tracks.count].id)
     }
 
     public func targetVideoTrack(_ trackID: TrackID) {
         guard document.timeline.videoTracks.contains(where: { $0.id == trackID }) else { return }
         targetedVideoTrackID = trackID
+        targetedTrackKind = .video
         notice = "Targeting \(targetedVideoTrack?.name ?? "video track")."
     }
 
-    public func addOverlayTrack() {
-        var tracks = document.timeline.videoTracks
-        if tracks.isEmpty {
-            tracks.append(Track(id: TrackID(rawValue: "v1"), name: "V1"))
+    public func targetAudioTrack(_ trackID: TrackID) {
+        guard document.timeline.audioTracks.contains(where: { $0.id == trackID }) else { return }
+        targetedAudioTrackID = trackID
+        targetedTrackKind = .audio
+        notice = "Targeting \(targetedAudioTrack?.name ?? "audio track")."
+    }
+
+    public func targetTrack(_ trackID: TrackID) {
+        if document.timeline.videoTracks.contains(where: { $0.id == trackID }) {
+            targetVideoTrack(trackID)
+        } else if document.timeline.audioTracks.contains(where: { $0.id == trackID }) {
+            targetAudioTrack(trackID)
         }
-        let track = Track(id: .generate(), name: "V\(tracks.count + 1)")
+    }
+
+    public func addVideoTrack() {
+        var tracks = document.timeline.videoTracks
+        let track = Track(
+            id: tracks.isEmpty ? TrackID(rawValue: "v1") : .generate(),
+            name: "V\(tracks.count + 1)"
+        )
         tracks.append(track)
+        tracks = namedTracks(tracks, prefix: "V")
         do {
             try perform(
                 GraphPatch(
                     ops: [.setVideoTracks(tracks)],
-                    label: "Add Overlay Track",
+                    label: "Add Video Track",
                     origin: .user
                 )
             )
             targetedVideoTrackID = track.id
-            notice = "Added and targeted \(track.name) for overlays."
+            targetedTrackKind = .video
+            notice = "Added and targeted \(track.name)."
         } catch {
-            notice = "The overlay track could not be added."
+            notice = "The video track could not be added."
+        }
+    }
+
+    public func addOverlayTrack() {
+        addVideoTrack()
+    }
+
+    public func addAudioTrack() {
+        var tracks = document.timeline.audioTracks
+        let track = Track(
+            id: tracks.isEmpty ? TrackID(rawValue: "a1") : .generate(),
+            name: "A\(tracks.count + 1)"
+        )
+        tracks.append(track)
+        tracks = namedTracks(tracks, prefix: "A")
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.setAudioTracks(tracks)],
+                    label: "Add Audio Track",
+                    origin: .user
+                )
+            )
+            targetedAudioTrackID = track.id
+            targetedTrackKind = .audio
+            notice = "Added and targeted \(track.name)."
+        } catch {
+            notice = "The audio track could not be added."
+        }
+    }
+
+    public func canRemoveTrack(_ trackID: TrackID) -> Bool {
+        guard
+            let track = (document.timeline.videoTracks + document.timeline.audioTracks)
+                .first(where: { $0.id == trackID })
+        else { return false }
+        return track.items.isEmpty && !track.isLocked
+    }
+
+    public func removeTrack(_ trackID: TrackID) {
+        guard canRemoveTrack(trackID) else {
+            notice = "Only an empty, unlocked track can be removed."
+            return
+        }
+        if let index = document.timeline.videoTracks.firstIndex(where: { $0.id == trackID }) {
+            var tracks = document.timeline.videoTracks
+            let removedName = tracks[index].name
+            let wasTargeted = targetedVideoTrackID == trackID
+            tracks.remove(at: index)
+            tracks = namedTracks(tracks, prefix: "V")
+            do {
+                try perform(
+                    GraphPatch(
+                        ops: [.setVideoTracks(tracks)],
+                        label: "Remove Video Track",
+                        origin: .user
+                    )
+                )
+                if wasTargeted {
+                    targetedVideoTrackID = nearestTrackID(in: tracks, removedIndex: index)
+                }
+                if targetedTrackKind == .video, targetedVideoTrackID == nil {
+                    targetedTrackKind = .audio
+                }
+                notice = "Removed \(removedName)."
+            } catch {
+                notice = "The video track could not be removed."
+            }
+            return
+        }
+        guard
+            let index = document.timeline.audioTracks.firstIndex(where: { $0.id == trackID })
+        else { return }
+        var tracks = document.timeline.audioTracks
+        let removedName = tracks[index].name
+        let wasTargeted = targetedAudioTrackID == trackID
+        tracks.remove(at: index)
+        tracks = namedTracks(tracks, prefix: "A")
+        do {
+            try perform(
+                GraphPatch(
+                    ops: [.setAudioTracks(tracks)],
+                    label: "Remove Audio Track",
+                    origin: .user
+                )
+            )
+            if wasTargeted {
+                targetedAudioTrackID = nearestTrackID(in: tracks, removedIndex: index)
+            }
+            if targetedTrackKind == .audio, targetedAudioTrackID == nil {
+                targetedTrackKind = .video
+            }
+            notice = "Removed \(removedName)."
+        } catch {
+            notice = "The audio track could not be removed."
         }
     }
 
@@ -839,6 +1044,7 @@ public final class EditorViewModel {
             return false
         }
         selection = [item.id]
+        targetOwningTrack(of: item.id)
         return true
     }
 
@@ -891,7 +1097,7 @@ public final class EditorViewModel {
     }
 
     public func setTargetedGain(_ decibels: Double) {
-        guard let track = targetedVideoTrack else { return }
+        guard let track = targetedTrack else { return }
         if track.gain.keyframes.isEmpty {
             updateTargetTrack { $0.gain.constant = decibels }
         } else {
@@ -900,7 +1106,7 @@ public final class EditorViewModel {
     }
 
     public func setGainKeyframe(_ decibels: Double? = nil) {
-        guard let track = targetedVideoTrack else { return }
+        guard let track = targetedTrack else { return }
         do {
             try perform(
                 TimelineEditPlanner.setGainKeyframe(
@@ -1032,20 +1238,25 @@ public final class EditorViewModel {
 
     /// Returns whether a timeline item (and any media nested with it) can be
     /// placed on `trackID` at an explicit project time. The timeline canvas uses
-    /// this while dragging so an invalid overlap or locked lane is visible
+    /// this while dragging so an unsafe overwrite or locked lane is visible
     /// before the user releases the pointer.
     public func canMoveTimelineItem(
         _ itemID: ItemID,
         to trackID: TrackID,
         at timelineStart: RationalTime
     ) -> Bool {
-        (try? movedTimeline(itemID, to: trackID, at: timelineStart)) != nil
+        (try? movedTimeline(
+            itemID,
+            to: trackID,
+            at: timelineStart,
+            preservingOverwriteFragments: false
+        )) != nil
     }
 
-    /// Moves clips in project time without rippling neighbouring media. Moving
-    /// between V tracks creates an overlay edit; moving between A tracks keeps
-    /// detached audio independently editable. Nested media follows the anchor
-    /// by the same time delta and the entire operation is one exact undo step.
+    /// Moves clips in project time without rippling. Occupied destination media
+    /// is trimmed or split around the overwrite window; linked and nested media
+    /// is never split implicitly. Nested media follows the anchor by the same
+    /// time delta and the entire operation is one exact undo step.
     public func moveTimelineItem(
         _ itemID: ItemID,
         to trackID: TrackID,
@@ -1064,7 +1275,10 @@ public final class EditorViewModel {
             try perform(GraphPatch(ops: operations, label: "Move Media", origin: .user))
             if moved.kind == .video {
                 targetedVideoTrackID = trackID
+            } else {
+                targetedAudioTrackID = trackID
             }
+            targetedTrackKind = moved.kind
             selection = nestedItemIDs(containing: itemID)
             let trackName =
                 (document.timeline.videoTracks + document.timeline.audioTracks)
@@ -1402,6 +1616,7 @@ public final class EditorViewModel {
             GraphPatch(ops: [.setVideoTracks(tracks)], label: "Add Video", origin: .user)
         )
         targetedVideoTrackID = nextTargetID
+        targetedTrackKind = .video
         return item
     }
 
@@ -1409,43 +1624,40 @@ public final class EditorViewModel {
         _ asset: AssetRecord,
         duration: RationalTime
     ) throws -> TimelineItem {
-        var tracks =
-            document.timeline.audioTracks.isEmpty
-            ? materializedAudioTracks().tracks
-            : document.timeline.audioTracks
+        var tracks = document.timeline.audioTracks
+        if tracks.isEmpty {
+            tracks = [Track(id: TrackID(rawValue: "a1"), name: "A1")]
+        }
+        let targetIndex = tracks.firstIndex { $0.id == targetedAudioTrackID } ?? 0
+        guard !tracks[targetIndex].isLocked else {
+            throw ModelError.trackLocked(tracks[targetIndex].id)
+        }
         let item = TimelineItem(
             id: .generate(),
             assetID: asset.id,
             sourceRange: TimeRange(start: .zero, duration: duration),
             timelineStart: min(playhead, document.duration)
         )
-        insert(item, intoFirstAvailableTrack: &tracks, prefix: "A")
+        var nextTargetID = tracks[targetIndex].id
+        if overlaps(item, items: tracks[targetIndex].items) {
+            let newTrack = Track(
+                id: .generate(),
+                name: "A\(tracks.count + 1)",
+                items: [item]
+            )
+            tracks.append(newTrack)
+            nextTargetID = newTrack.id
+        } else {
+            tracks[targetIndex].items.append(item)
+            tracks[targetIndex].items.sort(by: timelineItemOrder)
+        }
+        tracks = namedTracks(tracks, prefix: "A")
         try perform(
             GraphPatch(ops: [.setAudioTracks(tracks)], label: "Add Audio", origin: .user)
         )
+        targetedAudioTrackID = nextTargetID
+        targetedTrackKind = .audio
         return item
-    }
-
-    private func materializedAudioTracks() -> (
-        tracks: [Track],
-        sourceMap: [ItemID: ItemID]
-    ) {
-        var tracks: [Track] = []
-        var sourceMap: [ItemID: ItemID] = [:]
-        let sources = document.timeline.videoTracks
-            .flatMap(\.items)
-            .filter { assets[$0.assetID]?.hasAudio == true }
-            .sorted { left, right in
-                left.timelineStart == right.timelineStart
-                    ? left.id.rawValue < right.id.rawValue
-                    : left.timelineStart < right.timelineStart
-            }
-        for source in sources {
-            let audioItem = audioCopy(of: source)
-            insert(audioItem, intoFirstAvailableTrack: &tracks, prefix: "A")
-            sourceMap[source.id] = audioItem.id
-        }
-        return (tracks, sourceMap)
     }
 
     private func audioCopy(of source: TimelineItem) -> TimelineItem {
@@ -1489,11 +1701,8 @@ public final class EditorViewModel {
         }
     }
 
-    private func matchingAudioItem(
-        for source: TimelineItem,
-        in tracks: [Track]
-    ) -> TimelineItem? {
-        tracks.lazy.flatMap(\.items).first { audio in
+    private func legacySeparatedAudioItem(for source: TimelineItem) -> TimelineItem? {
+        document.timeline.audioTracks.lazy.flatMap(\.items).first { audio in
             audio.assetID == source.assetID
                 && audio.sourceRange == source.sourceRange
                 && audio.timelineStart == source.timelineStart
@@ -1505,10 +1714,56 @@ public final class EditorViewModel {
         tracks.filter { !$0.items.isEmpty || $0.name == primaryName || $0.isLocked }
     }
 
+    private func namedTracks(_ tracks: [Track], prefix: String) -> [Track] {
+        tracks.enumerated().map { index, track in
+            var track = track
+            track.name = "\(prefix)\(index + 1)"
+            return track
+        }
+    }
+
+    private func nearestTrackID(in tracks: [Track], removedIndex: Int) -> TrackID? {
+        guard !tracks.isEmpty else { return nil }
+        return tracks[min(removedIndex, tracks.count - 1)].id
+    }
+
+    private func targetOwningTrack(of itemID: ItemID) {
+        if let track = document.timeline.videoTracks.first(where: { track in
+            track.items.contains(where: { $0.id == itemID })
+        }) {
+            targetedVideoTrackID = track.id
+            targetedTrackKind = .video
+            return
+        }
+        if let track = document.timeline.audioTracks.first(where: { track in
+            track.items.contains(where: { $0.id == itemID })
+        }) {
+            targetedAudioTrackID = track.id
+            targetedTrackKind = .audio
+        }
+    }
+
+    private func reconcileTrackTargets() {
+        if targetedVideoTrack == nil {
+            targetedVideoTrackID = document.timeline.videoTracks.first?.id
+        }
+        if targetedAudioTrack == nil {
+            targetedAudioTrackID = document.timeline.audioTracks.first?.id
+        }
+        if targetedTrack == nil {
+            if targetedVideoTrack != nil {
+                targetedTrackKind = .video
+            } else if targetedAudioTrack != nil {
+                targetedTrackKind = .audio
+            }
+        }
+    }
+
     private func movedTimeline(
         _ itemID: ItemID,
         to destinationTrackID: TrackID,
-        at requestedStart: RationalTime
+        at requestedStart: RationalTime,
+        preservingOverwriteFragments: Bool = true
     ) throws -> (
         videoTracks: [Track],
         audioTracks: [Track],
@@ -1580,6 +1835,7 @@ public final class EditorViewModel {
             audioTracks[index].items.removeAll { movingIDs.contains($0.id) }
         }
 
+        var plannedItems: [(item: TimelineItem, trackID: TrackID)] = []
         for moving in movingItems {
             var item = moving.item
             item.timelineStart = item.timelineStart + delta
@@ -1587,22 +1843,94 @@ public final class EditorViewModel {
                 throw ModelError.invalidTimelineStart(item.id, item.timelineStart)
             }
             let targetID = item.id == itemID ? destinationTrackID : moving.trackID
-            if let index = videoTracks.firstIndex(where: { $0.id == targetID }) {
-                videoTracks[index].items.append(item)
-            } else if let index = audioTracks.firstIndex(where: { $0.id == targetID }) {
-                audioTracks[index].items.append(item)
-            } else {
+            guard
+                videoTracks.contains(where: { $0.id == targetID })
+                    || audioTracks.contains(where: { $0.id == targetID })
+            else {
                 throw ModelError.trackNotFound(targetID)
+            }
+            plannedItems.append((item, targetID))
+        }
+
+        for (index, left) in plannedItems.enumerated() {
+            let leftRange = TimeRange(
+                start: left.item.timelineStart,
+                duration: left.item.timelineDuration
+            )
+            for right in plannedItems.dropFirst(index + 1) where right.trackID == left.trackID {
+                let rightRange = TimeRange(
+                    start: right.item.timelineStart,
+                    duration: right.item.timelineDuration
+                )
+                guard !leftRange.intersects(rightRange) else {
+                    throw ModelError.overlappingItems(left.trackID)
+                }
             }
         }
 
-        for index in videoTracks.indices {
-            videoTracks[index].items.sort(by: timelineItemOrder)
+        let linkedAudioIDs = Set(allTracks.flatMap(\.items).compactMap(\.detachedAudioItemID))
+        for planned in plannedItems {
+            let targetItems =
+                videoTracks.first(where: { $0.id == planned.trackID })?.items
+                ?? audioTracks.first(where: { $0.id == planned.trackID })?.items
+                ?? []
+            let plannedRange = TimeRange(
+                start: planned.item.timelineStart,
+                duration: planned.item.timelineDuration
+            )
+            let collisions = targetItems.filter { existing in
+                TimeRange(
+                    start: existing.timelineStart,
+                    duration: existing.timelineDuration
+                ).intersects(plannedRange)
+            }
+            guard
+                collisions.isEmpty
+                    || movingIDs.count == 1
+                        && collisions.allSatisfy({ item in
+                            item.nestID == nil
+                                && item.detachedAudioItemID == nil
+                                && !linkedAudioIDs.contains(item.id)
+                        })
+            else {
+                throw ModelError.overlappingItems(planned.trackID)
+            }
+
+            guard !preservingOverwriteFragments else { continue }
+            if let index = videoTracks.firstIndex(where: { $0.id == planned.trackID }) {
+                videoTracks[index].items.removeAll { collisions.contains($0) }
+                videoTracks[index].items.append(planned.item)
+            } else if let index = audioTracks.firstIndex(where: { $0.id == planned.trackID }) {
+                audioTracks[index].items.removeAll { collisions.contains($0) }
+                audioTracks[index].items.append(planned.item)
+            }
         }
-        for index in audioTracks.indices {
-            audioTracks[index].items.sort(by: timelineItemOrder)
+
+        if preservingOverwriteFragments {
+            var candidate = document
+            candidate.timeline.videoTracks = videoTracks
+            candidate.timeline.audioTracks = audioTracks
+            for planned in plannedItems {
+                let patch = try TimelineEditPlanner.overwrite(
+                    in: candidate,
+                    item: planned.item,
+                    on: planned.trackID,
+                    at: planned.item.timelineStart,
+                    splitRightItemID: .generate()
+                )
+                try candidate.apply(patch)
+            }
+            videoTracks = candidate.timeline.videoTracks
+            audioTracks = candidate.timeline.audioTracks
+        } else {
+            for index in videoTracks.indices {
+                videoTracks[index].items.sort(by: timelineItemOrder)
+            }
+            for index in audioTracks.indices {
+                audioTracks[index].items.sort(by: timelineItemOrder)
+            }
+            try validateTimelinePlacement(videoTracks + audioTracks)
         }
-        try validateTimelinePlacement(videoTracks + audioTracks)
         return (videoTracks, audioTracks, kind)
     }
 
@@ -1690,7 +2018,7 @@ public final class EditorViewModel {
     }
 
     private func updateTargetTrack(_ mutation: (inout Track) -> Void) {
-        guard var track = targetedVideoTrack else { return }
+        guard var track = targetedTrack else { return }
         mutation(&track)
         do {
             try perform(
@@ -1733,6 +2061,7 @@ public final class EditorViewModel {
         var candidate = document
         let inverse = try candidate.apply(patch)
         document = candidate
+        reconcileTrackTargets()
         selection = selection.filter { document.item($0) != nil }
         playhead = min(playhead, duration)
 
@@ -1750,6 +2079,7 @@ public final class EditorViewModel {
                 var candidate = target.document
                 let redo = try candidate.apply(patch)
                 target.document = candidate
+                target.reconcileTrackTargets()
                 target.registerUndo(redo)
                 target.undoManager.setActionName(patch.label)
                 target.selection = target.selection.filter { target.document.item($0) != nil }

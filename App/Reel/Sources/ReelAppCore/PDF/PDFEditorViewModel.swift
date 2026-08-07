@@ -13,14 +13,21 @@ public enum PDFEditorTool: String, CaseIterable, Sendable, Identifiable {
 
     public var id: String { rawValue }
 
-    public var title: String { rawValue.capitalized }
+    public var title: String {
+        switch self {
+        case .select: "Select"
+        case .text: "Add Text"
+        case .highlight: "Highlight"
+        case .redact: "Redact"
+        }
+    }
 
     public var help: String {
         switch self {
         case .select: "Select text or edits. Double-click PDF text to edit it in place."
-        case .text: "Drag to add a new text box."
+        case .text: "Click to place text or drag a text box, then type in the inspector."
         case .highlight: "Drag across an area to highlight it."
-        case .redact: "Drag across an area to permanently cover it on export."
+        case .redact: "Drag over sensitive content. Redaction is permanent in the exported PDF."
         }
     }
 
@@ -48,6 +55,8 @@ public final class PDFEditorViewModel {
     public private(set) var isResolvingFont = false
     public private(set) var generatedMarkdown: String?
     public private(set) var notice: String?
+    /// Last successfully exported edited copy for Command-S during this editor session.
+    public private(set) var derivativeURL: URL?
     public var selectedPageID: PDFPageID
     public var selectedLayerID: PDFLayerID?
     public var selectedSourceTextBlockID: Int?
@@ -245,6 +254,36 @@ public final class PDFEditorViewModel {
         }
     }
 
+    public func duplicateSelectedPage() {
+        guard let page = selectedPage,
+            let index = document.pages.firstIndex(where: { $0.id == page.id })
+        else { return }
+        let duplicate = PDFPage(
+            sourcePageIndex: page.sourcePageIndex,
+            size: page.size,
+            rotation: page.rotation,
+            layers: page.layers.map(Self.duplicatedLayer),
+            ocrText: page.ocrText
+        )
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
+        do {
+            try perform(
+                .insertPage(duplicate, atIndex: index + 1),
+                actionName: "Duplicate Page"
+            )
+            selectPage(duplicate.id)
+            registerPageSelectionUndo(
+                selecting: page.id,
+                inversePageID: duplicate.id,
+                actionName: "Duplicate Page"
+            )
+            undoManager.setActionName("Duplicate Page")
+        } catch {
+            notice = "The page could not be duplicated."
+        }
+    }
+
     public func deleteSelectedPage() {
         guard document.pages.count > 1 else {
             notice = "A PDF must keep at least one page."
@@ -265,10 +304,8 @@ public final class PDFEditorViewModel {
         case .select:
             return
         case .text:
-            let font =
-                pageAnalysis?.fonts.first
-                ?? PDFFontDescriptor(postScriptName: "Helvetica")
-            layer = .text(PDFTextLayer(text: "Text", frame: rect, font: font, fontSize: 14))
+            _ = addText(in: rect)
+            return
         case .highlight:
             layer = .highlight(PDFHighlightLayer(regions: [rect]))
         case .redact:
@@ -283,6 +320,40 @@ public final class PDFEditorViewModel {
             selectedLayerID = layer.id
         } catch {
             notice = "The PDF edit could not be added."
+        }
+    }
+
+    /// Places a useful default text box for either a click or a drag.
+    @discardableResult
+    public func addText(at point: CGPoint) -> PDFLayerID? {
+        let width = 0.32
+        let height = 0.08
+        let origin = CGPoint(
+            x: min(max(point.x - width / 2, 0), 1 - width),
+            y: min(max(point.y - height / 2, 0), 1 - height)
+        )
+        return addText(in: CGRect(origin: origin, size: CGSize(width: width, height: height)))
+    }
+
+    @discardableResult
+    private func addText(in rect: CGRect) -> PDFLayerID? {
+        let font = pageAnalysis?.fonts.first ?? PDFFontDescriptor(postScriptName: "Helvetica")
+        let text = PDFTextLayer(text: "Text", frame: rect, font: font, fontSize: 14)
+        do {
+            try perform(
+                .addLayer(
+                    .text(text),
+                    to: selectedPageID,
+                    atIndex: selectedPage?.layers.count ?? 0
+                ),
+                actionName: "Add Text"
+            )
+            selectedLayerID = text.id
+            notice = "Text box added. Type in the inspector to edit it."
+            return text.id
+        } catch {
+            notice = "The text box could not be added."
+            return nil
         }
     }
 
@@ -398,7 +469,15 @@ public final class PDFEditorViewModel {
         }
     }
 
-    public func export(to url: URL) {
+    /// Exports an edited derivative without ever replacing the immutable source asset.
+    @discardableResult
+    public func export(to url: URL) -> Bool {
+        guard !isExporting else { return true }
+        guard !Self.refersToSameFile(url, sourceURL) else {
+            notice =
+                "The original PDF is immutable. Choose a different filename to save an edited copy."
+            return false
+        }
         let document = document
         let renderer = renderer
         isExporting = true
@@ -407,11 +486,59 @@ public final class PDFEditorViewModel {
                 try await Task.detached(priority: .userInitiated) {
                     try renderer.export(document, to: url)
                 }.value
+                derivativeURL = url.standardizedFileURL
                 notice = "Saved \(url.lastPathComponent)."
             } catch {
                 notice = "The edited PDF could not be saved."
             }
             isExporting = false
+        }
+        return true
+    }
+
+    /// Saves to the last successful edited copy. Returning false asks the view
+    /// to present Save As because no safe in-session destination is available.
+    @discardableResult
+    public func saveToLastDerivative() -> Bool {
+        guard !isExporting else { return true }
+        guard let derivativeURL,
+            !Self.refersToSameFile(derivativeURL, sourceURL)
+        else {
+            self.derivativeURL = nil
+            return false
+        }
+        return export(to: derivativeURL)
+    }
+
+    /// Compares canonical paths first, then volume-stable file identifiers so
+    /// symlinks and hard links cannot bypass the source-asset protection.
+    static func refersToSameFile(_ candidate: URL, _ source: URL) -> Bool {
+        let canonicalCandidate = candidate.standardizedFileURL.resolvingSymlinksInPath()
+        let canonicalSource = source.standardizedFileURL.resolvingSymlinksInPath()
+        if canonicalCandidate == canonicalSource { return true }
+
+        guard
+            let candidateIdentifier = try? canonicalCandidate.resourceValues(
+                forKeys: [.fileResourceIdentifierKey]
+            ).fileResourceIdentifier,
+            let sourceIdentifier = try? canonicalSource.resourceValues(
+                forKeys: [.fileResourceIdentifierKey]
+            ).fileResourceIdentifier
+        else { return false }
+        return (candidateIdentifier as? NSObject)?.isEqual(sourceIdentifier) == true
+    }
+
+    private static func duplicatedLayer(_ layer: PDFLayer) -> PDFLayer {
+        switch layer {
+        case .text(var text):
+            text.id = .generate()
+            return .text(text)
+        case .highlight(var highlight):
+            highlight.id = .generate()
+            return .highlight(highlight)
+        case .redaction(var redaction):
+            redaction.id = .generate()
+            return .redaction(redaction)
         }
     }
 
@@ -554,6 +681,26 @@ public final class PDFEditorViewModel {
             } catch {
                 target.notice = "The PDF edit could not be undone."
             }
+        }
+    }
+
+    private func registerPageSelectionUndo(
+        selecting pageID: PDFPageID,
+        inversePageID: PDFPageID,
+        actionName: String
+    ) {
+        undoManager.registerUndo(withTarget: self) { target in
+            guard target.document.page(pageID) != nil else { return }
+            target.selectedPageID = pageID
+            target.selectedLayerID = nil
+            target.selectedSourceTextBlockID = nil
+            target.rebuild()
+            target.registerPageSelectionUndo(
+                selecting: inversePageID,
+                inversePageID: pageID,
+                actionName: actionName
+            )
+            target.undoManager.setActionName(actionName)
         }
     }
 

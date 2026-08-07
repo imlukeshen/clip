@@ -6,6 +6,8 @@ import Foundation
 public enum TimelineViewport {
     public static let fitZoom = 1.0
     public static let maximumZoom = 12.0
+    public static let minimumEditingTail = 10.0
+    public static let editingTailRatio = 0.25
 
     public static func clampedZoom(_ zoom: Double) -> Double {
         min(max(zoom, fitZoom), maximumZoom)
@@ -13,6 +15,14 @@ public enum TimelineViewport {
 
     public static func contentWidth(viewportWidth: Double, zoom: Double) -> Double {
         max(viewportWidth, viewportWidth * clampedZoom(zoom))
+    }
+
+    /// Extends the ruler beyond the final item so a clip can be dropped into
+    /// future project time. The proportional tail remains visibly useful on a
+    /// long project while the minimum keeps short projects practical.
+    public static func editingDuration(projectDuration: Double) -> Double {
+        let duration = projectDuration.isFinite ? max(projectDuration, 0) : 0
+        return duration + max(minimumEditingTail, duration * editingTailRatio)
     }
 
     public static func zooming(_ zoom: Double, by factor: Double) -> Double {

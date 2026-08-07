@@ -540,22 +540,12 @@ final class TextEditorTypingTests: XCTestCase {
             "\\documentclass{article}\n\\begin{document}\nClip PDF\n\\end{document}"
         )
 
-        // Scratch buffers detect LaTeX from their contents before the explicit
-        // language choice promotes the default filename to a TeX main file.
+        // Scratch buffers detect LaTeX from their contents and promote the
+        // default filename to a TeX main file without a manual language choice.
         XCTAssertTrue(
             app.descendants(matching: .any)["latex-split-editor"]
                 .waitForExistence(timeout: 5)
         )
-
-        // Choosing LaTeX explicitly promotes the default scratch filename from
-        // Untitled.txt to Untitled.tex, which makes it the project main file.
-        // SwiftUI exposes Menu as different accessibility roles across macOS
-        // versions, so query by identifier instead of assuming PopUpButton.
-        let languageMenu = app.descendants(matching: .any)["text-language-menu"]
-        XCTAssertTrue(languageMenu.waitForExistence(timeout: 5))
-        languageMenu.click()
-        XCTAssertTrue(app.menuItems["LaTeX"].waitForExistence(timeout: 5))
-        app.menuItems["LaTeX"].click()
 
         let buildButton = app.buttons["latex-compile"]
         XCTAssertTrue(buildButton.waitForExistence(timeout: 5))

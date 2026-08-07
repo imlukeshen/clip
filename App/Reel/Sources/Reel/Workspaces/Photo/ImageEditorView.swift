@@ -32,6 +32,12 @@ struct ImageEditorView: View {
                         editor.addRedaction(
                             regions: regions.map(LiveTextFrame.canvasRect(for:))
                         )
+                    },
+                    onEdit: { text, regions in
+                        editor.convertRecognizedTextToEditableLayer(
+                            text,
+                            regions: regions.map(LiveTextFrame.canvasRect(for:))
+                        )
                     }
                 )
             }
@@ -47,11 +53,21 @@ struct ImageEditorView: View {
                     }
             }
         }
-        .task(id: editor.document.sourceAssetID) {
-            liveTextSpans = await model.indexedText(
-                at: .zero,
-                in: editor.document.sourceAssetID
+        .task(
+            id: PhotoLiveTextRefreshID(
+                assetID: editor.document.sourceAssetID,
+                indexProgress: model.indexProgress
             )
+        ) {
+            // OCR is published after ingest. Refresh with index progress so an
+            // editor opened immediately after import gains Live Text in place.
+            let assetID = editor.document.sourceAssetID
+            let spans = await model.indexedText(
+                at: .zero,
+                in: assetID
+            )
+            guard !Task.isCancelled, editor.document.sourceAssetID == assetID else { return }
+            liveTextSpans = spans
         }
     }
 
@@ -413,6 +429,7 @@ private struct ImageCanvasView: View {
     let liveTextSpans: [OCRSpan]
     let onSearch: (String) -> Void
     let onRedact: ([NormalizedRect]) -> Void
+    let onEdit: (String, [NormalizedRect]) -> Void
     @State private var draftPoints: [CGPoint] = []
     @State private var selectionGestureDidBegin = false
     @State private var transientTransform: ImageLayerTransformState?
@@ -554,19 +571,26 @@ private struct ImageCanvasView: View {
                     .interpolation(.high)
             }
 
-            if editor.activeTool == .select, !liveTextSpans.isEmpty {
-                LiveTextOverlay(
-                    spans: liveTextSpans,
-                    onSearch: onSearch,
-                    onRedact: onRedact
-                )
-            }
-
             if editor.activeTool == .crop, let crop = editor.pendingCrop {
                 CropOverlay(crop: crop)
             } else {
                 draftOverlay
                 selectionOverlay
+            }
+
+            if editor.activeTool == .select,
+                PhotoLiveTextGeometry.isSourceAligned(editor.document.geometry),
+                !liveTextSpans.isEmpty
+            {
+                // Keep recognized text above layer transform handles. The AppKit
+                // overlay returns nil from hitTest outside OCR regions, so empty
+                // canvas still reaches normal layer selection and transforms.
+                LiveTextOverlay(
+                    spans: liveTextSpans,
+                    onSearch: onSearch,
+                    onRedact: onRedact,
+                    onEdit: onEdit
+                )
             }
 
             if editor.isRendering {
@@ -920,6 +944,34 @@ private struct ImageCanvasView: View {
             result, point in
             result.union(CGRect(origin: pixelPoint(point, in: size), size: .zero))
         }
+    }
+}
+
+struct PhotoLiveTextRefreshID: Equatable {
+    let assetID: AssetID
+    let currentStage: IndexStage?
+
+    init(assetID: AssetID, indexProgress: IndexProgress) {
+        self.assetID = assetID
+        // Progress for another asset must not tear down the selection in this
+        // editor. The identity changes only while this asset enters/leaves a
+        // stage, which is when newly published OCR can actually become visible.
+        currentStage =
+            indexProgress.currentAssetID == assetID
+            ? indexProgress.currentStage
+            : nil
+    }
+}
+
+enum PhotoLiveTextGeometry {
+    static func isSourceAligned(_ geometry: Geometry) -> Bool {
+        let identityCrop = CGRect(x: 0, y: 0, width: 1, height: 1)
+        let normalizedRotation = geometry.rotationDegrees.truncatingRemainder(dividingBy: 360)
+        return geometry.crop == identityCrop
+            && abs(normalizedRotation) < 0.000_001
+            && abs(geometry.scale - 1) < 0.000_001
+            && !geometry.isFlippedHorizontally
+            && !geometry.isFlippedVertically
     }
 }
 

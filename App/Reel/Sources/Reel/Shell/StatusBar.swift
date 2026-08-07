@@ -10,7 +10,16 @@ struct StatusBar: View {
         HStack(spacing: theme.metrics.spacing.lg) {
             Text(model.libraryRoot.path(percentEncoded: false))
                 .lineLimit(1)
-            Text("Local only")
+            Text(
+                model.aiSettings.usesLoopbackAssistantEndpoint
+                    ? "AI endpoint: localhost"
+                    : "AI endpoint: network"
+            )
+            .help(
+                model.aiSettings.usesLoopbackAssistantEndpoint
+                    ? "Assistant requests are sent to the configured loopback endpoint."
+                    : "Assistant requests are sent to the configured network provider."
+            )
             Spacer()
             Text("\(model.assets.count) files")
             Text(byteCount)

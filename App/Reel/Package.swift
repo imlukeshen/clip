@@ -69,7 +69,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ReelTests",
-            dependencies: ["Reel", "CoreModel", "DesignSystem", "TextEngine"]
+            dependencies: ["Reel", "CoreModel", "DesignSystem", "TextEngine", "SearchEngine"]
         ),
     ],
     swiftLanguageModes: [.v6]
