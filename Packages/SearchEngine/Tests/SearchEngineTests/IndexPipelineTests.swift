@@ -18,6 +18,7 @@ struct IndexPipelineTests {
         let firstPipeline = IndexPipeline(
             store: fixture.store,
             processor: firstProcessor,
+            resourceSnapshot: nominalResources,
             retryDelay: .milliseconds(10)
         )
         await firstPipeline.resumePending()
@@ -30,6 +31,7 @@ struct IndexPipelineTests {
         let secondPipeline = IndexPipeline(
             store: fixture.store,
             processor: secondProcessor,
+            resourceSnapshot: nominalResources,
             retryDelay: .milliseconds(10)
         )
         await secondPipeline.resumePending()
@@ -53,6 +55,7 @@ struct IndexPipelineTests {
         let pipeline = IndexPipeline(
             store: fixture.store,
             processor: processor,
+            resourceSnapshot: nominalResources,
             retryDelay: .milliseconds(10)
         )
 
@@ -85,6 +88,7 @@ struct IndexPipelineTests {
         let pipeline = IndexPipeline(
             store: fixture.store,
             processor: processor,
+            resourceSnapshot: nominalResources,
             retryDelay: .milliseconds(10)
         )
 
@@ -107,6 +111,7 @@ struct IndexPipelineTests {
         let pipeline = IndexPipeline(
             store: fixture.store,
             processor: processor,
+            resourceSnapshot: nominalResources,
             retryDelay: .milliseconds(10)
         )
         let assetID = fixture.assets[0].id
@@ -117,10 +122,12 @@ struct IndexPipelineTests {
             try await fixture.store.indexJobs().first?.state == .done
         }
 
-        await pipeline.reindex(assetID, stages: [.embedding])
-        try await waitUntil { await processor.callCount() == 2 }
-        try await waitUntil {
-            try await fixture.store.indexJobs().first?.state == .done
+        for expectedCallCount in 2...20 {
+            await pipeline.reindex(assetID, stages: [.embedding])
+            try await waitUntil { await processor.callCount() == expectedCallCount }
+            try await waitUntil {
+                try await fixture.store.indexJobs().first?.state == .done
+            }
         }
         await pipeline.stop()
 
@@ -129,6 +136,7 @@ struct IndexPipelineTests {
         #expect(jobs[0].assetID == assetID)
         #expect(jobs[0].stage == .embedding)
         #expect(jobs[0].state == .done)
+        #expect(await processor.callCount() == 20)
     }
 
     @Test("Serious thermal pressure defers all stages")
@@ -226,6 +234,14 @@ private struct Fixture {
     }
 }
 
+private let nominalResources: @Sendable () -> IndexResourceSnapshot = {
+    IndexResourceSnapshot(thermalLevel: .nominal, isLowPowerModeEnabled: false)
+}
+
+private enum IndexPipelineTestError: Error {
+    case timedOutWaitingForState
+}
+
 private func waitUntil(
     timeout: Duration = .seconds(5),
     condition: @escaping @Sendable () async throws -> Bool
@@ -236,5 +252,5 @@ private func waitUntil(
         if try await condition() { return }
         try await Task.sleep(for: .milliseconds(10))
     }
-    Issue.record("Timed out waiting for index pipeline state")
+    throw IndexPipelineTestError.timedOutWaitingForState
 }

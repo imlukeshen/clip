@@ -136,6 +136,7 @@ public actor IndexPipeline {
     private let retryDelay: Duration
     private let continuation: AsyncStream<IndexProgress>.Continuation
     private var workerTask: Task<Void, Never>?
+    private var workerWakeRequested = false
     private var wakeTask: Task<Void, Never>?
     private var manualPauseReasons: Set<IndexPauseReason> = []
     private var currentJob: IndexJobRecord?
@@ -254,16 +255,23 @@ public actor IndexPipeline {
     public func stop() async {
         wakeTask?.cancel()
         wakeTask = nil
+        workerWakeRequested = false
         workerTask?.cancel()
         _ = await workerTask?.value
         workerTask = nil
+        workerWakeRequested = false
         try? await store.resetInterruptedIndexJobs()
         currentJob = nil
         await publishProgress()
     }
 
     private func startWorkerIfNeeded() {
-        guard workerTask == nil, manualPauseReasons.isEmpty else { return }
+        guard manualPauseReasons.isEmpty else { return }
+        guard workerTask == nil else {
+            workerWakeRequested = true
+            return
+        }
+        workerWakeRequested = false
         workerTask = Task(priority: .background) { [weak self] in
             await self?.drainQueue()
         }
@@ -296,6 +304,10 @@ public actor IndexPipeline {
                     resources.isLowPowerModeEnabled
                     ? [.lowPower] : []
                 await publishProgress(additionalPauseReasons: reasons)
+                if workerWakeRequested {
+                    workerWakeRequested = false
+                    continue
+                }
                 if !reasons.isEmpty { scheduleResourceRetry() }
                 return
             }
