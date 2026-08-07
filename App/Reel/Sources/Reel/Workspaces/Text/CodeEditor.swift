@@ -171,13 +171,17 @@ struct CodeEditor: NSViewRepresentable {
         context.coordinator.ruler?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
-        if languageChanged, language == .latex, shouldRestoreEditing {
+        if languageChanged, language == .latex {
             // Adding the PDF preview mutates the surrounding NSSplitView after
-            // this representable update. AppKit can consequently resign or
-            // reparent the text view and reset its typing attributes after the
-            // normal appearance pass. Reassert both on the next run-loop turn,
-            // once the split hierarchy has settled.
-            context.coordinator.restoreEditingAfterWorkspaceTransition(in: container)
+            // this representable update. AppKit can consequently reparent the
+            // text view and invalidate its viewport after the normal layout and
+            // appearance passes. Always repair that geometry once the split has
+            // settled, even when a language menu owns focus. Only restore first
+            // responder status when the source editor previously owned it.
+            context.coordinator.restoreEditingAfterWorkspaceTransition(
+                in: container,
+                restoreFocus: shouldRestoreEditing
+            )
         }
     }
 
@@ -585,7 +589,8 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         fileprivate func restoreEditingAfterWorkspaceTransition(
-            in container: CodeEditorContainerView
+            in container: CodeEditorContainerView,
+            restoreFocus: Bool
         ) {
             guard
                 let expectedTextView = container.scrollView.documentView as? CodeTextView
@@ -597,8 +602,12 @@ struct CodeEditor: NSViewRepresentable {
                     container.scrollView.documentView === textView,
                     let window = container.window
                 else { return }
+                container.needsLayout = true
                 container.layoutSubtreeIfNeeded()
-                window.makeFirstResponder(textView)
+                container.scrollView.needsLayout = true
+                container.scrollView.layoutSubtreeIfNeeded()
+                container.scrollView.contentView.needsLayout = true
+                container.scrollView.contentView.layoutSubtreeIfNeeded()
                 updateAppearance(
                     textView: textView,
                     scrollView: container.scrollView,
@@ -607,6 +616,18 @@ struct CodeEditor: NSViewRepresentable {
                     settings: parent.settings
                 )
                 applyVisibleBaseStyle(in: nil, to: textView)
+                textView.needsLayout = true
+                textView.layoutSubtreeIfNeeded()
+                if let textContainer = textView.textContainer {
+                    textView.layoutManager?.ensureLayout(for: textContainer)
+                }
+                textView.needsDisplay = true
+                container.scrollView.contentView.needsDisplay = true
+                container.scrollView.needsDisplay = true
+                container.needsDisplay = true
+                if restoreFocus {
+                    window.makeFirstResponder(textView)
+                }
             }
         }
 
