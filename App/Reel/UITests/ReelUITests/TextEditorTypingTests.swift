@@ -523,7 +523,6 @@ final class TextEditorTypingTests: XCTestCase {
             named: "latex-pdf",
             arguments: [
                 "-clip.tex.packageAccess", "allowNetwork",
-                "-clip.tex.compileMode", "manual",
             ]
         )
         defer { try? FileManager.default.removeItem(at: libraryRoot) }
@@ -545,6 +544,15 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(
             app.descendants(matching: .any)["latex-split-editor"]
                 .waitForExistence(timeout: 5)
+        )
+
+        // Even a legacy automatic preference must not start compilation from
+        // typing. The source stays interactive and the preview waits for Build.
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(app.staticTexts["Not built"].exists)
+        XCTAssertEqual(
+            app.textViews["text-editor"].value as? String,
+            "\\documentclass{article}\n\\begin{document}\nClip PDF\n\\end{document}"
         )
 
         let buildButton = app.buttons["latex-compile"]

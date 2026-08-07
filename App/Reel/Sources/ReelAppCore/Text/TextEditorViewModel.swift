@@ -35,11 +35,6 @@ public enum TextEditorCommandError: Error, Sendable, Equatable, LocalizedError {
     }
 }
 
-private enum TeXCompileRequestOrigin: Equatable {
-    case automatic
-    case requested
-}
-
 private struct TeXBuildFileIdentity: Equatable {
     var id: FileID?
     var relativePath: String
@@ -100,7 +95,6 @@ public final class TextEditorViewModel {
             }
             rebuildTeXProjectAnalysis()
             scheduleContentAutosave()
-            scheduleTeXCompilation()
             scheduleLanguageDetection()
         }
     }
@@ -134,8 +128,6 @@ public final class TextEditorViewModel {
     public private(set) var texDiagnostics: [TeXDiagnostic] = []
     /// Whether the editor is waiting for the one-time package-network choice.
     public private(set) var needsTeXPackageConsent = false
-    /// Automatic, on-save, or manual scheduling.
-    public private(set) var texCompileMode: TeXCompileMode
     /// `nil` until the user chooses whether Tectonic may fetch packages.
     public private(set) var texPackageAccess: TeXPackageAccess?
     /// Dependency graph for the active LaTeX folder.
@@ -165,10 +157,9 @@ public final class TextEditorViewModel {
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
     @ObservationIgnored private var texEngine: (any TeXEngine)?
-    private var texCompileDebounceTask: Task<Void, Never>?
     private var texCompileTask: Task<Void, Never>?
     private var texCompileGeneration = UUID()
-    private var texCompilePendingOrigin: TeXCompileRequestOrigin?
+    private var hasPendingTeXCompileRequest = false
     private var texSuccessfulSources: [FileID: String]?
     private var texSuccessfulBuildIdentity: TeXBuildIdentity?
     private var isStopped = false
@@ -241,9 +232,6 @@ public final class TextEditorViewModel {
         self.persistStructure = persistingStructure
         self.persistContents = persistingContents
         self.texPreferences = texPreferences
-        self.texCompileMode =
-            texPreferences.string(forKey: "clip.tex.compileMode")
-            .flatMap(TeXCompileMode.init(rawValue:)) ?? .automatic
         self.texPackageAccess =
             texPreferences.string(forKey: "clip.tex.packageAccess")
             .flatMap(TeXPackageAccess.init(rawValue:))
@@ -270,6 +258,13 @@ public final class TextEditorViewModel {
         return document.files.first { $0.id == id }
     }
 
+    /// Whether the visible PDF was produced from an older source snapshot.
+    public var texHasUnbuiltChanges: Bool {
+        guard texPDFURL != nil else { return false }
+        return texSuccessfulSources != textBuffers
+            || texSuccessfulBuildIdentity != currentTeXBuildIdentity()
+    }
+
     public func isReachableFromMain(_ file: TextFile) -> Bool {
         texProjectAnalysis?.reachableFiles.contains(file.relativePath) ?? true
     }
@@ -278,7 +273,6 @@ public final class TextEditorViewModel {
     public func start() {
         isStopped = false
         startFileMonitor()
-        scheduleTeXCompilation()
     }
 
     /// Stops background work and flushes any dirty content before closing.
@@ -308,7 +302,6 @@ public final class TextEditorViewModel {
             rebuildTeXProjectAnalysis()
             if Self.changesTeXBuildIdentity(patch) {
                 invalidateTeXBuildIdentity()
-                if language == .latex { scheduleTeXCompilation() }
             }
             persistStructureNow()
         } catch {
@@ -445,9 +438,7 @@ public final class TextEditorViewModel {
             )
         }
         rebuildTeXProjectAnalysis()
-        if language == .latex {
-            scheduleTeXCompilation()
-        } else {
+        if language != .latex {
             cancelTeXCompilation(resetState: true)
         }
     }
@@ -508,7 +499,6 @@ public final class TextEditorViewModel {
         }
         perform(.setMainFile(id), actionName: "Set Main LaTeX File")
         rebuildTeXProjectAnalysis()
-        scheduleTeXCompilation()
     }
 
     /// Replaces the shared editor settings.
@@ -635,7 +625,6 @@ public final class TextEditorViewModel {
         if previousEngineID != nil, previousEngineID != engine.id {
             invalidateTeXBuildIdentity()
         }
-        if language == .latex { scheduleTeXCompilation() }
     }
 
     /// Requests a build, showing the package-network decision before first use.
@@ -645,7 +634,7 @@ public final class TextEditorViewModel {
             needsTeXPackageConsent = true
             return
         }
-        beginTeXCompilation(origin: .requested)
+        beginTeXCompilation()
     }
 
     /// Persists the package-network choice and resumes the requested build.
@@ -657,26 +646,11 @@ public final class TextEditorViewModel {
         texPackageAccess = access
         texPreferences.set(access.rawValue, forKey: "clip.tex.packageAccess")
         needsTeXPackageConsent = false
-        beginTeXCompilation(origin: .requested)
+        beginTeXCompilation()
     }
 
     public func cancelTeXPackageConsent() {
         needsTeXPackageConsent = false
-    }
-
-    public func setTeXCompileMode(_ mode: TeXCompileMode) {
-        guard texCompileMode != mode else { return }
-        texCompileMode = mode
-        texPreferences.set(mode.rawValue, forKey: "clip.tex.compileMode")
-        if mode == .automatic {
-            scheduleTeXCompilation()
-        } else {
-            texCompileDebounceTask?.cancel()
-            texCompileDebounceTask = nil
-            if texCompilePendingOrigin == .automatic {
-                texCompilePendingOrigin = nil
-            }
-        }
     }
 
     public func cancelTeXCompilation() {
@@ -854,9 +828,7 @@ public final class TextEditorViewModel {
             if promotedScratchToTeX { invalidateTeXBuildIdentity() }
             rebuildTeXProjectAnalysis()
             persistStructureNow()
-            if detected == .latex {
-                scheduleTeXCompilation()
-            } else if previous == .latex {
+            if previous == .latex, detected != .latex {
                 cancelTeXCompilation(resetState: true)
             }
         } catch {
@@ -986,49 +958,14 @@ public final class TextEditorViewModel {
             }
             writeContents()
         }
-        if language == .latex, texCompileMode == .onSave {
-            requestTeXCompile()
-        }
     }
 
-    private func scheduleTeXCompilation() {
-        guard !isStopped, language == .latex, texCompileMode == .automatic,
-            texPackageAccess != nil, texEngine != nil
-        else { return }
-        texCompileDebounceTask?.cancel()
-        texCompileDebounceTask = Task { [weak self] in
-            do {
-                // Match the calm, trailing compile cadence used by mature
-                // collaborative TeX editors instead of cancelling a build for
-                // every character typed.
-                try await Task.sleep(for: .milliseconds(2_500))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self, !isStopped else { return }
-            texCompileDebounceTask = nil
-            guard TeXCompileDiscipline.allowsAutomaticCompileNow else {
-                texCompilationState = .paused(
-                    "Auto-compile is paused for battery or thermal conditions."
-                )
-                return
-            }
-            beginTeXCompilation(origin: .automatic)
-        }
-    }
-
-    private func beginTeXCompilation(origin: TeXCompileRequestOrigin) {
+    private func beginTeXCompilation() {
         guard !isStopped else { return }
-        texCompileDebounceTask?.cancel()
-        texCompileDebounceTask = nil
         if texCompileTask != nil {
-            // There is one compiler per document. Coalesce any number of edits
-            // during a build into exactly one immutable follow-up snapshot.
-            // A direct request takes precedence over an automatic one so a mode
-            // change can discard only work that automatic mode itself queued.
-            if texCompilePendingOrigin != .requested {
-                texCompilePendingOrigin = origin
-            }
+            // There is one compiler per document. Coalesce repeated explicit
+            // Build requests into exactly one immutable follow-up snapshot.
+            hasPendingTeXCompileRequest = true
             return
         }
         guard let texEngine, texEngine.isAvailable else {
@@ -1053,7 +990,7 @@ public final class TextEditorViewModel {
         )
         let generation = UUID()
         texCompileGeneration = generation
-        texCompilePendingOrigin = nil
+        hasPendingTeXCompileRequest = false
         let sourceSnapshot = textBuffers
         // Dependency analysis powers diagnostics and root hints, but TeX is a
         // programmable build language. Compile every file already admitted by
@@ -1143,17 +1080,15 @@ public final class TextEditorViewModel {
     private func finishTeXCompilation(generation: UUID) {
         guard !isStopped, texCompileGeneration == generation else { return }
         texCompileTask = nil
-        guard let pendingOrigin = texCompilePendingOrigin else { return }
-        texCompilePendingOrigin = nil
-        beginTeXCompilation(origin: pendingOrigin)
+        guard hasPendingTeXCompileRequest else { return }
+        hasPendingTeXCompileRequest = false
+        beginTeXCompilation()
     }
 
     private func cancelTeXCompilation(resetState: Bool) {
-        texCompileDebounceTask?.cancel()
-        texCompileDebounceTask = nil
         texCompileTask?.cancel()
         texCompileTask = nil
-        texCompilePendingOrigin = nil
+        hasPendingTeXCompileRequest = false
         texCompileGeneration = UUID()
         if resetState { texCompilationState = .idle }
     }
@@ -1372,14 +1307,12 @@ public final class TextEditorViewModel {
                 target.rebuildTeXProjectAnalysis()
                 if Self.changesTeXBuildIdentity(patch) {
                     target.invalidateTeXBuildIdentity()
-                    if target.language == .latex { target.scheduleTeXCompilation() }
                 }
                 target.persistStructureNow()
                 if case .renameFile(let fileID, _) = patch,
                     fileID == target.activeFileID
                 {
                     target.scheduleLanguageDetection()
-                    if target.language == .latex { target.scheduleTeXCompilation() }
                 }
             } catch {
                 target.notice = "That change could not be undone."
@@ -1391,7 +1324,6 @@ public final class TextEditorViewModel {
         rebuildTeXProjectAnalysis()
         persistStructureNow()
         scheduleLanguageDetection()
-        if language == .latex { scheduleTeXCompilation() }
     }
 
     private func replaceContentsForCommand(_ value: String, actionName: String) {

@@ -6,6 +6,7 @@ import Foundation
 public enum TimelineViewport {
     public static let fitZoom = 1.0
     public static let maximumZoom = 12.0
+    public static let leadingInset = 46.0
     public static let minimumEditingTail = 10.0
     public static let editingTailRatio = 0.25
 
@@ -15,6 +16,30 @@ public enum TimelineViewport {
 
     public static func contentWidth(viewportWidth: Double, zoom: Double) -> Double {
         max(viewportWidth, viewportWidth * clampedZoom(zoom))
+    }
+
+    public static func pointsPerSecond(
+        viewportWidth: Double,
+        zoom: Double,
+        referenceDuration: Double
+    ) -> Double {
+        let width = contentWidth(viewportWidth: viewportWidth, zoom: zoom)
+        let duration = referenceDuration.isFinite ? max(referenceDuration, 0.01) : 0.01
+        return max((width - leadingInset) / duration, 1)
+    }
+
+    /// Expands the scrollable canvas as a project grows while preserving the
+    /// established time scale. Moving a clip therefore never squeezes every
+    /// other clip to fit a newly computed duration.
+    public static func stableContentWidth(
+        viewportWidth: Double,
+        zoom: Double,
+        pointsPerSecond: Double,
+        requiredDuration: Double
+    ) -> Double {
+        let base = contentWidth(viewportWidth: viewportWidth, zoom: zoom)
+        let duration = requiredDuration.isFinite ? max(requiredDuration, 0) : 0
+        return max(base, leadingInset + duration * max(pointsPerSecond, 1))
     }
 
     /// Extends the ruler beyond the final item so a clip can be dropped into

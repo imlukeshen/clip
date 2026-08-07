@@ -567,67 +567,49 @@ struct TextEditorViewModelTests {
         editor.stop()
     }
 
-    @Test("Leaving automatic LaTeX mode cancels the pending debounce")
-    func leavingAutomaticLatexModeCancelsDebounce() async throws {
+    @Test("Legacy automatic preference never builds while typing")
+    func legacyAutomaticPreferenceRequiresBuildRequest() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
         defer { fixture.remove() }
         let recorder = TeXJobRecorder()
+        fixture.preferences.set(
+            TeXCompileMode.automatic.rawValue,
+            forKey: "clip.tex.compileMode"
+        )
         let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+        editor.start()
 
-        editor.setTeXCompileMode(.automatic)
-        editor.setTeXCompileMode(.manual)
+        editor.text += "\n% visible edit that must wait for Build"
         try await Task.sleep(for: .milliseconds(2_700))
 
         #expect(recorder.job == nil)
         #expect(editor.texCompilationState == .idle)
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        #expect(recorder.job != nil)
         editor.stop()
     }
 
-    @Test("Leaving automatic mode drops its fired follow-up while a build is active")
-    func leavingAutomaticModeDropsQueuedAutomaticBuild() async throws {
+    @Test("Legacy on-save preference never builds when saving")
+    func legacyOnSavePreferenceRequiresBuildRequest() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
         defer { fixture.remove() }
-        let recorder = HeldCompileRecorder()
-        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
+        let recorder = TeXJobRecorder()
+        fixture.preferences.set(
+            TeXCompileMode.onSave.rawValue,
+            forKey: "clip.tex.compileMode"
+        )
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
 
-        editor.requestTeXCompile()
-        await waitUntil { recorder.startedCount == 1 }
-        editor.setTeXCompileMode(.automatic)
-        try await Task.sleep(for: .milliseconds(2_700))
-        #expect(recorder.startedCount == 1)
-
-        editor.setTeXCompileMode(.manual)
-        recorder.releaseFirstBuild()
-        await waitUntil(attempts: 100) {
-            recorder.completedCount == 1 && editor.texCompilationState == .succeeded
-        }
+        editor.text += "\n% save without building"
+        editor.saveNow()
         try await Task.sleep(for: .milliseconds(250))
 
-        #expect(recorder.startedCount == 1)
-        #expect(recorder.completedCount == 1)
-        editor.stop()
-    }
-
-    @Test("Leaving automatic mode preserves an explicitly queued follow-up")
-    func leavingAutomaticModePreservesExplicitBuild() async throws {
-        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
-        defer { fixture.remove() }
-        let recorder = HeldCompileRecorder()
-        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
-
+        #expect(recorder.job == nil)
+        #expect(editor.texCompilationState == .idle)
         editor.requestTeXCompile()
-        await waitUntil { recorder.startedCount == 1 }
-        editor.setTeXCompileMode(.automatic)
-        editor.requestTeXCompile()
-        editor.setTeXCompileMode(.manual)
-        recorder.releaseFirstBuild()
-
-        await waitUntil(attempts: 100) {
-            recorder.completedCount == 2 && editor.texCompilationState == .succeeded
-        }
-
-        #expect(recorder.startedCount == 2)
-        #expect(recorder.completedCount == 2)
+        await waitUntil { editor.texCompilationState == .succeeded }
+        #expect(recorder.job != nil)
         editor.stop()
     }
 

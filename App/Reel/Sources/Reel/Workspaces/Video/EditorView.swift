@@ -19,6 +19,7 @@ struct EditorView: View {
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
     @State private var liveTextSpans: [OCRSpan] = []
+    @State private var timelineReferenceDuration = 0.0
     @AppStorage("clip.timeline.zoom") private var timelineZoom = TimelineViewport.fitZoom
 
     var body: some View {
@@ -59,6 +60,18 @@ struct EditorView: View {
         }
         .task(id: liveTextRequestID) {
             await refreshLiveText()
+        }
+        .onAppear {
+            if timelineReferenceDuration <= 0 {
+                timelineReferenceDuration = TimelineViewport.editingDuration(
+                    projectDuration: editor.duration.seconds
+                )
+            }
+        }
+        .onChange(of: editor.document.id) { _, _ in
+            timelineReferenceDuration = TimelineViewport.editingDuration(
+                projectDuration: editor.duration.seconds
+            )
         }
     }
 
@@ -628,13 +641,25 @@ struct EditorView: View {
             timelineToolbar(isCompact: isCompact)
             Divider().overlay(theme.palette.line)
             GeometryReader { proxy in
+                let liveDuration = TimelineViewport.editingDuration(
+                    projectDuration: editor.duration.seconds
+                )
+                let referenceDuration =
+                    timelineReferenceDuration > 0 ? timelineReferenceDuration : liveDuration
+                let pointsPerSecond = TimelineViewport.pointsPerSecond(
+                    viewportWidth: Double(proxy.size.width),
+                    zoom: timelineZoom,
+                    referenceDuration: referenceDuration
+                )
                 ScrollView([.horizontal, .vertical]) {
-                    timelineCanvas
+                    timelineCanvas(pointsPerSecond: pointsPerSecond)
                         .frame(
                             width: CGFloat(
-                                TimelineViewport.contentWidth(
+                                TimelineViewport.stableContentWidth(
                                     viewportWidth: Double(proxy.size.width),
-                                    zoom: timelineZoom
+                                    zoom: timelineZoom,
+                                    pointsPerSecond: pointsPerSecond,
+                                    requiredDuration: liveDuration
                                 )
                             ),
                             height: max(proxy.size.height, timelineCanvasContentHeight)
@@ -724,7 +749,7 @@ struct EditorView: View {
             }
 
             Button {
-                setTimelineZoom(TimelineViewport.fitZoom)
+                fitTimeline()
             } label: {
                 if isCompact {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
@@ -777,7 +802,7 @@ struct EditorView: View {
         return CGFloat(64 + videoTracks * 40 + audioTracks * 32)
     }
 
-    private var timelineCanvas: some View {
+    private func timelineCanvas(pointsPerSecond: Double) -> some View {
         EditorTimeline(
             timeline: editor.document.timeline,
             names: editor.assetNames,
@@ -787,6 +812,7 @@ struct EditorView: View {
             selection: editor.selection,
             playhead: editor.playhead,
             duration: editor.duration,
+            fixedPointsPerSecond: CGFloat(pointsPerSecond),
             inPoint: editor.inPoint,
             outPoint: editor.outPoint,
             clickMarkers: editor.timelineClickMarkers,
@@ -837,6 +863,13 @@ struct EditorView: View {
 
     private func setTimelineZoom(_ zoom: Double) {
         timelineZoom = TimelineViewport.clampedZoom(zoom)
+    }
+
+    private func fitTimeline() {
+        timelineReferenceDuration = TimelineViewport.editingDuration(
+            projectDuration: editor.duration.seconds
+        )
+        setTimelineZoom(TimelineViewport.fitZoom)
     }
 
     private var targetedTrackSummary: String {
