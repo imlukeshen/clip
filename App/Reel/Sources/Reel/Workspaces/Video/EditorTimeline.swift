@@ -12,6 +12,7 @@ struct EditorTimeline: NSViewRepresentable {
     let selection: Set<ItemID>
     let playhead: RationalTime
     let duration: RationalTime
+    let fixedPointsPerSecond: CGFloat
     let inPoint: RationalTime?
     let outPoint: RationalTime?
     let clickMarkers: [TimelineClickMarker]
@@ -61,6 +62,7 @@ struct EditorTimeline: NSViewRepresentable {
         view.selection = selection
         view.playhead = playhead
         view.duration = duration
+        view.fixedPointsPerSecond = fixedPointsPerSecond
         view.inPoint = inPoint
         view.outPoint = outPoint
         view.clickMarkers = clickMarkers
@@ -103,6 +105,7 @@ final class TimelineCanvas: NSView {
     var selection: Set<ItemID> = []
     var playhead = RationalTime.zero
     var duration = RationalTime.zero
+    var fixedPointsPerSecond: CGFloat?
     var inPoint: RationalTime?
     var outPoint: RationalTime?
     var clickMarkers: [TimelineClickMarker] = []
@@ -135,7 +138,7 @@ final class TimelineCanvas: NSView {
     var onRazor: ((ItemID, RationalTime) -> Void)?
     var onZoom: ((CGFloat) -> Void)?
 
-    private let labelWidth: CGFloat = 46
+    private let labelWidth = CGFloat(TimelineViewport.leadingInset)
     private let rulerHeight: CGFloat = 24
     private let videoHeight: CGFloat = 34
     private let audioHeight: CGFloat = 26
@@ -225,8 +228,8 @@ final class TimelineCanvas: NSView {
         drawRuler()
         drawTargetedLanes()
         drawLaneLabels()
-        drawVideo()
-        drawAudio()
+        drawVideo(in: dirtyRect)
+        drawAudio(in: dirtyRect)
         drawClicks()
         drawCaptions()
         drawProjectMarkers()
@@ -287,6 +290,7 @@ final class TimelineCanvas: NSView {
                     duration: hit.item.timelineDuration,
                     isValid: true
                 )
+                setNeedsDisplay(moveOverlayInvalidationRect())
                 NSCursor.closedHand.set()
             }
         } else {
@@ -304,6 +308,7 @@ final class TimelineCanvas: NSView {
         case .scrub:
             scheduleSeek(to: time(at: point.x))
         case .move(let itemID, let kind, _, _, let grabOffset):
+            let previousOverlay = moveOverlayInvalidationRect()
             autoscroll(with: event)
             let currentPoint = convert(event.locationInWindow, from: nil)
             movePreview = proposedMove(
@@ -312,7 +317,7 @@ final class TimelineCanvas: NSView {
                 point: currentPoint,
                 grabOffset: grabOffset
             )
-            needsDisplay = true
+            setNeedsDisplay(previousOverlay.union(moveOverlayInvalidationRect()))
         case .trim(let itemID, let edge, let original, let speed, let originX):
             var sourceDelta = RationalTime(
                 seconds: (point.x - originX) / pointsPerSecond * speed
@@ -476,11 +481,19 @@ final class TimelineCanvas: NSView {
     }
 
     private var pointsPerSecond: CGFloat {
-        max((bounds.width - labelWidth) / max(CGFloat(editingDuration.seconds), 0.01), 1)
+        if let fixedPointsPerSecond {
+            return max(fixedPointsPerSecond, 1)
+        }
+        return max((bounds.width - labelWidth) / max(CGFloat(editingDuration.seconds), 0.01), 1)
     }
 
     private var editingDuration: RationalTime {
-        RationalTime(
+        if fixedPointsPerSecond != nil {
+            return RationalTime(
+                seconds: Double(max(bounds.width - labelWidth, 0) / pointsPerSecond)
+            )
+        }
+        return RationalTime(
             seconds: TimelineViewport.editingDuration(projectDuration: duration.seconds)
         )
     }
@@ -571,6 +584,19 @@ final class TimelineCanvas: NSView {
         }
     }
 
+    enum MediaRenderRole: Equatable {
+        case normal
+        case moveSourcePlaceholder
+    }
+
+    struct MoveRenderSnapshot: Equatable {
+        var itemID: ItemID
+        var sourceRect: NSRect
+        var previewRect: NSRect
+        var destinationTrackID: TrackID
+        var isValid: Bool
+    }
+
     /// Stable geometry access for event routing and accessibility validation.
     func mediaRect(for itemID: ItemID) -> NSRect? {
         (videoItemRects() + audioItemRects()).first { $0.item.id == itemID }?.rect
@@ -584,6 +610,23 @@ final class TimelineCanvas: NSView {
             return audioY(for: index) + audioHeight / 2
         }
         return nil
+    }
+
+    func mediaRenderRole(for itemID: ItemID) -> MediaRenderRole {
+        itemID == movingItemID ? .moveSourcePlaceholder : .normal
+    }
+
+    func moveRenderSnapshot() -> MoveRenderSnapshot? {
+        guard let preview = movePreview,
+            let sourceRect = mediaRect(for: preview.itemID)
+        else { return nil }
+        return MoveRenderSnapshot(
+            itemID: preview.itemID,
+            sourceRect: sourceRect,
+            previewRect: movePreviewRect(preview),
+            destinationTrackID: preview.trackID,
+            isValid: preview.isValid
+        )
     }
 
     private func pointerIntent(
@@ -673,6 +716,10 @@ final class TimelineCanvas: NSView {
             proposedStart = result.timelineStart
             snapIndicator = result.point?.time
         }
+        let maximumStart = max(editingDuration - item.timelineDuration, .zero)
+        let containedStart = min(max(proposedStart, .zero), maximumStart)
+        if containedStart != proposedStart { snapIndicator = nil }
+        proposedStart = containedStart
         return MovePreview(
             itemID: itemID,
             kind: kind,
@@ -772,8 +819,12 @@ final class TimelineCanvas: NSView {
         NSRect(x: 1, y: y + 3, width: 2, height: max(height - 6, 0)).fill()
     }
 
-    private func drawVideo() {
-        for clip in videoItemRects() {
+    private func drawVideo(in dirtyRect: NSRect) {
+        for clip in videoItemRects() where clip.rect.insetBy(dx: -3, dy: -3).intersects(dirtyRect) {
+            if mediaRenderRole(for: clip.item.id) == .moveSourcePlaceholder {
+                drawMoveSourcePlaceholder(in: clip.rect, kind: .video)
+                continue
+            }
             let selected = selection.contains(clip.item.id)
             let hovered = hoveredItemID == clip.item.id
             let fillColor: NSColor
@@ -873,7 +924,7 @@ final class TimelineCanvas: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func drawAudio() {
+    private func drawAudio(in dirtyRect: NSRect) {
         let explicitAudio = !timeline.audioTracks.isEmpty
         let items: [ItemRect]
         if explicitAudio {
@@ -894,7 +945,11 @@ final class TimelineCanvas: NSView {
                     return linked
                 }
         }
-        for media in items {
+        for media in items where media.rect.insetBy(dx: -3, dy: -3).intersects(dirtyRect) {
+            if mediaRenderRole(for: media.item.id) == .moveSourcePlaceholder {
+                drawMoveSourcePlaceholder(in: media.rect, kind: .audio)
+                continue
+            }
             let rect = media.rect.insetBy(dx: 1, dy: 0)
             let selected = explicitAudio && selection.contains(media.item.id)
             let hovered = explicitAudio && hoveredItemID == media.item.id
@@ -1154,25 +1209,12 @@ final class TimelineCanvas: NSView {
     private func drawMovePreview() {
         guard let preview = movePreview else { return }
         let color = preview.isValid ? accent : playheadColor
-        let laneY =
+        let rect = movePreviewRect(preview)
+        let fillColor =
             preview.kind == .video
-            ? videoY(for: preview.trackIndex) : audioY(for: preview.trackIndex)
-        let laneHeight = preview.kind == .video ? videoHeight : audioHeight
-        color.withAlphaComponent(0.06).setFill()
-        NSRect(
-            x: labelWidth,
-            y: laneY - 2,
-            width: max(bounds.maxX - labelWidth, 0),
-            height: laneHeight + 4
-        ).fill()
-
-        let rect = NSRect(
-            x: labelWidth + CGFloat(preview.timelineStart.seconds) * pointsPerSecond,
-            y: laneY,
-            width: max(CGFloat(preview.duration.seconds) * pointsPerSecond, 2),
-            height: laneHeight
-        ).insetBy(dx: 1, dy: 0)
-        color.withAlphaComponent(preview.isValid ? 0.28 : 0.16).setFill()
+            ? clipColor.blended(withFraction: 0.24, of: accent) ?? clipColor
+            : audioColor.withAlphaComponent(0.32)
+        (preview.isValid ? fillColor : color.withAlphaComponent(0.16)).setFill()
         let path = NSBezierPath(
             roundedRect: rect,
             xRadius: clipCornerRadius,
@@ -1180,8 +1222,10 @@ final class TimelineCanvas: NSView {
         )
         path.fill()
         color.setStroke()
-        path.lineWidth = 2
-        path.setLineDash([6, 3], count: 2, phase: 0)
+        path.lineWidth = preview.isValid ? 1.5 : 2
+        if !preview.isValid {
+            path.setLineDash([6, 3], count: 2, phase: 0)
+        }
         path.stroke()
 
         let trackName = track(for: preview.kind, at: preview.trackIndex).name
@@ -1199,6 +1243,56 @@ final class TimelineCanvas: NSView {
             color: textPrimary
         )
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private var movingItemID: ItemID? {
+        guard case .move(let itemID, _, _, _, _) = gesture else { return nil }
+        return itemID
+    }
+
+    private func movePreviewRect(_ preview: MovePreview) -> NSRect {
+        let laneY =
+            preview.kind == .video
+            ? videoY(for: preview.trackIndex) : audioY(for: preview.trackIndex)
+        let laneHeight = preview.kind == .video ? videoHeight : audioHeight
+        return NSRect(
+            x: labelWidth + CGFloat(preview.timelineStart.seconds) * pointsPerSecond,
+            y: laneY,
+            width: max(CGFloat(preview.duration.seconds) * pointsPerSecond, 2),
+            height: laneHeight
+        ).insetBy(dx: 1, dy: 0)
+    }
+
+    private func drawMoveSourcePlaceholder(in rect: NSRect, kind: TrackKind) {
+        let placeholder = rect.insetBy(dx: 1, dy: 0)
+        (kind == .video ? clipColor : audioColor).withAlphaComponent(0.05).setFill()
+        let path = NSBezierPath(
+            roundedRect: placeholder,
+            xRadius: clipCornerRadius,
+            yRadius: clipCornerRadius
+        )
+        path.fill()
+        lineColor.withAlphaComponent(0.65).setStroke()
+        path.lineWidth = 1
+        path.setLineDash([3, 3], count: 2, phase: 0)
+        path.stroke()
+    }
+
+    private func moveOverlayInvalidationRect() -> NSRect {
+        var dirty = NSRect.null
+        if let movingItemID, let source = mediaRect(for: movingItemID) {
+            dirty = dirty.union(source.insetBy(dx: -4, dy: -4))
+        }
+        if let movePreview {
+            dirty = dirty.union(movePreviewRect(movePreview).insetBy(dx: -4, dy: -4))
+        }
+        if let snapIndicator {
+            let x = labelWidth + CGFloat(snapIndicator.seconds) * pointsPerSecond
+            dirty = dirty.union(
+                NSRect(x: x - 2, y: 0, width: 4, height: bounds.height)
+            )
+        }
+        return dirty.isNull ? .zero : dirty.intersection(bounds)
     }
 
     private func drawPlayhead() {

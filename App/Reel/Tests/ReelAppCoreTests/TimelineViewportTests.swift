@@ -26,6 +26,25 @@ struct TimelineViewportTests {
         #expect(TimelineViewport.editingDuration(projectDuration: .infinity) == 10)
     }
 
+    @Test("Growing projects expand the canvas without changing the established scale")
+    func stableScaleWhileProjectGrows() {
+        let scale = TimelineViewport.pointsPerSecond(
+            viewportWidth: 546,
+            zoom: 1,
+            referenceDuration: 20
+        )
+        let expandedWidth = TimelineViewport.stableContentWidth(
+            viewportWidth: 546,
+            zoom: 1,
+            pointsPerSecond: scale,
+            requiredDuration: 30
+        )
+
+        #expect(scale == 25)
+        #expect(expandedWidth == 796)
+        #expect((expandedWidth - TimelineViewport.leadingInset) / 30 == scale)
+    }
+
     @Test("Buttons use finer steps near fit and faster steps when zoomed in")
     func steppedZoom() {
         #expect(TimelineViewport.stepping(1, direction: 1) == 1.25)

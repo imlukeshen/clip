@@ -497,11 +497,13 @@ struct CodeEditor: NSViewRepresentable {
             textView.tabWidth = settings.tabWidth
             textView.showsInvisibleMarkers = settings.showInvisibles
             textView.invisibleMarkerColor = NSColor(theme.palette.textTertiary)
-            textView.typingAttributes = [
+            let typingAttributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: foreground,
                 .paragraphStyle: paragraphStyle,
             ]
+            textView.sourceTypingAttributes = typingAttributes
+            textView.typingAttributes = typingAttributes
             let softWrap = settings.softWrap && !suppressesSoftWrap
             textView.isHorizontallyResizable = !softWrap
             textView.textContainer?.widthTracksTextView = softWrap

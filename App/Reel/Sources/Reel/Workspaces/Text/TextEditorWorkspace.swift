@@ -276,17 +276,6 @@ struct TextEditorWorkspace: View {
                 .help("Show diagnostics and raw engine output")
                 .accessibilityIdentifier("latex-build-output-toggle")
 
-                Menu {
-                    Button("Automatic") { editor.setTeXCompileMode(.automatic) }
-                    Button("On Save") { editor.setTeXCompileMode(.onSave) }
-                    Button("Manual") { editor.setTeXCompileMode(.manual) }
-                } label: {
-                    Label(editor.texCompileMode.editorTitle, systemImage: "clock.arrow.circlepath")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Choose when LaTeX recompiles")
-
                 if editor.texCompilationState == .compiling {
                     ProgressView()
                         .controlSize(.small)
@@ -299,11 +288,13 @@ struct TextEditorWorkspace: View {
                     .accessibilityIdentifier("latex-cancel")
                 } else {
                     Button(action: editor.requestTeXCompile) {
-                        Label("Build", systemImage: "hammer")
+                        Label(
+                            editor.texPDFURL == nil ? "Build PDF" : "Rebuild PDF",
+                            systemImage: "play.fill")
                     }
-                    .buttonStyle(ReelBorderedButtonStyle())
+                    .buttonStyle(ReelProminentButtonStyle())
                     .keyboardShortcut("b", modifiers: .command)
-                    .help("Compile LaTeX (Command-B)")
+                    .help("Build the current LaTeX source (Command-B)")
                     .accessibilityIdentifier("latex-compile")
                 }
             }
@@ -886,7 +877,7 @@ struct TextEditorWorkspace: View {
             }
             if editor.language == .latex {
                 statusDivider
-                statusItem(editor.texCompilationState.statusTitle)
+                statusItem(latexStatusTitle)
             }
         }
         .font(theme.type.numeric.font)
@@ -908,15 +899,10 @@ struct TextEditorWorkspace: View {
             .frame(width: 2, height: 2)
             .accessibilityHidden(true)
     }
-}
 
-extension TeXCompileMode {
-    fileprivate var editorTitle: String {
-        switch self {
-        case .automatic: "Automatic"
-        case .onSave: "On Save"
-        case .manual: "Manual"
-        }
+    private var latexStatusTitle: String {
+        if editor.texHasUnbuiltChanges { return "Changes not built" }
+        return editor.texCompilationState.statusTitle
     }
 }
 
@@ -926,7 +912,7 @@ extension TeXCompilationState {
         case .idle: "Not built"
         case .compiling: "Building"
         case .succeeded: "PDF ready"
-        case .paused: "Auto-build paused"
+        case .paused: "Build paused"
         case .failed: "Build failed"
         }
     }

@@ -150,9 +150,28 @@ struct CodeEditorAppearanceTests {
         #expect(promotedTextView === textView)
         #expect(window.firstResponder === promotedTextView)
 
+        // Reproduce the AppKit split-reparent failure directly: typing attributes
+        // can be cleared between key events even though the bound source keeps
+        // changing. LaTeX insertion must repair the new attributed run before
+        // the asynchronous syntax pass or another SwiftUI update can help it.
+        var resetTypingAttributes = promotedTextView.typingAttributes
+        resetTypingAttributes[.foregroundColor] = NSColor.clear
+        promotedTextView.typingAttributes = resetTypingAttributes
+        let newlyTypedLocation = promotedTextView.string.utf16.count
         promotedTextView.insertText(
             "\n\\begin{document}\nVisible source\n\\end{document}",
             replacementRange: promotedTextView.selectedRange()
+        )
+        let immediateForeground = try #require(
+            promotedTextView.textStorage?.attribute(
+                .foregroundColor,
+                at: newlyTypedLocation,
+                effectiveRange: nil
+            ) as? NSColor
+        )
+        #expect(immediateForeground.alphaComponent > 0.9)
+        #expect(
+            abs(luminance(immediateForeground) - luminance(promotedTextView.backgroundColor)) > 0.35
         )
         await settle(hostingView)
 

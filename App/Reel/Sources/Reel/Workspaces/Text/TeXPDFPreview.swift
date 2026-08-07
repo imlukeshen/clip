@@ -35,11 +35,12 @@ struct TeXPDFPreview: View {
                     detail: message,
                     symbol: "exclamationmark.triangle"
                 )
-            } else if case .paused(let message) = editor.texCompilationState {
+            } else if editor.texHasUnbuiltChanges, editor.texPDFURL != nil {
                 buildBanner(
-                    title: "Automatic build paused",
-                    detail: message,
-                    symbol: "pause.circle"
+                    title: "Preview needs a rebuild",
+                    detail:
+                        "Showing the last successful PDF. Build to include your latest source changes.",
+                    symbol: "arrow.clockwise"
                 )
             }
         }
@@ -82,7 +83,7 @@ struct TeXPDFPreview: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textSecondary)
                     .multilineTextAlignment(.center)
-                Button("Build Now", action: editor.requestTeXCompile)
+                Button("Build", action: editor.requestTeXCompile)
                     .buttonStyle(ReelBorderedButtonStyle())
             }
         case .idle, .succeeded:

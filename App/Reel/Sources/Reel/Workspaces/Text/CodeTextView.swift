@@ -21,6 +21,7 @@ final class CodeTextView: NSTextView {
     var snippetFileName = "Untitled.txt"
     var onSnippetNotice: (String) -> Void = { _ in }
     var onCompositionCommit: () -> Void = {}
+    var sourceTypingAttributes: [NSAttributedString.Key: Any] = [:]
     private var findPanelController: CodeFindPanelController?
 
     override var undoManager: UndoManager? { providedUndoManager ?? super.undoManager }
@@ -176,6 +177,26 @@ final class CodeTextView: NSTextView {
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let sourceLengthBeforeInsertion = (string as NSString).length
+        let replacedRange = validatedReplacementRange(replacementRange)
+        if snippetLanguage == .latex, !hasMarkedText(), !sourceTypingAttributes.isEmpty {
+            // Split-view updates may reset NSTextView.typingAttributes between
+            // key events. Reassert the source palette before AppKit creates the
+            // attributed run so every typed LaTeX glyph is visible immediately.
+            typingAttributes = sourceTypingAttributes
+        }
+        defer {
+            if snippetLanguage == .latex, !hasMarkedText() {
+                let sourceLengthAfterInsertion = (string as NSString).length
+                let insertedLength = max(
+                    sourceLengthAfterInsertion - sourceLengthBeforeInsertion + replacedRange.length,
+                    0
+                )
+                makeSourceVisible(
+                    in: NSRange(location: replacedRange.location, length: insertedLength)
+                )
+            }
+        }
         guard let inserted = insertString as? String else {
             super.insertText(insertString, replacementRange: replacementRange)
             return
@@ -230,6 +251,29 @@ final class CodeTextView: NSTextView {
             }
         }
         super.insertText(insertString, replacementRange: replacementRange)
+    }
+
+    private func validatedReplacementRange(_ replacementRange: NSRange) -> NSRange {
+        let sourceLength = (string as NSString).length
+        let candidate = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        let location = min(max(candidate.location, 0), sourceLength)
+        return NSRange(
+            location: location,
+            length: min(max(candidate.length, 0), sourceLength - location)
+        )
+    }
+
+    private func makeSourceVisible(in requestedRange: NSRange) {
+        guard let textStorage, !sourceTypingAttributes.isEmpty else { return }
+        let range = NSIntersectionRange(
+            requestedRange,
+            NSRange(location: 0, length: textStorage.length)
+        )
+        guard range.length > 0 else { return }
+        textStorage.addAttributes(sourceTypingAttributes, range: range)
+        layoutManager?.invalidateDisplay(forCharacterRange: range)
+        if let textContainer { layoutManager?.ensureLayout(for: textContainer) }
+        needsDisplay = true
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

@@ -130,6 +130,116 @@ struct TimelineCanvasEventRoutingTests {
             ])
     }
 
+    @Test("Drag rendering keeps one stable card and a source placeholder")
+    func dragRenderingIsStableAcrossTracks() throws {
+        let item = makeItem(duration: 1, timelineStart: 1)
+        let sourceTrack = Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
+        let destinationTrack = Track(id: TrackID(rawValue: "v2"), name: "V2")
+        let (canvas, window) = makeCanvas(
+            width: 546,
+            timeline: Timeline(videoTracks: [sourceTrack, destinationTrack]),
+            duration: 10
+        )
+        defer { window.close() }
+        let sourceRect = try #require(canvas.mediaRect(for: item.id))
+        let destinationY = try #require(canvas.laneCenterY(for: destinationTrack.id))
+        var moves: [MoveInvocation] = []
+        canvas.canMove = { _, _, _ in true }
+        canvas.onMove = {
+            moves.append(MoveInvocation(itemID: $0, trackID: $1, timelineStart: $2))
+        }
+
+        canvas.mouseDown(
+            with: try mouseEvent(.leftMouseDown, at: sourceRect.center, in: canvas, timestamp: 0)
+        )
+        canvas.mouseDragged(
+            with: try mouseEvent(
+                .leftMouseDragged,
+                at: NSPoint(x: sourceRect.midX + sourceRect.width * 2, y: destinationY),
+                in: canvas,
+                timestamp: 1
+            )
+        )
+
+        let snapshot = try #require(canvas.moveRenderSnapshot())
+        #expect(canvas.mediaRenderRole(for: item.id) == .moveSourcePlaceholder)
+        #expect(snapshot.sourceRect == sourceRect)
+        #expect(snapshot.previewRect.width == sourceRect.insetBy(dx: 1, dy: 0).width)
+        #expect(snapshot.previewRect.height == sourceRect.height)
+        #expect(snapshot.previewRect.midY == destinationY)
+        #expect(snapshot.destinationTrackID == destinationTrack.id)
+        #expect(snapshot.isValid)
+        #expect(moves.isEmpty)
+
+        canvas.mouseUp(
+            with: try mouseEvent(
+                .leftMouseUp,
+                at: NSPoint(x: sourceRect.midX + sourceRect.width * 2, y: destinationY),
+                in: canvas,
+                timestamp: 2
+            )
+        )
+        #expect(canvas.mediaRenderRole(for: item.id) == .normal)
+        #expect(canvas.moveRenderSnapshot() == nil)
+        #expect(moves.count == 1)
+    }
+
+    @Test("Drag preview and drop stay fully inside the editable horizon")
+    func dragRenderingIsContainedAtRightEdge() throws {
+        let item = makeItem(duration: 1, timelineStart: 1)
+        let track = Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
+        let (canvas, window) = makeCanvas(
+            width: 546,
+            timeline: Timeline(videoTracks: [track]),
+            duration: 2
+        )
+        defer { window.close() }
+        canvas.fixedPointsPerSecond = 25
+        let sourceRect = try #require(canvas.mediaRect(for: item.id))
+        var moves: [MoveInvocation] = []
+        canvas.canMove = { _, _, _ in true }
+        canvas.onMove = {
+            moves.append(MoveInvocation(itemID: $0, trackID: $1, timelineStart: $2))
+        }
+        let outside = NSPoint(x: canvas.bounds.maxX + 200, y: sourceRect.midY)
+
+        canvas.mouseDown(
+            with: try mouseEvent(.leftMouseDown, at: sourceRect.center, in: canvas, timestamp: 0)
+        )
+        canvas.mouseDragged(
+            with: try mouseEvent(.leftMouseDragged, at: outside, in: canvas, timestamp: 1)
+        )
+
+        let snapshot = try #require(canvas.moveRenderSnapshot())
+        #expect(snapshot.previewRect.maxX <= canvas.bounds.maxX)
+
+        canvas.mouseUp(
+            with: try mouseEvent(.leftMouseUp, at: outside, in: canvas, timestamp: 2)
+        )
+        #expect(moves.first?.timelineStart == RationalTime(seconds: 19))
+    }
+
+    @Test("A duration change expands the canvas without rescaling clip geometry")
+    func durationChangeKeepsEstablishedScale() throws {
+        let item = makeItem(duration: 2, timelineStart: 3)
+        let track = Track(id: TrackID(rawValue: "v1"), name: "V1", items: [item])
+        let (canvas, window) = makeCanvas(
+            width: 546,
+            timeline: Timeline(videoTracks: [track]),
+            duration: 10
+        )
+        defer { window.close() }
+        canvas.fixedPointsPerSecond = 25
+        let before = try #require(canvas.mediaRect(for: item.id))
+
+        canvas.duration = RationalTime(seconds: 20)
+        canvas.frame.size.width = 796
+        let after = try #require(canvas.mediaRect(for: item.id))
+
+        #expect(after.minX == before.minX)
+        #expect(after.width == before.width)
+    }
+
     private func makeCanvas(
         width: CGFloat,
         timeline: Timeline,
@@ -198,4 +308,8 @@ struct TimelineCanvasEventRoutingTests {
             timelineStart: RationalTime(seconds: timelineStart)
         )
     }
+}
+
+extension NSRect {
+    fileprivate var center: NSPoint { NSPoint(x: midX, y: midY) }
 }
