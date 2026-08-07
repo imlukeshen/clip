@@ -228,11 +228,16 @@ privacy-positioned app that needs explicit handling:
 - The first approved build populates the local package cache. Later builds probe that
   cache first and use the network only when a required bundle resource is missing, so
   routine rebuilds do not wait on remote resolution.
+- Cache readiness is scoped to the bundled engine version and TeX format. A cache-miss
+  retry starts from a fresh source snapshot and shares the original build timeout.
+- A cached-only package miss pauses the build and offers **Allow Downloads and Retry**;
+  the LaTeX inspector can change the persisted package policy at any time. Clearing the
+  cache resets that policy so the next build asks again.
 - Cache lives at `.reel/tex-cache/`, inspectable, clearable.
 - **Offline alternative:** point Tectonic at a locally downloaded bundle file
   (`--bundle <path>`). Document how to get one; don't ship a 4 GB asset.
-- If the user declines fetching and has no local bundle, LaTeX compilation is
-  unavailable and says so plainly.
+- If the user stays offline and has no local bundle, the build remains paused and says
+  which package resource is unavailable without retrying automatically.
 
 ### 5.3 Compilation is sandboxed — security critical
 

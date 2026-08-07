@@ -120,6 +120,12 @@ public protocol TeXEngine: Sendable {
     func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error>
 }
 
+/// Engines with producer work outside the stream consumer expose a completion
+/// barrier for destructive cache maintenance.
+public protocol TeXEngineActivityAwaiting: Sendable {
+    func waitUntilIdle() async
+}
+
 public enum TeXEngineError: Error, Sendable, Equatable {
     case unavailable
     case invalidMainFile
@@ -127,6 +133,7 @@ public enum TeXEngineError: Error, Sendable, Equatable {
     case unsafeProjectEntry(String)
     case unsafeSource(String)
     case launchFailed(String)
+    case packageUnavailableOffline(resource: String)
     case compilationFailed(status: Int32, message: String)
     case timedOut
     case cancelled
@@ -150,6 +157,8 @@ extension TeXEngineError: LocalizedError {
             "The LaTeX source was refused: \(reason)"
         case .launchFailed(let message):
             "The TeX engine could not start: \(message)"
+        case .packageUnavailableOffline(let resource):
+            "\(resource) is not cached. Allow LaTeX package downloads and build again."
         case .compilationFailed(_, let message):
             message.isEmpty ? "LaTeX compilation failed." : message
         case .timedOut:

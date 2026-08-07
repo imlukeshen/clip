@@ -180,6 +180,7 @@ public final class AppModel {
     public var texPackageCacheURL: URL {
         LibraryLayout.texCache(in: libraryRoot)
     }
+    public private(set) var isTeXPackageCacheResetting = false
 
     public var pdfFontCacheURL: URL {
         LibraryLayout.pdfFontCache(in: libraryRoot)
@@ -2563,6 +2564,7 @@ public final class AppModel {
                     }
                 )
                 textEditor.configureTeXEngine(makeTeXEngine())
+                textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
                 self.textEditor = textEditor
                 selectedWorkspace = .text
                 try await runtime.saveTextDocument(document, for: assetID)
@@ -2692,6 +2694,7 @@ public final class AppModel {
             }
         )
         textEditor.configureTeXEngine(makeTeXEngine())
+        textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
         self.textEditor = textEditor
         selectedWorkspace = .text
         try await runtime.saveTeXProjectDocument(document, for: projectFolder)
@@ -2798,6 +2801,7 @@ public final class AppModel {
             }
         )
         textEditor.configureTeXEngine(makeTeXEngine())
+        textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
         self.textEditor = textEditor
         selectedWorkspace = .text
         textEditor.start()
@@ -2830,8 +2834,14 @@ public final class AppModel {
 
     /// Clears cached TeX packages without touching source files or compiled PDFs.
     public func clearTeXPackageCache() {
+        guard !isTeXPackageCacheResetting else { return }
         let cache = texPackageCacheURL
+        let activeEditor = textEditor
+        isTeXPackageCacheResetting = true
+        activeEditor?.setTeXPackageCacheResetting(true)
+        UserDefaults.standard.removeObject(forKey: "clip.tex.packageAccess")
         Task { [weak self] in
+            await activeEditor?.prepareForTeXPackageCacheReset()
             do {
                 try await Task.detached(priority: .utility) {
                     let manager = FileManager.default
@@ -2840,9 +2850,15 @@ public final class AppModel {
                     }
                     try manager.createDirectory(at: cache, withIntermediateDirectories: true)
                 }.value
-                self?.lastMessage = "The TeX package cache was cleared."
+                guard let self else { return }
+                self.isTeXPackageCacheResetting = false
+                self.textEditor?.setTeXPackageCacheResetting(false)
+                self.lastMessage = "The TeX package cache was cleared."
             } catch {
-                self?.lastMessage = "The TeX package cache could not be cleared."
+                guard let self else { return }
+                self.isTeXPackageCacheResetting = false
+                self.textEditor?.setTeXPackageCacheResetting(false)
+                self.lastMessage = "The TeX package cache could not be cleared."
             }
         }
     }

@@ -1,6 +1,6 @@
 /// Routes projects that require the external Biber tool to a full System TeX
 /// installation while retaining bundled Tectonic for every other document.
-public struct BibliographyRoutingTeXEngine: TeXEngine {
+public struct BibliographyRoutingTeXEngine: TeXEngine, TeXEngineActivityAwaiting {
     public let primary: any TeXEngine
     public let biberEngine: (any TeXEngine)?
 
@@ -18,5 +18,16 @@ public struct BibliographyRoutingTeXEngine: TeXEngine {
             return biberEngine.compile(job)
         }
         return primary.compile(job)
+    }
+
+    public func waitUntilIdle() async {
+        if let primary = primary as? any TeXEngineActivityAwaiting {
+            await primary.waitUntilIdle()
+        }
+        if let biberEngine,
+            let activityAwaitingEngine = biberEngine as? any TeXEngineActivityAwaiting
+        {
+            await activityAwaitingEngine.waitUntilIdle()
+        }
     }
 }

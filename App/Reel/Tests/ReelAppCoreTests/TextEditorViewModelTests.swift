@@ -373,6 +373,199 @@ struct TextEditorViewModelTests {
         )
     }
 
+    @Test("An offline package miss can stay offline or allow downloads and retry")
+    func latexPackageRecoveryIsExplicitAndRetryable() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = PackageRecoveryRecorder()
+        let editor = try fixture.editor(engine: PackageRecoveryTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil {
+            editor.needsTeXPackageConsent
+                && editor.texPackageRecoveryResource == "tikz.sty"
+        }
+
+        #expect(recorder.packageAccesses == [.cachedOnly])
+        guard case .paused(let reason) = editor.texCompilationState else {
+            Issue.record("An offline package miss should pause for recovery")
+            return
+        }
+        #expect(reason.contains("tikz.sty"))
+
+        editor.resolveTeXPackageConsent(allowNetwork: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(!editor.needsTeXPackageConsent)
+        #expect(editor.texPackageRecoveryResource == nil)
+        #expect(recorder.packageAccesses == [.cachedOnly])
+        #expect(editor.texPackageAccess == .cachedOnly)
+
+        // A later explicit Build may ask again; it must not be an automatic
+        // retry caused by choosing to remain offline.
+        editor.requestTeXCompile()
+        await waitUntil { recorder.packageAccesses.count == 2 && editor.needsTeXPackageConsent }
+        editor.resolveTeXPackageConsent(allowNetwork: true)
+        await waitUntil { editor.texCompilationState == .succeeded }
+
+        #expect(recorder.packageAccesses == [.cachedOnly, .cachedOnly, .allowNetwork])
+        #expect(editor.texPackageAccess == .allowNetwork)
+        #expect(
+            fixture.preferences.string(forKey: "clip.tex.packageAccess")
+                == TeXPackageAccess.allowNetwork.rawValue
+        )
+        #expect(editor.texPDFURL != nil)
+        editor.stop()
+    }
+
+    @Test("Changing package access in the inspector does not start a build")
+    func latexPackageAccessCanChangeWithoutBuilding() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXJobRecorder()
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        let successfulPDF = try #require(editor.texPDFURL)
+
+        editor.setTeXPackageAccess(.allowNetwork)
+
+        #expect(editor.texPackageAccess == .allowNetwork)
+        #expect(recorder.compileCount == 1)
+        #expect(editor.texPDFURL == successfulPDF)
+        #expect(FileManager.default.fileExists(atPath: successfulPDF.path))
+        #expect(editor.texCompilationState == .succeeded)
+        #expect(
+            fixture.preferences.string(forKey: "clip.tex.packageAccess")
+                == TeXPackageAccess.allowNetwork.rawValue
+        )
+    }
+
+    @Test("Clearing package access makes the next build ask again")
+    func resetLatexPackageAccessReopensConsent() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let editor = try fixture.editor(engine: StubTeXEngine.result(.success))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        let successfulPDF = try #require(editor.texPDFURL)
+
+        editor.resetTeXPackageAccess()
+        editor.requestTeXCompile()
+
+        #expect(editor.texPackageAccess == nil)
+        #expect(editor.needsTeXPackageConsent)
+        #expect(editor.texPDFURL == successfulPDF)
+        #expect(FileManager.default.fileExists(atPath: successfulPDF.path))
+        #expect(fixture.preferences.string(forKey: "clip.tex.packageAccess") == nil)
+    }
+
+    @Test("Compilation stays blocked while the package cache is being cleared")
+    func latexPackageCacheResetBlocksBuilds() throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXJobRecorder()
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+
+        editor.setTeXPackageCacheResetting(true)
+        editor.setTeXPackageAccess(.allowNetwork)
+        editor.requestTeXCompile()
+
+        #expect(editor.isTeXPackageCacheResetting)
+        #expect(editor.texPackageAccess == .cachedOnly)
+        #expect(recorder.compileCount == 0)
+        guard case .paused(let reason) = editor.texCompilationState else {
+            Issue.record("Cache maintenance should pause LaTeX compilation")
+            return
+        }
+        #expect(reason.contains("cache is being cleared"))
+    }
+
+    @Test("Package cache reset joins an active compiler before maintenance")
+    func latexPackageCacheResetJoinsActiveCompile() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = HeldCompileRecorder()
+        let editor = try fixture.editor(engine: HeldFirstCompileTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.startedCount == 1 }
+
+        await editor.prepareForTeXPackageCacheReset()
+
+        #expect(editor.isTeXPackageCacheResetting)
+        #expect(editor.texPackageAccess == nil)
+        #expect(recorder.startedCount == 1)
+        guard case .paused(let reason) = editor.texCompilationState else {
+            Issue.record("Cache reset should finish in a paused maintenance state")
+            return
+        }
+        #expect(reason.contains("cache is being cleared"))
+    }
+
+    @Test("Package cache reset waits for the engine producer barrier")
+    func latexPackageCacheResetWaitsForEngineProducer() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXActivityBarrierRecorder()
+        let editor = try fixture.editor(engine: TeXActivityBarrierEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { recorder.compileCount == 1 }
+
+        let reset = Task { await editor.prepareForTeXPackageCacheReset() }
+        await waitUntil { recorder.didStartWaiting }
+        #expect(editor.texPackageAccess == .cachedOnly)
+
+        recorder.release()
+        await reset.value
+
+        #expect(editor.texPackageAccess == nil)
+        #expect(editor.isTeXPackageCacheResetting)
+    }
+
+    @Test("A package recovery action cannot bypass cache maintenance")
+    func latexPackageRecoveryCannotCompileDuringCacheReset() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = PackageRecoveryRecorder()
+        let editor = try fixture.editor(engine: PackageRecoveryTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.needsTeXPackageConsent }
+        #expect(recorder.packageAccesses == [.cachedOnly])
+
+        editor.setTeXPackageCacheResetting(true)
+        editor.resolveTeXPackageConsent(allowNetwork: true)
+
+        #expect(!editor.needsTeXPackageConsent)
+        #expect(editor.texPackageAccess == .cachedOnly)
+        #expect(recorder.packageAccesses == [.cachedOnly])
+        guard case .paused(let reason) = editor.texCompilationState else {
+            Issue.record("Cache maintenance should remain the active paused state")
+            return
+        }
+        #expect(reason.contains("cache is being cleared"))
+    }
+
+    @Test("Normal LaTeX failures do not reopen package consent")
+    func normalLatexFailureDoesNotRequestPackageAccess() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let editor = try fixture.editor(engine: StubTeXEngine.result(.failure))
+
+        editor.requestTeXCompile()
+        await waitUntil {
+            if case .failed = editor.texCompilationState { return true }
+            return false
+        }
+
+        #expect(!editor.needsTeXPackageConsent)
+        #expect(editor.texPackageRecoveryResource == nil)
+    }
+
     @Test("A scratch buffer switches preview modes and compiles without becoming an asset")
     func scratchPreviewModesAndLatexBuild() async throws {
         let file = TextFile(id: FileID(rawValue: "scratch"), relativePath: "Untitled.txt")
@@ -722,12 +915,44 @@ struct TextEditorViewModelTests {
         #expect(recorder.latestSource?.contains("second queued edit") == true)
     }
 
-    @Test("An unchanged LaTeX document reuses its successful PDF")
-    func unchangedLatexBuildReturnsImmediately() async throws {
+    @Test("An unchanged saved LaTeX project is explicitly rebuilt")
+    func unchangedSavedLatexBuildRestagesDiskDependencies() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
         defer { fixture.remove() }
         let recorder = TeXJobRecorder()
         let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        #expect(recorder.compileCount == 1)
+
+        editor.requestTeXCompile()
+
+        await waitUntil { recorder.compileCount == 2 }
+        #expect(editor.notice != "PDF is already up to date.")
+    }
+
+    @Test("An unchanged scratch LaTeX document reuses its successful PDF")
+    func unchangedScratchLatexBuildReturnsImmediately() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let file = TextFile(
+            id: FileID(rawValue: "scratch"),
+            relativePath: "Untitled.tex",
+            language: .latex,
+            languageIsExplicit: true
+        )
+        let recorder = TeXJobRecorder()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "\\documentclass{article}\\begin{document}Hi\\end{document}",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in },
+            texPreferences: fixture.preferences
+        )
+        editor.configureTeXEngine(RecordingTeXEngine(recorder: recorder))
 
         editor.requestTeXCompile()
         await waitUntil { editor.texCompilationState == .succeeded }
@@ -969,6 +1194,100 @@ private actor TextDocumentRecorder {
 
     func record(_ document: TextDocument) {
         self.document = document
+    }
+}
+
+private final class TeXActivityBarrierRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var compiles = 0
+    private var startedWaiting = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    var compileCount: Int { lock.withLock { compiles } }
+    var didStartWaiting: Bool { lock.withLock { startedWaiting } }
+
+    func recordCompile() {
+        lock.withLock { compiles += 1 }
+    }
+
+    func waitUntilReleased() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                startedWaiting = true
+                waiter = continuation
+            }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock {
+            let value = waiter
+            waiter = nil
+            return value
+        }
+        continuation?.resume()
+    }
+}
+
+private struct TeXActivityBarrierEngine: TeXEngine, TeXEngineActivityAwaiting {
+    let id: EngineID = "activity-barrier-test"
+    let displayName = "Activity Barrier Test TeX"
+    let isAvailable = true
+    let recorder: TeXActivityBarrierRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        recorder.recordCompile()
+        return AsyncThrowingStream { _ in }
+    }
+
+    func waitUntilIdle() async {
+        await recorder.waitUntilReleased()
+    }
+}
+
+private final class PackageRecoveryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var accesses: [TeXPackageAccess] = []
+
+    var packageAccesses: [TeXPackageAccess] { lock.withLock { accesses } }
+
+    func record(_ access: TeXPackageAccess) {
+        lock.withLock { accesses.append(access) }
+    }
+}
+
+private struct PackageRecoveryTeXEngine: TeXEngine {
+    let id: EngineID = "package-recovery-test"
+    let displayName = "Package Recovery Test TeX"
+    let isAvailable = true
+    let recorder: PackageRecoveryRecorder
+
+    func compile(_ job: TeXJob) -> AsyncThrowingStream<TeXEvent, Error> {
+        recorder.record(job.packageAccess)
+        return AsyncThrowingStream { continuation in
+            guard job.packageAccess == .allowNetwork else {
+                continuation.finish(
+                    throwing: TeXEngineError.packageUnavailableOffline(resource: "tikz.sty")
+                )
+                return
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "clip-package-recovery-result-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                let pdf = directory.appendingPathComponent("main.pdf")
+                try Data("%PDF-test".utf8).write(to: pdf)
+                continuation.yield(.finished(pdf: pdf, synctex: nil))
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
     }
 }
 
