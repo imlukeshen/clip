@@ -525,6 +525,10 @@ final class TextEditorTypingTests: XCTestCase {
             latexEditor.value as? String,
             "\\documentclass{article}\n\\begin{document}\nClip typing works\n\\end{document}"
         )
+        assertVisibleSourceGlyphs(
+            in: latexEditor,
+            attachmentName: "LaTeX source after entering split workspace"
+        )
     }
 
     @MainActor
@@ -564,6 +568,10 @@ final class TextEditorTypingTests: XCTestCase {
             app.textViews["text-editor"].value as? String,
             "\\documentclass{article}\n\\begin{document}\nClip PDF\n\\end{document}"
         )
+        assertVisibleSourceGlyphs(
+            in: app.textViews["text-editor"],
+            attachmentName: "LaTeX source before build"
+        )
 
         let buildButton = app.buttons["latex-compile"]
         XCTAssertTrue(buildButton.waitForExistence(timeout: 5))
@@ -574,6 +582,29 @@ final class TextEditorTypingTests: XCTestCase {
             "LaTeX did not compile into the PDF preview"
         )
         XCTAssertTrue(app.staticTexts["Clip PDF"].waitForExistence(timeout: 10))
+        assertVisibleSourceGlyphs(
+            in: app.textViews["text-editor"],
+            attachmentName: "LaTeX source after build"
+        )
+
+        // Match the reported failure sequence: invalid source opens the build
+        // output below the editor. The buffer may compile and expose a line
+        // diagnostic while the native source view itself stops repainting.
+        let sourceEditor = app.textViews["text-editor"]
+        sourceEditor.click()
+        sourceEditor.typeKey("a", modifierFlags: .command)
+        sourceEditor.typeText(
+            "\\documentclass{article}\nSOURCE MUST REMAIN VISIBLE AFTER BUILD FAILURE"
+        )
+        buildButton.click()
+        XCTAssertTrue(
+            app.staticTexts["Build failed"].waitForExistence(timeout: 30),
+            "The deliberately invalid LaTeX source did not reach the failed-build layout"
+        )
+        assertVisibleSourceGlyphs(
+            in: sourceEditor,
+            attachmentName: "LaTeX source after failed build"
+        )
     }
 
     @MainActor
@@ -626,6 +657,92 @@ final class TextEditorTypingTests: XCTestCase {
         let labelMatches = NSPredicate(format: "label BEGINSWITH %@", prefix)
         let expectation = XCTNSPredicateExpectation(predicate: labelMatches, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func assertVisibleSourceGlyphs(
+        in editor: XCUIElement,
+        attachmentName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let screenshot = editor.screenshot()
+        let glyphPixels = sourceGlyphPixelCount(in: screenshot)
+        if glyphPixels <= 80 {
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = attachmentName
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertGreaterThan(
+            glyphPixels,
+            80,
+            "The source value changed, but the editor did not paint enough contrasting glyph pixels",
+            file: file,
+            line: line
+        )
+    }
+
+    private func sourceGlyphPixelCount(in screenshot: XCUIScreenshot) -> Int {
+        guard let representation = screenshot.image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: representation),
+            bitmap.pixelsWide > 0,
+            bitmap.pixelsHigh > 0
+        else { return 0 }
+
+        // The editor background is by far the dominant tone in an element
+        // screenshot. Infer that tone rather than baking in dark mode, then
+        // count pixels with enough luminance separation to be painted glyphs.
+        // Sampling keeps the assertion inexpensive on Retina CI runners.
+        let sampleStride = max(min(bitmap.pixelsWide, bitmap.pixelsHigh) / 300, 1)
+        var histogram = Array(repeating: 0, count: 32)
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: sampleStride) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: sampleStride) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                let bin = min(Int(pixelLuminance(color) * Double(histogram.count)), 31)
+                histogram[bin] += 1
+            }
+        }
+        guard
+            let backgroundBin = histogram.indices.max(by: {
+                histogram[$0] < histogram[$1]
+            })
+        else { return 0 }
+        let backgroundLuminance = (Double(backgroundBin) + 0.5) / Double(histogram.count)
+
+        // Exclude the extreme left edge in case the accessibility frame also
+        // captures part of the ruler. A caret, current-line wash, or diagnostic
+        // marker must not be able to satisfy the visibility assertion alone.
+        let xStart = bitmap.pixelsWide / 10
+        let yInset = bitmap.pixelsHigh / 30
+        var count = 0
+        for y in stride(
+            from: yInset,
+            to: max(bitmap.pixelsHigh - yInset, yInset),
+            by: sampleStride
+        ) {
+            for x in stride(from: xStart, to: bitmap.pixelsWide, by: sampleStride) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                let luminance = pixelLuminance(color)
+                let foregroundSeparation =
+                    backgroundLuminance < 0.5
+                    ? luminance - backgroundLuminance : backgroundLuminance - luminance
+                if foregroundSeparation > 0.28 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private func pixelLuminance(_ color: NSColor) -> Double {
+        0.2126 * Double(color.redComponent)
+            + 0.7152 * Double(color.greenComponent)
+            + 0.0722 * Double(color.blueComponent)
     }
 
     @MainActor

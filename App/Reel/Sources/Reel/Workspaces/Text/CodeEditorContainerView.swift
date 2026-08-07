@@ -4,6 +4,7 @@ import AppKit
 final class CodeEditorContainerView: NSView {
     let scrollView: NSScrollView
     private var requestedInitialFocus = false
+    private var viewportRepairScheduled = false
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
@@ -47,19 +48,64 @@ final class CodeEditorContainerView: NSView {
                 textView.isHorizontallyResizable
                 ? CGFloat.greatestFiniteMagnitude
                 : max(documentSize.width - textView.textContainerInset.width * 2, 1)
-            if textContainer.containerSize.width != width {
-                textContainer.containerSize = NSSize(
-                    width: width,
-                    height: CGFloat.greatestFiniteMagnitude
-                )
+            let desiredContainerSize = NSSize(
+                width: width,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            if textContainer.containerSize != desiredContainerSize {
+                textContainer.containerSize = desiredContainerSize
             }
-            textView.layoutManager?.ensureLayout(for: textContainer)
-            textView.needsDisplay = true
+            repairVisibleViewport(in: textView, textContainer: textContainer)
         }
+    }
+
+    func scheduleViewportRepair() {
+        guard !viewportRepairScheduled else { return }
+        viewportRepairScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            viewportRepairScheduled = false
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+        }
+    }
+
+    private func repairVisibleViewport(
+        in textView: NSTextView,
+        textContainer: NSTextContainer
+    ) {
+        guard let layoutManager = textView.layoutManager else { return }
+        let origin = textView.textContainerOrigin
+        let visibleInContainer = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        guard !visibleInContainer.isEmpty else { return }
+        let repairRect = visibleInContainer.insetBy(dx: 0, dy: -32)
+        layoutManager.ensureLayout(forBoundingRect: repairRect, in: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forBoundingRect: repairRect,
+            in: textContainer
+        )
+        if glyphRange.length > 0 {
+            let characterRange = layoutManager.characterRange(
+                forGlyphRange: glyphRange,
+                actualGlyphRange: nil
+            )
+            layoutManager.invalidateDisplay(forCharacterRange: characterRange)
+        }
+        textView.setNeedsDisplay(textView.visibleRect)
+        scrollView.contentView.needsDisplay = true
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        guard superview != nil else { return }
+        scheduleViewportRepair()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window != nil {
+            scheduleViewportRepair()
+        }
         guard window != nil, !requestedInitialFocus else { return }
         requestedInitialFocus = true
         DispatchQueue.main.async { [weak self] in
