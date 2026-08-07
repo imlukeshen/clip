@@ -483,6 +483,16 @@ final class TextEditorTypingTests: XCTestCase {
             app.descendants(matching: .any)["latex-split-editor"].waitForExistence(timeout: 5)
         )
         XCTAssertTrue(app.buttons["latex-compile"].waitForExistence(timeout: 5))
+
+        // Choosing LaTeX from the language menu must return focus to the
+        // source. Do not click the editor again: this is the exact menu-driven
+        // transition that previously left its TextKit viewport unpainted.
+        let latexEditor = app.textViews["text-editor"]
+        latexEditor.typeKey(.end, modifierFlags: .command)
+        latexEditor.typeText("\n% visible after choosing LaTeX")
+        XCTAssertTrue(
+            (latexEditor.value as? String ?? "").contains("% visible after choosing LaTeX")
+        )
     }
 
     @MainActor

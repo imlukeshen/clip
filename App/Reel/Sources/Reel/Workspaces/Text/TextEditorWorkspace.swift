@@ -129,21 +129,29 @@ struct TextEditorWorkspace: View {
         HSplitView {
             if editor.language == .latex, editor.document.files.count > 1 {
                 TeXProjectSidebar(editor: editor)
-                    .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
+                    .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
             }
             codeEditor
-                .frame(minWidth: editor.language == .latex ? 340 : 0)
+                .frame(minWidth: latexPaneMinimumWidth)
             if editor.language == .latex {
                 TeXPDFPreview(
                     editor: editor,
                     forwardSearch: texForwardSearch,
                     onInverseSearch: runInverseSearch
                 )
-                .frame(minWidth: 340)
+                .frame(minWidth: latexPaneMinimumWidth)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+    }
+
+    /// The shell guarantees editors 760 points beside the inspector. Leave
+    /// room for both source and preview when a TeX project also needs its file
+    /// navigator, rather than letting NSSplitView squeeze a native pane away.
+    private var latexPaneMinimumWidth: CGFloat {
+        guard editor.language == .latex else { return 0 }
+        return editor.document.files.count > 1 ? 300 : 340
     }
 
     private var editorSurfaceAccessibilityIdentifier: String {
@@ -402,6 +410,10 @@ struct TextEditorWorkspace: View {
     private func languageButton(_ title: String, language: LanguageID) -> some View {
         Button {
             editor.setLanguage(language)
+            // A language choice is an editing command. Return keyboard focus to
+            // the source at the current caret so typing can continue immediately
+            // after the menu closes, including while the LaTeX split is settling.
+            sourceNavigation = TextEditorNavigation(line: cursorLine, column: cursorColumn)
         } label: {
             if editor.language == language {
                 Label(title, systemImage: "checkmark")
