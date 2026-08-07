@@ -53,6 +53,13 @@ struct TeXWorkspaceSandbox {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// Clears artifacts from a failed cache-only probe before a network-enabled retry.
+    func resetOutput() throws {
+        let manager = FileManager.default
+        try? manager.removeItem(at: output)
+        try manager.createDirectory(at: output, withIntermediateDirectories: true)
+    }
+
     private static func copyProjectFiles(
         _ files: [URL],
         projectRoot: URL,

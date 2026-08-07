@@ -722,6 +722,23 @@ struct TextEditorViewModelTests {
         #expect(recorder.latestSource?.contains("second queued edit") == true)
     }
 
+    @Test("An unchanged LaTeX document reuses its successful PDF")
+    func unchangedLatexBuildReturnsImmediately() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXJobRecorder()
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+
+        editor.requestTeXCompile()
+        await waitUntil { editor.texCompilationState == .succeeded }
+        #expect(recorder.compileCount == 1)
+
+        editor.requestTeXCompile()
+
+        #expect(recorder.compileCount == 1)
+        #expect(editor.notice == "PDF is already up to date.")
+    }
+
     @Test("Editing an included file builds the main file with bibliography dependencies")
     func multiFileLatexBuildUsesMainDependencyGraph() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -901,6 +918,7 @@ private final class TeXJobRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storedJob: TeXJob?
     private var storedMainSource: String?
+    private var storedCompileCount = 0
 
     var job: TeXJob? {
         lock.lock()
@@ -914,8 +932,15 @@ private final class TeXJobRecorder: @unchecked Sendable {
         return storedMainSource
     }
 
+    var compileCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedCompileCount
+    }
+
     func record(_ job: TeXJob) {
         lock.lock()
+        storedCompileCount += 1
         storedJob = job
         storedMainSource = try? String(contentsOf: job.mainFile, encoding: .utf8)
         lock.unlock()

@@ -44,22 +44,65 @@ public struct TectonicEngine: TeXEngine {
                         at: cacheDirectory,
                         withIntermediateDirectories: true
                     )
-                    if job.packageAccess == .allowNetwork {
-                        await networkAccessObserver()
-                    }
                     continuation.yield(.pass(1, of: 1))
-                    let result = try await TeXProcessController().run(
-                        executableURL: executableURL,
-                        arguments: arguments(for: job, workspace: workspace),
-                        currentDirectory: workspace.source,
-                        environment: environment(for: job),
-                        timeout: job.timeout,
-                        logDirectory: workspace.root,
-                        logSizeLimit: job.logSizeLimit
-                    )
-                    for line in result.combinedOutput.components(separatedBy: .newlines)
-                    where !line.isEmpty {
-                        continuation.yield(.logLine(line))
+                    let controller = TeXProcessController()
+                    let result: TeXProcessResult
+                    if job.packageAccess == .allowNetwork, isCacheReady {
+                        // Most builds need no network once their packages are cached. Trying
+                        // the confined cache first avoids a remote bundle check on every click.
+                        // A genuine cache miss retries once with the user's existing consent.
+                        var cachedJob = job
+                        cachedJob.packageAccess = .cachedOnly
+                        let cachedResult = try await controller.run(
+                            executableURL: executableURL,
+                            arguments: arguments(for: cachedJob, workspace: workspace),
+                            currentDirectory: workspace.source,
+                            environment: environment(for: cachedJob),
+                            timeout: job.timeout,
+                            logDirectory: workspace.root.appendingPathComponent(
+                                "cached-attempt", isDirectory: true
+                            ),
+                            logSizeLimit: job.logSizeLimit
+                        )
+                        if cachedResult.status == 0
+                            || !Self.requiresNetworkRetry(cachedResult.combinedOutput)
+                        {
+                            result = cachedResult
+                        } else {
+                            try workspace.resetOutput()
+                            await networkAccessObserver()
+                            result = try await controller.run(
+                                executableURL: executableURL,
+                                arguments: arguments(for: job, workspace: workspace),
+                                currentDirectory: workspace.source,
+                                environment: environment(for: job),
+                                timeout: job.timeout,
+                                logDirectory: workspace.root.appendingPathComponent(
+                                    "network-attempt", isDirectory: true
+                                ),
+                                logSizeLimit: job.logSizeLimit
+                            )
+                        }
+                    } else {
+                        if job.packageAccess == .allowNetwork {
+                            // A new library has no bundle digest or format files to probe.
+                            // Its first approved build must populate the cache directly.
+                            await networkAccessObserver()
+                        }
+                        result = try await controller.run(
+                            executableURL: executableURL,
+                            arguments: arguments(for: job, workspace: workspace),
+                            currentDirectory: workspace.source,
+                            environment: environment(for: job),
+                            timeout: job.timeout,
+                            logDirectory: workspace.root,
+                            logSizeLimit: job.logSizeLimit
+                        )
+                    }
+                    if !result.combinedOutput.isEmpty {
+                        // Publish one bounded log chunk. Thousands of individual observable
+                        // string appends made a completed compile look stuck in the UI.
+                        continuation.yield(.logLine(result.combinedOutput))
                     }
                     for diagnostic in TeXLogParser.diagnostics(in: result.combinedOutput) {
                         continuation.yield(.diagnostic(diagnostic))
@@ -79,6 +122,7 @@ public struct TectonicEngine: TeXEngine {
                         synctex: job.synctex ? synctex : nil,
                         sizeLimit: job.outputSizeLimit
                     )
+                    markCacheReady()
                     try Task.checkCancellation()
                     continuation.yield(
                         .finished(pdf: resultURLs.pdf, synctex: resultURLs.synctex)
@@ -109,6 +153,18 @@ public struct TectonicEngine: TeXEngine {
             FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return caches.appendingPathComponent("Clip/Tectonic", isDirectory: true)
+    }
+
+    private var cacheReadyMarkerURL: URL {
+        cacheDirectory.appendingPathComponent(".clip-cache-ready", isDirectory: false)
+    }
+
+    private var isCacheReady: Bool {
+        FileManager.default.isReadableFile(atPath: cacheReadyMarkerURL.path)
+    }
+
+    private func markCacheReady() {
+        try? Data().write(to: cacheReadyMarkerURL, options: .atomic)
     }
 
     private func arguments(for job: TeXJob, workspace: TeXWorkspaceSandbox) -> [String] {
@@ -182,6 +238,21 @@ public struct TectonicEngine: TeXEngine {
         let lines = output.components(separatedBy: .newlines).filter { !$0.isEmpty }
         return lines.suffix(8).joined(separator: "\n")
     }
+
+    static func requiresNetworkRetry(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        if normalized.contains("this bundle isn't cached")
+            || normalized.contains("could not get bundle")
+            || normalized.contains("not available in the cache")
+            || normalized.contains("failed to retrieve")
+        {
+            return true
+        }
+        guard normalized.contains("using only cached resource files") else { return false }
+        return normalized.contains("not found")
+            || normalized.contains("not loadable")
+            || normalized.contains("missing resource")
+    }
 }
 
 struct TeXProcessResult: Sendable {
@@ -210,6 +281,10 @@ final class TeXProcessController: @unchecked Sendable {
         logDirectory: URL,
         logSizeLimit: Int64
     ) async throws -> TeXProcessResult {
+        try FileManager.default.createDirectory(
+            at: logDirectory,
+            withIntermediateDirectories: true
+        )
         let outputURL = logDirectory.appendingPathComponent("stdout.log")
         let errorURL = logDirectory.appendingPathComponent("stderr.log")
         FileManager.default.createFile(atPath: outputURL.path, contents: nil)

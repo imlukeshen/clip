@@ -225,6 +225,9 @@ privacy-positioned app that needs explicit handling:
 
 - First compile requiring a fetch shows a one-time explanation and asks.
 - Every fetch is recorded in the **egress ledger** with `purpose: "tex-package"`.
+- The first approved build populates the local package cache. Later builds probe that
+  cache first and use the network only when a required bundle resource is missing, so
+  routine rebuilds do not wait on remote resolution.
 - Cache lives at `.reel/tex-cache/`, inspectable, clearable.
 - **Offline alternative:** point Tectonic at a locally downloaded bundle file
   (`--bundle <path>`). Document how to get one; don't ship a 4 GB asset.

@@ -49,6 +49,7 @@ import Testing
     #expect(logs.contains("untrusted:1"))
     #expect(logs.contains("openin:p"))
     #expect(logs.contains("openout:p"))
+    #expect(events.filter { if case .logLine = $0 { true } else { false } }.count == 1)
     #expect(!logs.contains(fixture.mainFile.deletingLastPathComponent().path))
     #expect(await observer.count == 0)
 }
@@ -81,6 +82,89 @@ import Testing
 
     #expect(await observer.count == 1)
     #expect(!logs.contains("--only-cached"))
+}
+
+@Test func allowedNetworkBuildUsesWarmCacheWithoutNetworkAccess() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.successScript)
+    defer { fixture.remove() }
+    let observer = NetworkObserver()
+    let engine = TectonicEngine(
+        executableURL: fixture.executable,
+        cacheDirectory: fixture.cache,
+        networkAccessObserver: { await observer.record() }
+    )
+
+    let firstEvents = try await collect(
+        engine.compile(
+            TeXJob(
+                mainFile: fixture.mainFile,
+                timeout: .seconds(2),
+                packageAccess: .allowNetwork
+            )
+        )
+    )
+    if case .finished(let pdf, _) = firstEvents.last {
+        try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+    }
+    #expect(await observer.count == 1)
+
+    let events = try await collect(
+        engine.compile(
+            TeXJob(
+                mainFile: fixture.mainFile,
+                timeout: .seconds(2),
+                packageAccess: .allowNetwork
+            )
+        )
+    )
+    if case .finished(let pdf, _) = events.last {
+        try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+    }
+    let log = events.compactMap { event -> String? in
+        guard case .logLine(let value) = event else { return nil }
+        return value
+    }.joined(separator: "\n")
+
+    #expect(log.contains("--only-cached"))
+    #expect(await observer.count == 1)
+}
+
+@Test func warmCacheMissRetriesWithObservedNetworkAccess() async throws {
+    let fixture = try TeXFixture(script: TeXFixture.cacheMissThenSuccessScript)
+    defer { fixture.remove() }
+    let observer = NetworkObserver()
+    let engine = TectonicEngine(
+        executableURL: fixture.executable,
+        cacheDirectory: fixture.cache,
+        networkAccessObserver: { await observer.record() }
+    )
+    let job = TeXJob(
+        mainFile: fixture.mainFile,
+        timeout: .seconds(2),
+        packageAccess: .allowNetwork
+    )
+
+    for _ in 0..<2 {
+        let events = try await collect(engine.compile(job))
+        if case .finished(let pdf, _) = events.last {
+            try? FileManager.default.removeItem(at: pdf.deletingLastPathComponent())
+        }
+    }
+
+    #expect(await observer.count == 2)
+}
+
+@Test func cachedSyntaxFailureDoesNotRetryOverTheNetwork() {
+    #expect(
+        !TectonicEngine.requiresNetworkRetry(
+            "using only cached resource files\nerror: undefined control sequence"
+        )
+    )
+    #expect(
+        TectonicEngine.requiresNetworkRetry(
+            "using only cached resource files\nerror: required bundle file not found"
+        )
+    )
 }
 
 @Test func bundledTectonicExplainsThatBiberNeedsTheDirectBuild() async throws {
@@ -302,5 +386,29 @@ private struct TeXFixture {
         printf 'untrusted:%s\n' "$TECTONIC_UNTRUSTED_MODE" >&2
         printf 'openin:%s\n' "$openin_any" >&2
         printf 'openout:%s\n' "$openout_any" >&2
+        """
+
+    static let cacheMissThenSuccessScript = """
+        #!/bin/sh
+        case " $* " in
+            *" --only-cached "*)
+                printf 'using only cached resource files\n' >&2
+                printf "this bundle isn't cached\n" >&2
+                exit 1
+                ;;
+        esac
+        outdir=""
+        input=""
+        previous=""
+        for argument in "$@"; do
+            if [ "$previous" = "--outdir" ]; then outdir="$argument"; fi
+            previous="$argument"
+            input="$argument"
+        done
+        name="${input##*/}"
+        name="${name%.tex}"
+        printf '%%PDF-1.4\n' > "$outdir/$name.pdf"
+        printf 'SyncTeX Version:1\n' > "$outdir/$name.synctex.gz"
+        printf 'args:%s\n' "$*" >&2
         """
 }

@@ -47,9 +47,8 @@ public struct SystemTeXEngine: TeXEngine {
                         logDirectory: workspace.root,
                         logSizeLimit: job.logSizeLimit
                     )
-                    for line in result.combinedOutput.components(separatedBy: .newlines)
-                    where !line.isEmpty {
-                        continuation.yield(.logLine(line))
+                    if !result.combinedOutput.isEmpty {
+                        continuation.yield(.logLine(result.combinedOutput))
                     }
                     for diagnostic in TeXLogParser.diagnostics(in: result.combinedOutput) {
                         continuation.yield(.diagnostic(diagnostic))
