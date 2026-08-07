@@ -4,6 +4,7 @@ import AppKit
 final class CodeEditorContainerView: NSView {
     let scrollView: NSScrollView
     private var requestedInitialFocus = false
+    private var lastContainerWidth: CGFloat?
 
     init(scrollView: NSScrollView) {
         self.scrollView = scrollView
@@ -47,14 +48,26 @@ final class CodeEditorContainerView: NSView {
                 textView.isHorizontallyResizable
                 ? CGFloat.greatestFiniteMagnitude
                 : max(documentSize.width - textView.textContainerInset.width * 2, 1)
-            if textContainer.containerSize.width != width {
+            let containerWidthChanged = lastContainerWidth != width
+            lastContainerWidth = width
+            if containerWidthChanged {
                 textContainer.containerSize = NSSize(
                     width: width,
                     height: CGFloat.greatestFiniteMagnitude
                 )
+                textView.layoutManager?.invalidateDisplay(
+                    forCharacterRange: NSRange(
+                        location: 0,
+                        length: (textView.string as NSString).length
+                    )
+                )
             }
-            textView.layoutManager?.ensureLayout(for: textContainer)
+            textView.layoutManager?.ensureLayout(
+                forBoundingRect: textView.visibleRect,
+                in: textContainer
+            )
             textView.needsDisplay = true
+            scrollView.contentView.needsDisplay = true
         }
     }
 

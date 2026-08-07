@@ -151,6 +151,16 @@ struct CodeEditor: NSViewRepresentable {
         if textView.hasMarkedText() {
             context.coordinator.observeExternalTextDuringComposition(text)
         }
+        // Restore stable source attributes before applying an external buffer.
+        // Split-view attachment can clear NSTextView.typingAttributes even
+        // though the coordinator still owns the intended editor palette.
+        context.coordinator.updateAppearance(
+            textView: textView,
+            scrollView: scrollView,
+            theme: theme,
+            language: language,
+            settings: settings
+        )
         let shouldApplyText =
             !context.coordinator.isApplyingText && !textView.hasMarkedText()
             && textView.string != text
@@ -161,23 +171,15 @@ struct CodeEditor: NSViewRepresentable {
             // fresh parse so stable block IDs remain scoped to their file.
             context.coordinator.refreshDocumentSnapshot(in: textView)
         }
-        context.coordinator.updateAppearance(
-            textView: textView,
-            scrollView: scrollView,
-            theme: theme,
-            language: language,
-            settings: settings
-        )
+        context.coordinator.repairInvisibleLaTeXSourceIfNeeded(in: textView)
         context.coordinator.ruler?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
         if languageChanged, language == .latex {
-            // Adding the PDF preview mutates the surrounding NSSplitView after
-            // this representable update. AppKit can consequently reparent the
-            // text view and invalidate its viewport after the normal layout and
-            // appearance passes. Always repair that geometry once the split has
-            // settled, even when a language menu owns focus. Only restore first
-            // responder status when the source editor previously owned it.
+            // Expanding the persistent PDF slot changes the source viewport
+            // after this representable update. Refresh that geometry once the
+            // split settles, even when a language menu owns focus. Only restore
+            // first responder status when the source editor previously owned it.
             context.coordinator.restoreEditingAfterWorkspaceTransition(
                 in: container,
                 restoreFocus: shouldRestoreEditing
@@ -381,10 +383,10 @@ struct CodeEditor: NSViewRepresentable {
             // Carry the editor's explicit foreground and font into programmatic
             // updates. An unstyled attributed replacement defaults to black,
             // which is effectively invisible in Clip's dark editor.
-            let replacement = NSAttributedString(
-                string: value,
-                attributes: textView.typingAttributes
-            )
+            let replacementAttributes =
+                textView.sourceTypingAttributes.isEmpty
+                ? textView.typingAttributes : textView.sourceTypingAttributes
+            let replacement = NSAttributedString(string: value, attributes: replacementAttributes)
             _ = textView.performValidatedReplacement(in: fullRange, with: replacement)
             manager?.enableUndoRegistration()
             let replacementLength = (value as NSString).length
@@ -983,6 +985,51 @@ struct CodeEditor: NSViewRepresentable {
                 textView.layoutManager?.ensureLayout(for: textContainer)
             }
             textView.needsDisplay = true
+        }
+
+        /// Repairs the failure mode where TextKit keeps the source buffer and
+        /// selection but a split/layout transaction leaves one or more glyph
+        /// runs transparent or indistinguishable from the editor background.
+        /// The scan walks attribute runs and only repaints when corruption is
+        /// present, so ordinary SwiftUI state updates remain inexpensive.
+        fileprivate func repairInvisibleLaTeXSourceIfNeeded(in textView: NSTextView) {
+            guard parent.language == .latex, !textView.hasMarkedText(),
+                let storage = textView.textStorage, storage.length > 0
+            else { return }
+            let visibleRange = visibleCharacterRange(in: textView)
+            let selectedLocation = min(textView.selectedRange().location, storage.length - 1)
+            let selectedLine = (textView.string as NSString).lineRange(
+                for: NSRange(location: selectedLocation, length: 0)
+            )
+            let inspectedRange = NSUnionRange(visibleRange, selectedLine)
+            guard inspectedRange.length > 0 else { return }
+            let background = textView.backgroundColor.usingColorSpace(.sRGB)
+            var needsRepair = false
+            storage.enumerateAttribute(
+                .foregroundColor,
+                in: inspectedRange,
+                options: [.longestEffectiveRangeNotRequired]
+            ) { value, _, stop in
+                guard let color = value as? NSColor,
+                    let foreground = color.usingColorSpace(.sRGB),
+                    let background
+                else {
+                    needsRepair = true
+                    stop.pointee = true
+                    return
+                }
+                let red = foreground.redComponent - background.redComponent
+                let green = foreground.greenComponent - background.greenComponent
+                let blue = foreground.blueComponent - background.blueComponent
+                let distance = (red * red + green * green + blue * blue).squareRoot()
+                if foreground.alphaComponent < 0.35 || distance < 0.16 {
+                    needsRepair = true
+                    stop.pointee = true
+                }
+            }
+            guard needsRepair else { return }
+            applyVisibleBaseStyle(in: inspectedRange, to: textView)
+            scheduleHighlight(for: textView.string)
         }
 
         /// Paints one immutable block-document revision. Parsing and semantic

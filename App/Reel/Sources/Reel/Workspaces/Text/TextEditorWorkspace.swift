@@ -143,29 +143,62 @@ struct TextEditorWorkspace: View {
     }
 
     private var editorSurface: some View {
-        // Keep the native text editor under one stable split-view hierarchy.
-        // Automatic language detection can promote a scratch buffer to LaTeX
-        // while AppKit is still delivering a key sequence. Replacing a lone
-        // CodeEditor with a new HSplitView at that moment destroys the first
-        // responder and drops the remaining characters.
+        // Keep all three split children structurally present for the lifetime
+        // of the workspace. Inserting or removing an arranged child can detach
+        // the native NSTextView long enough for TextKit to retain its buffer but
+        // stop painting glyphs. Collapsing stable hosts preserves the source
+        // view's parent, layout manager, first responder, and drawing surface.
         HSplitView {
-            if editor.language == .latex, editor.document.files.count > 1 {
-                TeXProjectSidebar(editor: editor)
-                    .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
-            }
+            texProjectSidebarSlot
             codeEditor
                 .frame(minWidth: latexPaneMinimumWidth)
+                .id("text-source-editor-slot")
+            texPreviewSlot
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+    }
+
+    private var texProjectSidebarSlot: some View {
+        ZStack {
+            if showsTeXProjectSidebar {
+                TeXProjectSidebar(editor: editor)
+            }
+        }
+        .frame(
+            minWidth: showsTeXProjectSidebar ? 120 : 0,
+            idealWidth: showsTeXProjectSidebar ? 160 : 0,
+            maxWidth: showsTeXProjectSidebar ? 220 : 0
+        )
+        .clipped()
+        .allowsHitTesting(showsTeXProjectSidebar)
+        .accessibilityHidden(!showsTeXProjectSidebar)
+        .id("tex-project-sidebar-slot")
+    }
+
+    private var texPreviewSlot: some View {
+        ZStack {
             if editor.language == .latex {
                 TeXPDFPreview(
                     editor: editor,
                     forwardSearch: texForwardSearch,
                     onInverseSearch: runInverseSearch
                 )
-                .frame(minWidth: latexPaneMinimumWidth)
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+        .frame(
+            minWidth: editor.language == .latex ? latexPaneMinimumWidth : 0,
+            idealWidth: editor.language == .latex ? latexPaneMinimumWidth : 0,
+            maxWidth: editor.language == .latex ? .infinity : 0
+        )
+        .clipped()
+        .allowsHitTesting(editor.language == .latex)
+        .accessibilityHidden(editor.language != .latex)
+        .id("tex-preview-slot")
+    }
+
+    private var showsTeXProjectSidebar: Bool {
+        editor.language == .latex && editor.document.files.count > 1
     }
 
     /// The shell guarantees editors 760 points beside the inspector. Leave

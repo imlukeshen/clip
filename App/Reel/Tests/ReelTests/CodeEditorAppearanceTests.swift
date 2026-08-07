@@ -287,6 +287,71 @@ struct CodeEditorAppearanceTests {
         #expect(renderedForegroundPixelCount(in: promotedTextView, rect: visibleGlyphRect) > 20)
     }
 
+    @Test("Initially LaTeX source remains painted after workspace layout changes")
+    func initiallyLatexSourceSurvivesBuildOutputLayoutChange() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let textView = try #require(descendant(CodeTextView.self, in: hostingView))
+        #expect(window.makeFirstResponder(textView))
+
+        let source = """
+            \\documentclass{article}
+            \\begin{document}
+            SOURCE GLYPHS MUST REMAIN VISIBLE
+            \\end{document}
+            """
+        for character in source {
+            textView.insertText(String(character), replacementRange: textView.selectedRange())
+        }
+        await settle(hostingView)
+
+        #expect(model.text == source)
+        let initialPixels = compositedForegroundPixelCount(
+            in: textView,
+            ancestor: hostingView
+        )
+        #expect(initialPixels > 80)
+
+        // A build result adds a lower output pane while inspector or window
+        // changes can resize the source half of the split. Exercise both in
+        // one update and rasterize the complete hosting hierarchy, rather than
+        // asking NSTextView to render itself in isolation.
+        model.showsBuildOutput = true
+        window.setContentSize(NSSize(width: 760, height: 560))
+        await settle(hostingView)
+
+        let resizedTextView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let resizedPixels = compositedForegroundPixelCount(
+            in: resizedTextView,
+            ancestor: hostingView
+        )
+        #expect(resizedTextView.string == source)
+        #expect(
+            (resizedTextView.enclosingScrollView?.contentView.documentVisibleRect.width ?? 0) > 0
+        )
+        #expect(resizedPixels > 80)
+        #expect(resizedPixels > initialPixels / 3)
+    }
+
     private func settle<Content: View>(_ hostingView: NSHostingView<Content>) async {
         for _ in 0..<6 {
             await Task.yield()
@@ -349,6 +414,70 @@ struct CodeEditorAppearanceTests {
         return count
     }
 
+    private func compositedForegroundPixelCount(
+        in textView: NSTextView,
+        ancestor: NSView
+    ) -> Int {
+        guard let storage = textView.textStorage, storage.length > 0,
+            let textContainer = textView.textContainer,
+            let layoutManager = textView.layoutManager,
+            let backgroundRGB = textView.backgroundColor.usingColorSpace(.sRGB)
+        else { return 0 }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: 0, length: storage.length),
+            actualCharacterRange: nil
+        )
+        var glyphRect = layoutManager.boundingRect(
+            forGlyphRange: glyphRange,
+            in: textContainer
+        )
+        glyphRect.origin.x += textView.textContainerOrigin.x
+        glyphRect.origin.y += textView.textContainerOrigin.y
+        let visibleRect = glyphRect.intersection(textView.visibleRect).insetBy(dx: -2, dy: -2)
+        let renderRect = textView.convert(visibleRect, to: ancestor).intersection(ancestor.bounds)
+        var foregroundColors: [NSColor] = []
+        storage.enumerateAttribute(
+            .foregroundColor,
+            in: NSRange(location: 0, length: storage.length),
+            options: [.longestEffectiveRangeNotRequired]
+        ) { value, _, _ in
+            guard let color = value as? NSColor,
+                let rgb = color.usingColorSpace(.sRGB),
+                rgb.alphaComponent > 0.5,
+                self.colorDistance(rgb, backgroundRGB) > 0.3
+            else { return }
+            if !foregroundColors.contains(where: { self.colorDistance($0, rgb) < 0.01 }) {
+                foregroundColors.append(rgb)
+            }
+        }
+        guard !renderRect.isEmpty,
+            !foregroundColors.isEmpty,
+            let bitmap = ancestor.bitmapImageRepForCachingDisplay(in: renderRect)
+        else { return 0 }
+
+        ancestor.displayIfNeeded()
+        ancestor.cacheDisplay(in: renderRect, to: bitmap)
+        var count = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                let distanceFromBackground = colorDistance(pixel, backgroundRGB)
+                let distanceFromForeground =
+                    foregroundColors.map { colorDistance(pixel, $0) }.min() ?? .infinity
+                if distanceFromBackground > 0.18,
+                    distanceFromForeground < distanceFromBackground * 0.9
+                {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
     private func colorDistance(_ lhs: NSColor, _ rhs: NSColor) -> Double {
         let red = Double(lhs.redComponent - rhs.redComponent)
         let green = Double(lhs.greenComponent - rhs.greenComponent)
@@ -362,6 +491,7 @@ struct CodeEditorAppearanceTests {
 private final class CodeEditorPromotionModel {
     var text = ""
     var language: LanguageID = .plainText
+    var showsBuildOutput = false
 }
 
 private struct CodeEditorPromotionHarness: View {
@@ -369,38 +499,50 @@ private struct CodeEditorPromotionHarness: View {
     private let undoManager = UndoManager()
 
     var body: some View {
-        HSplitView {
-            CodeEditor(
-                text: $model.text,
-                language: model.language,
-                settings: EditorSettings(fontSize: 13),
-                documentIdentity: CodeEditorDocumentIdentity(
-                    documentID: DocumentID(rawValue: "latex-appearance-document"),
-                    fileID: FileID(rawValue: "latex-appearance-file")
-                ),
-                fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
-                isReadOnly: false,
-                undoManager: undoManager,
-                onSave: {},
-                onLongLineModeChange: { _ in },
-                onLargePaste: {},
-                onPasteRefused: {},
-                onPasteIntoEmptyBuffer: { _ in },
-                onSnippetNotice: { _ in },
-                diagnostics: [],
-                scrollToLine: nil,
-                navigation: nil,
-                onVisibleLineChange: { _ in },
-                onSelectionChange: { _ in },
-                onMarkdownDocumentChange: { _, _ in },
-                onCursorChange: { _, _ in }
-            )
-            .frame(minWidth: model.language == .latex ? 340 : 0)
+        VStack(spacing: 0) {
+            HSplitView {
+                CodeEditor(
+                    text: $model.text,
+                    language: model.language,
+                    settings: EditorSettings(fontSize: 13),
+                    documentIdentity: CodeEditorDocumentIdentity(
+                        documentID: DocumentID(rawValue: "latex-appearance-document"),
+                        fileID: FileID(rawValue: "latex-appearance-file")
+                    ),
+                    fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
+                    isReadOnly: false,
+                    undoManager: undoManager,
+                    onSave: {},
+                    onLongLineModeChange: { _ in },
+                    onLargePaste: {},
+                    onPasteRefused: {},
+                    onPasteIntoEmptyBuffer: { _ in },
+                    onSnippetNotice: { _ in },
+                    diagnostics: [],
+                    scrollToLine: nil,
+                    navigation: nil,
+                    onVisibleLineChange: { _ in },
+                    onSelectionChange: { _ in },
+                    onMarkdownDocumentChange: { _, _ in },
+                    onCursorChange: { _, _ in }
+                )
+                .frame(minWidth: model.language == .latex ? 340 : 0)
 
-            if model.language == .latex {
-                Color.black
-                    .frame(minWidth: 340)
-                    .accessibilityIdentifier("latex-preview-test-double")
+                if model.language == .latex {
+                    Color.black
+                        .frame(minWidth: 340)
+                        .accessibilityIdentifier("latex-preview-test-double")
+                }
+            }
+
+            if model.showsBuildOutput {
+                Color(nsColor: .controlBackgroundColor)
+                    .overlay(alignment: .topLeading) {
+                        Text("Build output")
+                            .padding(12)
+                    }
+                    .frame(height: 150)
+                    .accessibilityIdentifier("latex-build-output-test-double")
             }
         }
     }
