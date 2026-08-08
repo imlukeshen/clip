@@ -166,11 +166,15 @@ public final class ImageEditorViewModel {
 
     public func perform(_ patches: [ImagePatch], actionName: String) throws {
         guard !patches.isEmpty else { return }
-        undoManager.beginUndoGrouping()
-        defer { undoManager.endUndoGrouping() }
         var candidate = document
         var inverses: [ImagePatch] = []
         for patch in patches { inverses.append(try candidate.apply(patch)) }
+        // Opening a layer and closing it unchanged is not an edit, so it must
+        // not write the file or push an undo step that restores what is
+        // already on screen.
+        guard candidate != document else { return }
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
         document = candidate
         if let selectedLayerID,
             !document.layers.contains(where: { $0.id == selectedLayerID })
