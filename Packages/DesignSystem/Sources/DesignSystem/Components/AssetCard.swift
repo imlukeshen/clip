@@ -8,6 +8,9 @@ public enum AssetCardState: Sendable {
 }
 
 public struct AssetCard<Thumbnail: View>: View {
+    /// Shape of every preview tile, so a grid of cards forms even rows.
+    public static var thumbnailAspectRatio: CGFloat { 1.6 }
+
     @Environment(\.theme) private var theme
     @State private var isHovered = false
 
@@ -51,8 +54,16 @@ public struct AssetCard<Thumbnail: View>: View {
             Button(action: action) {
                 VStack(alignment: .leading, spacing: 0) {
                     ZStack(alignment: .bottomTrailing) {
-                        thumbnail
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // The tile takes its size from the card, never from the
+                        // image inside it. Sizing from the image let a tall
+                        // screenshot stretch its card far past its neighbours
+                        // and left the rows ragged.
+                        Color.clear
+                            .overlay {
+                                thumbnail
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                            .clipped()
                             .overlay(alignment: .topLeading) {
                                 if case .selected = state {
                                     Image(systemName: "checkmark.circle.fill")
@@ -99,7 +110,7 @@ public struct AssetCard<Thumbnail: View>: View {
                                 .tint(theme.palette.accent)
                         }
                     }
-                    .aspectRatio(1.6, contentMode: .fit)
+                    .aspectRatio(Self.thumbnailAspectRatio, contentMode: .fit)
                     .background(theme.palette.surfaceSunken)
 
                     VStack(alignment: .leading, spacing: 2) {
