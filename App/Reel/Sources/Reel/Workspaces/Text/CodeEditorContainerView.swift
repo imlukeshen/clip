@@ -11,6 +11,12 @@ final class CodeEditorContainerView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
+        // Repaint through a resize rather than reusing rendered contents, and
+        // stand behind the scroll view with the editor's own background so a
+        // pane that is briefly mis-sized cannot reveal what was on screen
+        // before it.
+        layerContentsRedrawPolicy = .duringViewResize
+        layer?.backgroundColor = scrollView.backgroundColor.cgColor
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
         NSLayoutConstraint.activate([
@@ -29,10 +35,26 @@ final class CodeEditorContainerView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 
+    /// Keeps the backing colour in step with the theme the editor paints with.
+    func applyBackground(_ color: NSColor) {
+        guard layer?.backgroundColor != color.cgColor else { return }
+        layer?.backgroundColor = color.cgColor
+    }
+
+    /// Width of the scroll view the line-number ruler covers.
+    ///
+    /// The scroll view reserves the ruler by offsetting the clip view's bounds
+    /// rather than by narrowing it, so the content size still reports the full
+    /// width and a document sized from it runs past the visible edge.
+    private var rulerInset: CGFloat {
+        max(-scrollView.contentView.bounds.origin.x, 0)
+    }
+
     override func layout() {
         super.layout()
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        let viewport = scrollView.contentSize
+        var viewport = scrollView.contentSize
+        viewport.width = max(viewport.width - rulerInset, 1)
         var documentSize = textView.frame.size
         if textView.isHorizontallyResizable {
             documentSize.width = max(documentSize.width, viewport.width)

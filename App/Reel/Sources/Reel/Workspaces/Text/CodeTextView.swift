@@ -79,6 +79,15 @@ final class CodeTextView: NSTextView {
         }
     }
 
+    /// A view that reports itself transparent leaves AppKit free to satisfy a
+    /// repaint from whatever is already in the backing store, which after a
+    /// split or window resize is the previous layout rather than this editor.
+    /// `draw(_:)` fills every dirty rect with the editor background first, so
+    /// the view genuinely owns its pixels whenever that background is opaque.
+    override var isOpaque: Bool {
+        backgroundColor.alphaComponent >= 1
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
         dirtyRect.fill()

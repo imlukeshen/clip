@@ -71,6 +71,10 @@ struct CodeEditor: NSViewRepresentable {
         textView.isSelectable = true
         textView.setAccessibilityIdentifier("text-editor")
         textView.isRichText = false
+        // The current-line wash and bracket rects have to be painted under the
+        // glyphs, so `CodeTextView` fills the background itself rather than
+        // letting `super.draw` fill over them. It reports itself opaque in
+        // exchange; see `CodeTextView.isOpaque`.
         textView.drawsBackground = false
         textView.importsGraphics = false
         textView.allowsUndo = true
@@ -103,6 +107,12 @@ struct CodeEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.contentView.postsBoundsChangedNotifications = true
+        // A layer-backed view reuses its rendered contents through a resize by
+        // default. SwiftUI resizes this pane whenever the preview, the project
+        // navigator, or the inspector appears, and reused contents there show
+        // as the previous layout rather than the source.
+        scrollView.contentView.layerContentsRedrawPolicy = .duringViewResize
+        scrollView.layerContentsRedrawPolicy = .duringViewResize
 
         let ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
         scrollView.verticalRulerView = ruler
@@ -513,16 +523,25 @@ struct CodeEditor: NSViewRepresentable {
             ]
             textView.sourceTypingAttributes = typingAttributes
             textView.typingAttributes = typingAttributes
+            let container = scrollView.superview as? CodeEditorContainerView
             let softWrap = settings.softWrap && !suppressesSoftWrap
             textView.isHorizontallyResizable = !softWrap
             textView.textContainer?.widthTracksTextView = softWrap
-            textView.textContainer?.containerSize = NSSize(
-                width: softWrap
-                    ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude,
-                height: CGFloat.greatestFiniteMagnitude
-            )
+            if let container {
+                // The host view's layout pass is the only place that knows how
+                // much of the scroll view the ruler covers, so let it own the
+                // container width instead of racing it with a second answer.
+                container.needsLayout = true
+            } else {
+                textView.textContainer?.containerSize = NSSize(
+                    width: softWrap
+                        ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            }
             scrollView.hasHorizontalScroller = !softWrap
             scrollView.backgroundColor = background
+            container?.applyBackground(background)
             scrollView.rulersVisible = !usesProseLayout
             ruler?.update(
                 background: NSColor(theme.palette.surfacePanel),

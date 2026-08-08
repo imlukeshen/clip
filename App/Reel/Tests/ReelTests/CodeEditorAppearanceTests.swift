@@ -369,6 +369,60 @@ struct CodeEditorAppearanceTests {
         #expect(resizedPixels > initialPixels / 3)
     }
 
+    @Test("The source surface is opaque and repaints rather than reusing pixels")
+    func sourceSurfaceRepaintsInsteadOfReusingRenderedPixels() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        model.text = "\\documentclass{article}"
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let container = try #require(descendant(CodeEditorContainerView.self, in: hostingView))
+        let textView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let clipView = container.scrollView.contentView
+
+        // Nothing in the editor's chain may satisfy a repaint from pixels that
+        // were rendered for a different size or a different view.
+        #expect(textView.isOpaque)
+        #expect(textView.backgroundColor.alphaComponent >= 1)
+        #expect(clipView.layerContentsRedrawPolicy == .duringViewResize)
+        #expect(container.layerContentsRedrawPolicy == .duringViewResize)
+        let backingAlpha = try #require(container.layer?.backgroundColor?.alpha)
+        #expect(backingAlpha == 1)
+
+        // The ruler covers part of the scroll view, so a document sized from
+        // the full content width would wrap text past the visible edge.
+        let visibleWidth = clipView.bounds.width + clipView.bounds.origin.x
+        #expect(visibleWidth > 0)
+        #expect(textView.frame.width <= visibleWidth + 0.5)
+        let textContainer = try #require(textView.textContainer)
+        #expect(textContainer.containerSize.width <= visibleWidth)
+
+        // The same must hold after the pane resizes underneath the editor.
+        window.setContentSize(NSSize(width: 720, height: 560))
+        await settle(hostingView)
+        let resizedVisibleWidth = clipView.bounds.width + clipView.bounds.origin.x
+        #expect(resizedVisibleWidth > 0)
+        #expect(textView.frame.width <= resizedVisibleWidth + 0.5)
+        #expect(textContainer.containerSize.width <= resizedVisibleWidth)
+    }
+
     private func settle<Content: View>(_ hostingView: NSHostingView<Content>) async {
         for _ in 0..<6 {
             await Task.yield()
