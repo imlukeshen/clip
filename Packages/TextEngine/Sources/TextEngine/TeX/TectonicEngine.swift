@@ -47,6 +47,24 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
                 do {
                     var workspace = try TeXWorkspaceSandbox.prepare(job)
                     defer { workspace.remove() }
+                    // Tectonic is XeTeX. Documents written for pdfLaTeX reach
+                    // for a pdfTeX-only glyph table it cannot provide.
+                    if try workspace.installXeTeXCompatibilityShim() {
+                        continuation.yield(
+                            .diagnostic(
+                                TeXDiagnostic(
+                                    severity: .information,
+                                    message: """
+                                        Substituted glyphtounicode for XeTeX. \
+                                        \\pdfglyphtounicode is a pdfTeX command Clip's engine does \
+                                        not provide, and XeTeX already writes Unicode-mapped PDFs \
+                                        without it.
+                                        """,
+                                    file: TeXWorkspaceSandbox.xeTeXCompatibilityShimName
+                                )
+                            )
+                        )
+                    }
                     try FileManager.default.createDirectory(
                         at: cacheDirectory,
                         withIntermediateDirectories: true

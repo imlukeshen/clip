@@ -53,6 +53,70 @@ struct TeXWorkspaceSandbox {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// File name whose contents Clip substitutes when compiling with XeTeX.
+    static let xeTeXCompatibilityShimName = "glyphtounicode.tex"
+
+    /// `glyphtounicode.tex` builds a PDF glyph-to-Unicode table by calling
+    /// `\pdfglyphtounicode`, a pdfTeX primitive XeTeX does not provide.
+    /// Documents written for pdfLaTeX input it unconditionally — the CV
+    /// templates in wide circulation especially — and under XeTeX every one of
+    /// its several hundred mapping lines raises an undefined control sequence,
+    /// which exhausts TeX's error limit before the document body is reached.
+    ///
+    /// XeTeX writes Unicode-mapped PDFs on its own, so the table is redundant
+    /// there rather than missing. Absorbing the pdfTeX spelling therefore
+    /// costs the document nothing and lets it compile unchanged.
+    private static let xeTeXCompatibilityShim = """
+        % Substituted by Clip. \\pdfglyphtounicode is a pdfTeX primitive that
+        % XeTeX does not provide, and XeTeX already writes Unicode-mapped PDFs
+        % without this table. Absorb the pdfTeX spelling so a document written
+        % for pdfLaTeX compiles unchanged.
+        \\providecommand\\pdfglyphtounicode[2]{}
+        \\ifx\\pdfgentounicode\\undefined\\newcount\\pdfgentounicode\\fi
+
+        """
+
+    /// Substitutes the pdfTeX-only glyph table with definitions XeTeX accepts.
+    ///
+    /// Only a project that reaches for the table gets the substitution, and a
+    /// project shipping its own copy keeps it, so this never touches a build
+    /// that would have succeeded anyway.
+    ///
+    /// - Returns: Whether the substitution happened, so the caller can report
+    ///   it rather than changing the build silently.
+    @discardableResult
+    func installXeTeXCompatibilityShim() throws -> Bool {
+        let destination = source.appendingPathComponent(Self.xeTeXCompatibilityShimName)
+        guard !FileManager.default.fileExists(atPath: destination.path),
+            sourceReferencesGlyphTable()
+        else { return false }
+        try Data(Self.xeTeXCompatibilityShim.utf8).write(to: destination, options: .atomic)
+        return true
+    }
+
+    private func sourceReferencesGlyphTable() -> Bool {
+        let manager = FileManager.default
+        guard
+            let enumerator = manager.enumerator(
+                at: source,
+                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+            )
+        else { return false }
+        let needle = Data("glyphtounicode".utf8)
+        let readableExtensions: Set<String> = ["tex", "sty", "cls", "ltx"]
+        for case let url as URL in enumerator {
+            guard readableExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values?.isRegularFile == true,
+                let size = values?.fileSize, size <= 4 * 1_024 * 1_024,
+                let contents = try? Data(contentsOf: url, options: .mappedIfSafe),
+                contents.range(of: needle) != nil
+            else { continue }
+            return true
+        }
+        return false
+    }
+
     private static func copyProjectFiles(
         _ files: [URL],
         projectRoot: URL,
