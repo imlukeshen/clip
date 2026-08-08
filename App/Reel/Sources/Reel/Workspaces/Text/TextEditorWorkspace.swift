@@ -207,49 +207,38 @@ struct TextEditorWorkspace: View {
     }
 
     private var codeEditor: some View {
-        ZStack(alignment: .topLeading) {
-            CodeEditor(
-                text: $editor.text,
-                language: editor.language,
-                settings: editor.settings,
-                documentIdentity: editorDocumentIdentity,
-                fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
-                isReadOnly: editor.isReadOnly,
-                undoManager: editor.undoManager,
-                onSave: editor.saveNow,
-                onLongLineModeChange: editor.setSoftWrapSuppressed,
-                onLargePaste: editor.enterLargePasteReadOnlyMode,
-                onPasteRefused: editor.reportPasteRefused,
-                onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
-                onSnippetNotice: editor.reportNotice,
-                diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
-                scrollToLine: nil,
-                navigation: sourceNavigation,
-                onVisibleLineChange: { _ in },
-                onSelectionChange: { selectedRange = $0 },
-                onMarkdownDocumentChange: { identity, document in
-                    guard identity == editorDocumentIdentity,
-                        document.source == editor.text
-                    else { return }
-                    markdownDocumentIdentity = identity
-                    markdownDocument = document
-                }
-            ) { line, column in
-                cursorLine = line
-                cursorColumn = column
+        // The empty-buffer prompt is painted by the text view itself, at the
+        // text container's own origin, so it cannot drift away from the first
+        // line the way a separately padded overlay does.
+        CodeEditor(
+            text: $editor.text,
+            language: editor.language,
+            settings: editor.settings,
+            documentIdentity: editorDocumentIdentity,
+            fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
+            isReadOnly: editor.isReadOnly,
+            undoManager: editor.undoManager,
+            onSave: editor.saveNow,
+            onLongLineModeChange: editor.setSoftWrapSuppressed,
+            onLargePaste: editor.enterLargePasteReadOnlyMode,
+            onPasteRefused: editor.reportPasteRefused,
+            onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
+            onSnippetNotice: editor.reportNotice,
+            diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
+            scrollToLine: nil,
+            navigation: sourceNavigation,
+            onVisibleLineChange: { _ in },
+            onSelectionChange: { selectedRange = $0 },
+            onMarkdownDocumentChange: { identity, document in
+                guard identity == editorDocumentIdentity,
+                    document.source == editor.text
+                else { return }
+                markdownDocumentIdentity = identity
+                markdownDocument = document
             }
-            if editor.text.isEmpty {
-                Text("Start typing…")
-                    .font(theme.type.body.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .padding(
-                        .leading,
-                        editor.language == .plainText || editor.language == .markdown ? 28 : 72
-                    )
-                    .padding(.top, 20)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+        ) { line, column in
+            cursorLine = line
+            cursorColumn = column
         }
     }
 

@@ -18,6 +18,7 @@ final class LineNumberGutterView: NSView {
     private var numberColor = NSColor.secondaryLabelColor
     private var separatorColor = NSColor.separatorColor
     private var gutterBackground = NSColor.windowBackgroundColor
+    private var currentLineColor = NSColor.clear
     private var numberFont = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
     var lineIndex = TextLineIndex()
     var diagnostics: [TeXDiagnostic] = [] {
@@ -43,11 +44,13 @@ final class LineNumberGutterView: NSView {
         background: NSColor,
         foreground: NSColor,
         separator: NSColor,
+        currentLine: NSColor,
         fontSize: CGFloat
     ) {
         gutterBackground = background
         numberColor = foreground
         separatorColor = separator
+        currentLineColor = currentLine
         numberFont = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
         needsDisplay = true
     }
@@ -55,9 +58,22 @@ final class LineNumberGutterView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         gutterBackground.setFill()
         dirtyRect.fill()
+        guard let textView, textView.window != nil else {
+            separatorColor.setFill()
+            NSRect(x: bounds.maxX - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height).fill()
+            return
+        }
+        // Carry the active row across the gutter so it reads as one band
+        // rather than stopping at the separator.
+        if let lineRect = (textView as? CodeTextView)?.currentLineRect {
+            let row = convert(lineRect, from: textView)
+            currentLineColor.setFill()
+            NSRect(x: 0, y: row.minY, width: bounds.width, height: row.height)
+                .intersection(dirtyRect)
+                .fill()
+        }
         separatorColor.setFill()
         NSRect(x: bounds.maxX - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height).fill()
-        guard let textView, textView.window != nil else { return }
 
         let source = textView.string as NSString
         let visible = textView.visibleRect

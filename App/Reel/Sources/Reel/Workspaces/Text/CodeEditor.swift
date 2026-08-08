@@ -513,6 +513,8 @@ struct CodeEditor: NSViewRepresentable {
             textView.tabWidth = settings.tabWidth
             textView.showsInvisibleMarkers = settings.showInvisibles
             textView.invisibleMarkerColor = NSColor(theme.palette.textTertiary)
+            textView.placeholderColor = NSColor(theme.palette.textTertiary)
+            textView.placeholder = "Start typing…"
             let typingAttributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: foreground,
@@ -544,6 +546,7 @@ struct CodeEditor: NSViewRepresentable {
                 background: NSColor(theme.palette.surfacePanel),
                 foreground: NSColor(theme.palette.textTertiary),
                 separator: NSColor(theme.palette.line),
+                currentLine: textView.currentLineColor,
                 fontSize: theme.type.numeric.size
             )
             if syntaxAppearanceChanged {

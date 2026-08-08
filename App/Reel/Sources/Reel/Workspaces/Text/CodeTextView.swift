@@ -7,6 +7,12 @@ import TextEngine
 final class CodeTextView: NSTextView {
     weak var providedUndoManager: UndoManager?
     var currentLineColor = NSColor.clear
+    var placeholderColor = NSColor.tertiaryLabelColor
+    /// Prompt shown in an empty buffer, painted by the text view itself so it
+    /// lands on the first line rather than near it.
+    var placeholder = "" {
+        didSet { needsDisplay = true }
+    }
     var invisibleMarkerColor = NSColor.secondaryLabelColor
     var commentPrefix = "//"
     var commentSuffix = ""
@@ -100,6 +106,16 @@ final class CodeTextView: NSTextView {
         if showsInvisibleMarkers {
             drawInvisibleMarkers(in: dirtyRect)
         }
+        drawPlaceholderIfNeeded()
+    }
+
+    /// Draws the empty-buffer prompt at the text container's own origin, so it
+    /// shares the first line's baseline, indent, and font with real text.
+    private func drawPlaceholderIfNeeded() {
+        guard !placeholder.isEmpty, textStorage?.length == 0, !hasMarkedText() else { return }
+        var attributes = sourceTypingAttributes.isEmpty ? typingAttributes : sourceTypingAttributes
+        attributes[.foregroundColor] = placeholderColor
+        (placeholder as NSString).draw(at: textContainerOrigin, withAttributes: attributes)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -618,7 +634,9 @@ final class CodeTextView: NSTextView {
         onSnippetNotice("Wrapped the selection in a code fence.")
     }
 
-    private var currentLineRect: NSRect? {
+    /// Row occupied by the line holding the caret, in this view's coordinates.
+    /// The gutter reads it so the active row reads as one band across both.
+    var currentLineRect: NSRect? {
         guard let window else { return nil }
         let source = string as NSString
         let location = min(selectedRange().location, source.length)
