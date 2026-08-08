@@ -10,7 +10,7 @@ struct CodeEditorDocumentIdentity: Equatable, Sendable {
     let fileID: FileID
 }
 
-/// TextKit 2 editor surface with native undo, find/replace, and a line-number ruler.
+/// TextKit editor surface with native undo, find/replace, and a line-number gutter.
 struct CodeEditor: NSViewRepresentable {
     @Environment(\.theme) private var theme
     @Binding var text: String
@@ -114,13 +114,10 @@ struct CodeEditor: NSViewRepresentable {
         scrollView.contentView.layerContentsRedrawPolicy = .duringViewResize
         scrollView.layerContentsRedrawPolicy = .duringViewResize
 
-        let ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
-        scrollView.verticalRulerView = ruler
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
+        let gutter = LineNumberGutterView(textView: textView)
         context.coordinator.textView = textView
         textView.textStorage?.delegate = context.coordinator
-        context.coordinator.ruler = ruler
+        context.coordinator.gutter = gutter
         context.coordinator.observeScrolling(in: scrollView)
         context.coordinator.updateAppearance(
             textView: textView,
@@ -130,10 +127,10 @@ struct CodeEditor: NSViewRepresentable {
             settings: settings
         )
         context.coordinator.apply(text, to: textView)
-        ruler.diagnostics = diagnostics
+        gutter.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
-        return CodeEditorContainerView(scrollView: scrollView)
+        return CodeEditorContainerView(scrollView: scrollView, gutter: gutter)
     }
 
     func updateNSView(_ container: CodeEditorContainerView, context: Context) {
@@ -182,7 +179,7 @@ struct CodeEditor: NSViewRepresentable {
             context.coordinator.refreshDocumentSnapshot(in: textView)
         }
         context.coordinator.repairInvisibleLaTeXSourceIfNeeded(in: textView)
-        context.coordinator.ruler?.diagnostics = diagnostics
+        context.coordinator.gutter?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
         if language == .latex {
@@ -217,7 +214,7 @@ struct CodeEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate, @MainActor NSTextStorageDelegate {
         var parent: CodeEditor
         fileprivate weak var textView: CodeTextView?
-        fileprivate weak var ruler: LineNumberRulerView?
+        fileprivate weak var gutter: LineNumberGutterView?
         var isApplyingText = false
         private var scrollObserver: NSObjectProtocol?
         private var lineIndex = TextLineIndex()
@@ -295,7 +292,7 @@ struct CodeEditor: NSViewRepresentable {
                 beginCompositionIfNeeded()
                 needsPresentationRefreshAfterComposition = true
                 pendingSyntaxEdit = nil
-                ruler?.needsDisplay = true
+                gutter?.needsDisplay = true
                 reportSelection(textView.selectedRange())
                 return
             }
@@ -316,7 +313,7 @@ struct CodeEditor: NSViewRepresentable {
                 edit: parent.language == .markdown ? nil : edit,
                 markdownEdit: edit
             )
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
         }
 
@@ -375,7 +372,7 @@ struct CodeEditor: NSViewRepresentable {
             }
             applyVisibleBaseStyle(in: nil, to: textView)
             scheduleHighlight(for: resolvedValue)
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
             deferredSave?()
         }
@@ -384,7 +381,7 @@ struct CodeEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             reportSelection(textView.selectedRange())
             textView.needsDisplay = true
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
         }
 
         fileprivate func apply(_ value: String, to textView: CodeTextView) {
@@ -415,7 +412,7 @@ struct CodeEditor: NSViewRepresentable {
             rebuildLineIndex(for: value)
             pendingSyntaxEdit = nil
             scheduleHighlight(for: value)
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
         }
 
@@ -529,8 +526,8 @@ struct CodeEditor: NSViewRepresentable {
             textView.textContainer?.widthTracksTextView = softWrap
             if let container {
                 // The host view's layout pass is the only place that knows how
-                // much of the scroll view the ruler covers, so let it own the
-                // container width instead of racing it with a second answer.
+                // much width the gutter takes, so let it own the container
+                // width instead of racing it with a second answer.
                 container.needsLayout = true
             } else {
                 textView.textContainer?.containerSize = NSSize(
@@ -542,8 +539,8 @@ struct CodeEditor: NSViewRepresentable {
             scrollView.hasHorizontalScroller = !softWrap
             scrollView.backgroundColor = background
             container?.applyBackground(background)
-            scrollView.rulersVisible = !usesProseLayout
-            ruler?.update(
+            container?.showsGutter = !usesProseLayout
+            gutter?.update(
                 background: NSColor(theme.palette.surfacePanel),
                 foreground: NSColor(theme.palette.textTertiary),
                 separator: NSColor(theme.palette.line),
@@ -590,7 +587,7 @@ struct CodeEditor: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.ruler?.needsDisplay = true
+                    self.gutter?.needsDisplay = true
                     if let textView = self.textView {
                         self.scheduleHighlight(for: textView.string, debounce: true)
                         self.reportVisibleLine(in: textView)
@@ -715,7 +712,7 @@ struct CodeEditor: NSViewRepresentable {
                 else { return }
                 lineIndex = index
                 textView?.lineIndex = index
-                ruler?.lineIndex = index
+                gutter?.lineIndex = index
                 let shouldSuppressSoftWrap = index.longestLineLength > 10_000
                 if suppressesSoftWrap != shouldSuppressSoftWrap {
                     suppressesSoftWrap = shouldSuppressSoftWrap
@@ -730,7 +727,7 @@ struct CodeEditor: NSViewRepresentable {
                         )
                     }
                 }
-                ruler?.needsDisplay = true
+                gutter?.needsDisplay = true
                 if let textView {
                     reportSelection(textView.selectedRange())
                     reportVisibleLine(in: textView)

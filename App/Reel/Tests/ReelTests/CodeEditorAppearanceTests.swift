@@ -369,6 +369,65 @@ struct CodeEditorAppearanceTests {
         #expect(resizedPixels > initialPixels / 3)
     }
 
+    /// A scroll view showing an `NSRulerView` reserves the ruler by offsetting
+    /// its clip view's bounds, and inside the layer-backed hierarchy SwiftUI
+    /// hosts the editor in, the document view then never reaches the screen —
+    /// the gutter and background paint while every glyph, caret wash, and
+    /// bracket rect is missing. Nothing rendered through `cacheDisplay` can
+    /// observe that, so guard the structure instead: the clip view must stay
+    /// unreserved and the gutter must be an ordinary sibling view.
+    @Test("The source scroll view reserves no ruler space")
+    func sourceScrollViewLeavesItsClipViewUnreserved() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        model.text = "\\documentclass{article}"
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let container = try #require(descendant(CodeEditorContainerView.self, in: hostingView))
+        let scrollView = container.scrollView
+
+        #expect(scrollView.verticalRulerView == nil)
+        #expect(scrollView.horizontalRulerView == nil)
+        #expect(!scrollView.rulersVisible)
+        // A reserved ruler shows up as a horizontal offset on the clip view's
+        // bounds. The vertical offset is the find bar's own reservation, which
+        // is expected and harmless.
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        // The gutter takes real width beside the source instead of overlaying it.
+        #expect(container.gutter.superview === container)
+        #expect(container.showsGutter)
+        #expect(container.gutter.frame.width == LineNumberGutterView.thickness)
+        #expect(container.gutter.frame.height == container.bounds.height)
+        #expect(scrollView.frame.minX == LineNumberGutterView.thickness)
+        #expect(scrollView.frame.maxX == container.bounds.maxX)
+
+        // Prose languages hide the gutter and give the width back to the text.
+        model.language = .plainText
+        await settle(hostingView)
+        #expect(!container.showsGutter)
+        #expect(container.gutter.frame.width == 0)
+        #expect(scrollView.frame.minX == 0)
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
     @Test("The source surface is opaque and repaints rather than reusing pixels")
     func sourceSurfaceRepaintsInsteadOfReusingRenderedPixels() async throws {
         let model = CodeEditorPromotionModel()

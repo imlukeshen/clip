@@ -3,11 +3,22 @@ import AppKit
 @MainActor
 final class CodeEditorContainerView: NSView {
     let scrollView: NSScrollView
+    let gutter: LineNumberGutterView
     private var requestedInitialFocus = false
     private var viewportRepairScheduled = false
 
-    init(scrollView: NSScrollView) {
+    /// Whether the line-number gutter takes space beside the source.
+    var showsGutter = true {
+        didSet {
+            guard showsGutter != oldValue else { return }
+            gutter.isHidden = !showsGutter
+            needsLayout = true
+        }
+    }
+
+    init(scrollView: NSScrollView, gutter: LineNumberGutterView) {
         self.scrollView = scrollView
+        self.gutter = gutter
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
@@ -17,14 +28,8 @@ final class CodeEditorContainerView: NSView {
         // before it.
         layerContentsRedrawPolicy = .duringViewResize
         layer?.backgroundColor = scrollView.backgroundColor.cgColor
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(gutter)
         addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
     }
 
     required init?(coder: NSCoder) {
@@ -41,20 +46,18 @@ final class CodeEditorContainerView: NSView {
         layer?.backgroundColor = color.cgColor
     }
 
-    /// Width of the scroll view the line-number ruler covers.
-    ///
-    /// The scroll view reserves the ruler by offsetting the clip view's bounds
-    /// rather than by narrowing it, so the content size still reports the full
-    /// width and a document sized from it runs past the visible edge.
-    private var rulerInset: CGFloat {
-        max(-scrollView.contentView.bounds.origin.x, 0)
-    }
-
     override func layout() {
         super.layout()
+        let gutterWidth = showsGutter ? LineNumberGutterView.thickness : 0
+        gutter.frame = NSRect(x: 0, y: 0, width: gutterWidth, height: bounds.height)
+        scrollView.frame = NSRect(
+            x: gutterWidth,
+            y: 0,
+            width: max(bounds.width - gutterWidth, 0),
+            height: bounds.height
+        )
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        var viewport = scrollView.contentSize
-        viewport.width = max(viewport.width - rulerInset, 1)
+        let viewport = scrollView.contentSize
         var documentSize = textView.frame.size
         if textView.isHorizontallyResizable {
             documentSize.width = max(documentSize.width, viewport.width)
@@ -79,6 +82,7 @@ final class CodeEditorContainerView: NSView {
             }
             repairVisibleViewport(in: textView, textContainer: textContainer)
         }
+        gutter.needsDisplay = true
     }
 
     func scheduleViewportRepair() {
