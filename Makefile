@@ -1,4 +1,4 @@
-.PHONY: bootstrap generate xcode build run test test-packages test-frameworks test-app test-ui deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
+.PHONY: bootstrap generate xcode build run dmg test test-packages test-frameworks test-app test-ui deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
@@ -22,6 +22,9 @@ build: generate
 run: generate
 	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
 	open -n DerivedData/Build/Products/Debug/Clip.app
+
+dmg:
+	Scripts/make-dmg.sh
 
 test: test-packages deps shortcuts licence-audit
 
