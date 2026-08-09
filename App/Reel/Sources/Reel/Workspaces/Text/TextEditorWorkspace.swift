@@ -947,20 +947,10 @@ struct TextEditorWorkspace: View {
     }
 
     private var latexStatusTitle: String {
-        if editor.texHasUnbuiltChanges { return "Changes not built" }
-        return editor.texCompilationState.statusTitle
-    }
-}
-
-extension TeXCompilationState {
-    fileprivate var statusTitle: String {
-        switch self {
-        case .idle: "Not built"
-        case .compiling: "Building"
-        case .succeeded: "PDF ready"
-        case .paused: "Build paused"
-        case .failed: "Build failed"
-        }
+        TeXStatusTitle.title(
+            state: editor.texCompilationState,
+            hasUnbuiltChanges: editor.texHasUnbuiltChanges
+        )
     }
 }
 

@@ -106,6 +106,11 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
                             // side effects leak into the network-enabled attempt.
                             workspace.remove()
                             workspace = try TeXWorkspaceSandbox.prepare(job)
+                            // A restaged workspace starts from the project
+                            // again, so anything the first staging added has to
+                            // be added back or the retry compiles a document
+                            // the first attempt never saw.
+                            try workspace.installXeTeXCompatibilityShim()
                             await networkAccessObserver()
                             result = try await controller.run(
                                 executableURL: executableURL,
