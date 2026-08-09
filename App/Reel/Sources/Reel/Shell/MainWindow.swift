@@ -187,6 +187,21 @@ struct MainWindow: View {
     }
 
     private func handleSingleKeyShortcut(_ command: WorkspaceSingleKeyCommand) -> Bool {
+        // Backspace is the delete key on a Mac keyboard, and it reached only
+        // the timeline. Every editing surface with something selected answers
+        // it now. The input gate has already excused text fields, so typing is
+        // unaffected, and each surface leaves the key alone when its selection
+        // is empty so the event keeps travelling.
+        if command == .deleteSelected || command == .rippleDelete {
+            if let imageEditor = model.imageEditor, imageEditor.selectedLayerID != nil {
+                imageEditor.removeSelectedLayer()
+                return true
+            }
+            if let pdfEditor = model.pdfEditor, pdfEditor.selectedLayerID != nil {
+                pdfEditor.removeSelectedLayer()
+                return true
+            }
+        }
         guard let editor = model.editor else {
             guard command == .togglePlayback,
                 model.imageEditor == nil,

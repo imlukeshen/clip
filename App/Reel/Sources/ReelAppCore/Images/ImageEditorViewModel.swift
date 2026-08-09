@@ -166,11 +166,15 @@ public final class ImageEditorViewModel {
 
     public func perform(_ patches: [ImagePatch], actionName: String) throws {
         guard !patches.isEmpty else { return }
-        undoManager.beginUndoGrouping()
-        defer { undoManager.endUndoGrouping() }
         var candidate = document
         var inverses: [ImagePatch] = []
         for patch in patches { inverses.append(try candidate.apply(patch)) }
+        // Opening a layer and closing it unchanged is not an edit, so it must
+        // not write the file or push an undo step that restores what is
+        // already on screen.
+        guard candidate != document else { return }
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
         document = candidate
         if let selectedLayerID,
             !document.layers.contains(where: { $0.id == selectedLayerID })
@@ -231,15 +235,30 @@ public final class ImageEditorViewModel {
         let replacement = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !replacement.isEmpty, let first = rects.first else { return }
         let frame = rects.dropFirst().reduce(first) { $0.union($1) }
+
+        // Match what is already on the page rather than imposing a default, so
+        // the replacement reads as a correction instead of a patch.
+        let style = renderedImage.flatMap {
+            RecognizedTextStyleReader.style(in: $0, region: frame, text: replacement)
+        }
         let cover = Layer.redaction(
-            RedactionLayer(regions: rects, style: .solid(.black))
+            RedactionLayer(
+                regions: rects,
+                style: .solid(style?.background ?? RGBA(r: 0, g: 0, b: 0, a: 1))
+            )
         )
+        let measuredSize = style.map { $0.fontSize / Double(document.canvas.height) }
+        let fallbackSize = frame.height * 0.72
         let editable = Layer.text(
             TextLayer(
                 text: replacement,
                 frame: frame,
-                color: RGBA(r: 1, g: 1, b: 1, a: 1),
-                fontSize: min(max(frame.height * Double(document.canvas.height) * 0.72, 8), 120)
+                color: style?.foreground ?? RGBA(r: 1, g: 1, b: 1, a: 1),
+                fontName: Self.systemFontName(weight: style?.weight ?? .regular),
+                fontSize: min(
+                    max((measuredSize ?? fallbackSize) * Double(document.canvas.height), 8),
+                    120
+                )
             )
         )
         do {
@@ -252,9 +271,20 @@ public final class ImageEditorViewModel {
                 actionName: "Convert Live Text"
             )
             selectedLayerID = editable.id
-            notice = "Editable text layer added over the source text."
+            notice =
+                style == nil
+                ? "Editable text layer added over the source text."
+                : "Editable text layer matched to the surrounding text."
         } catch {
             notice = "The recognized text could not be converted."
+        }
+    }
+
+    /// Name of the system face a measured weight maps to.
+    static func systemFontName(weight: RecognizedTextStyle.Weight) -> String {
+        switch weight {
+        case .regular: "SF Pro"
+        case .bold: "SF Pro Bold"
         }
     }
 

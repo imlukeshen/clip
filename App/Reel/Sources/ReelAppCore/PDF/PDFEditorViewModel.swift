@@ -210,11 +210,15 @@ public final class PDFEditorViewModel {
 
     public func perform(_ patches: [PDFPatch], actionName: String) throws {
         guard !patches.isEmpty else { return }
-        undoManager.beginUndoGrouping()
-        defer { undoManager.endUndoGrouping() }
         var candidate = document
         var inverses: [PDFPatch] = []
         for patch in patches { inverses.append(try candidate.apply(patch)) }
+        // Opening a block and closing it unchanged is not an edit. Committing
+        // it anyway wrote the file, pushed an undo step that restores what is
+        // already on screen, and re-rendered every thumbnail.
+        guard candidate != document else { return }
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
         document = candidate
         reconcileSelection()
         registerUndo(Array(inverses.reversed()), actionName: actionName)

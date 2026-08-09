@@ -10,7 +10,7 @@ struct CodeEditorDocumentIdentity: Equatable, Sendable {
     let fileID: FileID
 }
 
-/// TextKit 2 editor surface with native undo, find/replace, and a line-number ruler.
+/// TextKit editor surface with native undo, find/replace, and a line-number gutter.
 struct CodeEditor: NSViewRepresentable {
     @Environment(\.theme) private var theme
     @Binding var text: String
@@ -71,6 +71,10 @@ struct CodeEditor: NSViewRepresentable {
         textView.isSelectable = true
         textView.setAccessibilityIdentifier("text-editor")
         textView.isRichText = false
+        // The current-line wash and bracket rects have to be painted under the
+        // glyphs, so `CodeTextView` fills the background itself rather than
+        // letting `super.draw` fill over them. It reports itself opaque in
+        // exchange; see `CodeTextView.isOpaque`.
         textView.drawsBackground = false
         textView.importsGraphics = false
         textView.allowsUndo = true
@@ -103,14 +107,17 @@ struct CodeEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.contentView.postsBoundsChangedNotifications = true
+        // A layer-backed view reuses its rendered contents through a resize by
+        // default. SwiftUI resizes this pane whenever the preview, the project
+        // navigator, or the inspector appears, and reused contents there show
+        // as the previous layout rather than the source.
+        scrollView.contentView.layerContentsRedrawPolicy = .duringViewResize
+        scrollView.layerContentsRedrawPolicy = .duringViewResize
 
-        let ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
-        scrollView.verticalRulerView = ruler
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
+        let gutter = LineNumberGutterView(textView: textView)
         context.coordinator.textView = textView
         textView.textStorage?.delegate = context.coordinator
-        context.coordinator.ruler = ruler
+        context.coordinator.gutter = gutter
         context.coordinator.observeScrolling(in: scrollView)
         context.coordinator.updateAppearance(
             textView: textView,
@@ -120,10 +127,10 @@ struct CodeEditor: NSViewRepresentable {
             settings: settings
         )
         context.coordinator.apply(text, to: textView)
-        ruler.diagnostics = diagnostics
+        gutter.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
-        return CodeEditorContainerView(scrollView: scrollView)
+        return CodeEditorContainerView(scrollView: scrollView, gutter: gutter)
     }
 
     func updateNSView(_ container: CodeEditorContainerView, context: Context) {
@@ -151,6 +158,16 @@ struct CodeEditor: NSViewRepresentable {
         if textView.hasMarkedText() {
             context.coordinator.observeExternalTextDuringComposition(text)
         }
+        // Restore stable source attributes before applying an external buffer.
+        // Split-view attachment can clear NSTextView.typingAttributes even
+        // though the coordinator still owns the intended editor palette.
+        context.coordinator.updateAppearance(
+            textView: textView,
+            scrollView: scrollView,
+            theme: theme,
+            language: language,
+            settings: settings
+        )
         let shouldApplyText =
             !context.coordinator.isApplyingText && !textView.hasMarkedText()
             && textView.string != text
@@ -161,23 +178,17 @@ struct CodeEditor: NSViewRepresentable {
             // fresh parse so stable block IDs remain scoped to their file.
             context.coordinator.refreshDocumentSnapshot(in: textView)
         }
-        context.coordinator.updateAppearance(
-            textView: textView,
-            scrollView: scrollView,
-            theme: theme,
-            language: language,
-            settings: settings
-        )
-        context.coordinator.ruler?.diagnostics = diagnostics
+        context.coordinator.repairInvisibleLaTeXSourceIfNeeded(in: textView)
+        context.coordinator.gutter?.diagnostics = diagnostics
         context.coordinator.scrollToRequestedLine()
         context.coordinator.navigateToRequestedLocation()
+        if language == .latex {
+            container.scheduleViewportRepair()
+        }
         if languageChanged, language == .latex {
-            // Adding the PDF preview mutates the surrounding NSSplitView after
-            // this representable update. AppKit can consequently reparent the
-            // text view and invalidate its viewport after the normal layout and
-            // appearance passes. Always repair that geometry once the split has
-            // settled, even when a language menu owns focus. Only restore first
-            // responder status when the source editor previously owned it.
+            // Only restore first responder status when the source editor
+            // previously owned it. Viewport repair is scheduled for every LaTeX
+            // update and coalesced by the container.
             context.coordinator.restoreEditingAfterWorkspaceTransition(
                 in: container,
                 restoreFocus: shouldRestoreEditing
@@ -203,7 +214,7 @@ struct CodeEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate, @MainActor NSTextStorageDelegate {
         var parent: CodeEditor
         fileprivate weak var textView: CodeTextView?
-        fileprivate weak var ruler: LineNumberRulerView?
+        fileprivate weak var gutter: LineNumberGutterView?
         var isApplyingText = false
         private var scrollObserver: NSObjectProtocol?
         private var lineIndex = TextLineIndex()
@@ -242,6 +253,7 @@ struct CodeEditor: NSViewRepresentable {
         fileprivate var presentedLanguage: LanguageID
         fileprivate var isTextEditorActive = false
         private var focusRetirementGeneration = 0
+        private var selectionReportGeneration = 0
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -280,7 +292,7 @@ struct CodeEditor: NSViewRepresentable {
                 beginCompositionIfNeeded()
                 needsPresentationRefreshAfterComposition = true
                 pendingSyntaxEdit = nil
-                ruler?.needsDisplay = true
+                gutter?.needsDisplay = true
                 reportSelection(textView.selectedRange())
                 return
             }
@@ -301,7 +313,7 @@ struct CodeEditor: NSViewRepresentable {
                 edit: parent.language == .markdown ? nil : edit,
                 markdownEdit: edit
             )
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
         }
 
@@ -360,7 +372,7 @@ struct CodeEditor: NSViewRepresentable {
             }
             applyVisibleBaseStyle(in: nil, to: textView)
             scheduleHighlight(for: resolvedValue)
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
             deferredSave?()
         }
@@ -369,7 +381,7 @@ struct CodeEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             reportSelection(textView.selectedRange())
             textView.needsDisplay = true
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
         }
 
         fileprivate func apply(_ value: String, to textView: CodeTextView) {
@@ -381,10 +393,10 @@ struct CodeEditor: NSViewRepresentable {
             // Carry the editor's explicit foreground and font into programmatic
             // updates. An unstyled attributed replacement defaults to black,
             // which is effectively invisible in Clip's dark editor.
-            let replacement = NSAttributedString(
-                string: value,
-                attributes: textView.typingAttributes
-            )
+            let replacementAttributes =
+                textView.sourceTypingAttributes.isEmpty
+                ? textView.typingAttributes : textView.sourceTypingAttributes
+            let replacement = NSAttributedString(string: value, attributes: replacementAttributes)
             _ = textView.performValidatedReplacement(in: fullRange, with: replacement)
             manager?.enableUndoRegistration()
             let replacementLength = (value as NSString).length
@@ -400,7 +412,7 @@ struct CodeEditor: NSViewRepresentable {
             rebuildLineIndex(for: value)
             pendingSyntaxEdit = nil
             scheduleHighlight(for: value)
-            ruler?.needsDisplay = true
+            gutter?.needsDisplay = true
             reportSelection(textView.selectedRange())
         }
 
@@ -501,6 +513,8 @@ struct CodeEditor: NSViewRepresentable {
             textView.tabWidth = settings.tabWidth
             textView.showsInvisibleMarkers = settings.showInvisibles
             textView.invisibleMarkerColor = NSColor(theme.palette.textTertiary)
+            textView.placeholderColor = NSColor(theme.palette.textTertiary)
+            textView.placeholder = "Start typing…"
             let typingAttributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: foreground,
@@ -508,21 +522,31 @@ struct CodeEditor: NSViewRepresentable {
             ]
             textView.sourceTypingAttributes = typingAttributes
             textView.typingAttributes = typingAttributes
+            let container = scrollView.superview as? CodeEditorContainerView
             let softWrap = settings.softWrap && !suppressesSoftWrap
             textView.isHorizontallyResizable = !softWrap
             textView.textContainer?.widthTracksTextView = softWrap
-            textView.textContainer?.containerSize = NSSize(
-                width: softWrap
-                    ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude,
-                height: CGFloat.greatestFiniteMagnitude
-            )
+            if let container {
+                // The host view's layout pass is the only place that knows how
+                // much width the gutter takes, so let it own the container
+                // width instead of racing it with a second answer.
+                container.needsLayout = true
+            } else {
+                textView.textContainer?.containerSize = NSSize(
+                    width: softWrap
+                        ? scrollView.contentSize.width : CGFloat.greatestFiniteMagnitude,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            }
             scrollView.hasHorizontalScroller = !softWrap
             scrollView.backgroundColor = background
-            scrollView.rulersVisible = !usesProseLayout
-            ruler?.update(
+            container?.applyBackground(background)
+            container?.showsGutter = !usesProseLayout
+            gutter?.update(
                 background: NSColor(theme.palette.surfacePanel),
                 foreground: NSColor(theme.palette.textTertiary),
                 separator: NSColor(theme.palette.line),
+                currentLine: textView.currentLineColor,
                 fontSize: theme.type.numeric.size
             )
             if syntaxAppearanceChanged {
@@ -566,7 +590,7 @@ struct CodeEditor: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.ruler?.needsDisplay = true
+                    self.gutter?.needsDisplay = true
                     if let textView = self.textView {
                         self.scheduleHighlight(for: textView.string, debounce: true)
                         self.reportVisibleLine(in: textView)
@@ -576,6 +600,7 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         func stopObserving() {
+            selectionReportGeneration += 1
             lineIndexTask?.cancel()
             lineIndexTask = nil
             syntaxTask?.cancel()
@@ -592,6 +617,8 @@ struct CodeEditor: NSViewRepresentable {
             in container: CodeEditorContainerView,
             restoreFocus: Bool
         ) {
+            container.scheduleViewportRepair()
+            guard restoreFocus else { return }
             guard
                 let expectedTextView = container.scrollView.documentView as? CodeTextView
             else { return }
@@ -602,32 +629,7 @@ struct CodeEditor: NSViewRepresentable {
                     container.scrollView.documentView === textView,
                     let window = container.window
                 else { return }
-                container.needsLayout = true
-                container.layoutSubtreeIfNeeded()
-                container.scrollView.needsLayout = true
-                container.scrollView.layoutSubtreeIfNeeded()
-                container.scrollView.contentView.needsLayout = true
-                container.scrollView.contentView.layoutSubtreeIfNeeded()
-                updateAppearance(
-                    textView: textView,
-                    scrollView: container.scrollView,
-                    theme: parent.theme,
-                    language: parent.language,
-                    settings: parent.settings
-                )
-                applyVisibleBaseStyle(in: nil, to: textView)
-                textView.needsLayout = true
-                textView.layoutSubtreeIfNeeded()
-                if let textContainer = textView.textContainer {
-                    textView.layoutManager?.ensureLayout(for: textContainer)
-                }
-                textView.needsDisplay = true
-                container.scrollView.contentView.needsDisplay = true
-                container.scrollView.needsDisplay = true
-                container.needsDisplay = true
-                if restoreFocus {
-                    window.makeFirstResponder(textView)
-                }
+                window.makeFirstResponder(textView)
             }
         }
 
@@ -713,7 +715,7 @@ struct CodeEditor: NSViewRepresentable {
                 else { return }
                 lineIndex = index
                 textView?.lineIndex = index
-                ruler?.lineIndex = index
+                gutter?.lineIndex = index
                 let shouldSuppressSoftWrap = index.longestLineLength > 10_000
                 if suppressesSoftWrap != shouldSuppressSoftWrap {
                     suppressesSoftWrap = shouldSuppressSoftWrap
@@ -728,7 +730,7 @@ struct CodeEditor: NSViewRepresentable {
                         )
                     }
                 }
-                ruler?.needsDisplay = true
+                gutter?.needsDisplay = true
                 if let textView {
                     reportSelection(textView.selectedRange())
                     reportVisibleLine(in: textView)
@@ -737,9 +739,20 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         private func reportSelection(_ selection: NSRange) {
-            let position = lineIndex.position(at: selection.location)
-            parent.onSelectionChange(selection)
-            parent.onCursorChange(position.line, position.column)
+            selectionReportGeneration += 1
+            let generation = selectionReportGeneration
+            let identity = documentIdentity
+            // NSTextView can report selection synchronously while SwiftUI is
+            // reconciling this representable. Publish on the next run-loop turn
+            // so cursor state never mutates its parent during a view update.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, selectionReportGeneration == generation,
+                    documentIdentity == identity
+                else { return }
+                let position = lineIndex.position(at: selection.location)
+                parent.onSelectionChange(selection)
+                parent.onCursorChange(position.line, position.column)
+            }
         }
 
         private func reportVisibleLine(in textView: NSTextView) {
@@ -983,6 +996,61 @@ struct CodeEditor: NSViewRepresentable {
                 textView.layoutManager?.ensureLayout(for: textContainer)
             }
             textView.needsDisplay = true
+        }
+
+        /// Repairs the failure mode where TextKit keeps the source buffer and
+        /// selection but a split/layout transaction leaves one or more glyph
+        /// runs transparent or indistinguishable from the editor background.
+        /// The scan walks attribute runs and only repaints when corruption is
+        /// present, so ordinary SwiftUI state updates remain inexpensive.
+        fileprivate func repairInvisibleLaTeXSourceIfNeeded(in textView: NSTextView) {
+            guard parent.language == .latex, !textView.hasMarkedText(),
+                let storage = textView.textStorage, storage.length > 0
+            else { return }
+            let visibleRange = visibleCharacterRange(in: textView)
+            let selectedLocation = min(textView.selectedRange().location, storage.length - 1)
+            let selectedProbe = NSRange(location: selectedLocation, length: 1)
+            let background = textView.backgroundColor.usingColorSpace(.sRGB)
+            func needsRepair(in range: NSRange) -> Bool {
+                guard range.length > 0 else { return false }
+                var needsRepair = false
+                storage.enumerateAttribute(
+                    .foregroundColor,
+                    in: range,
+                    options: [.longestEffectiveRangeNotRequired]
+                ) { value, _, stop in
+                    guard let color = value as? NSColor,
+                        let foreground = color.usingColorSpace(.sRGB),
+                        let background
+                    else {
+                        needsRepair = true
+                        stop.pointee = true
+                        return
+                    }
+                    let red = foreground.redComponent - background.redComponent
+                    let green = foreground.greenComponent - background.greenComponent
+                    let blue = foreground.blueComponent - background.blueComponent
+                    let distance = (red * red + green * green + blue * blue).squareRoot()
+                    if foreground.alphaComponent < 0.35 || distance < 0.16 {
+                        needsRepair = true
+                        stop.pointee = true
+                    }
+                }
+                return needsRepair
+            }
+            var repaired = false
+            if needsRepair(in: visibleRange) {
+                applyVisibleBaseStyle(in: visibleRange, to: textView)
+                repaired = true
+            }
+            if !NSLocationInRange(selectedLocation, visibleRange),
+                needsRepair(in: selectedProbe)
+            {
+                applyVisibleBaseStyle(in: selectedProbe, to: textView)
+                repaired = true
+            }
+            guard repaired else { return }
+            scheduleHighlight(for: textView.string)
         }
 
         /// Paints one immutable block-document revision. Parsing and semantic

@@ -138,6 +138,7 @@ final class TimelineCanvas: NSView {
     var onRazor: ((ItemID, RationalTime) -> Void)?
     var onZoom: ((CGFloat) -> Void)?
 
+    private static let rulerFont = NSFont.systemFont(ofSize: 10)
     private let labelWidth = CGFloat(TimelineViewport.leadingInset)
     private let rulerHeight: CGFloat = 24
     private let videoHeight: CGFloat = 34
@@ -225,7 +226,7 @@ final class TimelineCanvas: NSView {
         super.draw(dirtyRect)
         surface.setFill()
         bounds.fill()
-        drawRuler()
+        drawRuler(in: dirtyRect)
         drawTargetedLanes()
         drawLaneLabels()
         drawVideo(in: dirtyRect)
@@ -754,23 +755,63 @@ final class TimelineCanvas: NSView {
         }
     }
 
-    private func drawRuler() {
+    private func drawRuler(in dirtyRect: NSRect) {
         lineColor.setStroke()
         NSBezierPath.strokeLine(
             from: NSPoint(x: labelWidth, y: rulerHeight),
             to: NSPoint(x: bounds.maxX, y: rulerHeight)
         )
-        let interval = rulerInterval()
-        guard editingDuration > .zero else { return }
-        var second = 0.0
-        while second <= editingDuration.seconds {
-            let x = labelWidth + CGFloat(second) * pointsPerSecond
+        let duration = editingDuration.seconds
+        guard duration > 0 else { return }
+        let ruler = rulerScale()
+        let usesHours = duration >= 3_600
+        // Subdivisions first, so a labelled tick always draws over the shorter
+        // tick that shares its position.
+        if ruler.tickInterval < ruler.labelInterval {
+            lineColor.setStroke()
+            forEachRulerTick(every: ruler.tickInterval, through: duration, in: dirtyRect) { x, _ in
+                NSBezierPath.strokeLine(
+                    from: NSPoint(x: x, y: rulerHeight - 3),
+                    to: NSPoint(x: x, y: rulerHeight)
+                )
+            }
+        }
+        forEachRulerTick(every: ruler.labelInterval, through: duration, in: dirtyRect) { x, time in
+            lineColor.setStroke()
             NSBezierPath.strokeLine(
-                from: NSPoint(x: x, y: rulerHeight - 5),
+                from: NSPoint(x: x, y: rulerHeight - 7),
                 to: NSPoint(x: x, y: rulerHeight)
             )
-            drawText(formatRuler(second), at: NSPoint(x: x + 3, y: 5), color: textTertiary)
-            second += interval
+            drawText(
+                TimelineRuler.label(
+                    forSeconds: time,
+                    labelInterval: ruler.labelInterval,
+                    usesHours: usesHours
+                ),
+                at: NSPoint(x: x + 3, y: 5),
+                color: textTertiary
+            )
+        }
+    }
+
+    /// Walks the ticks that fall inside `dirtyRect`, so a long project zoomed
+    /// in does not pay for the ticks scrolled off either side.
+    private func forEachRulerTick(
+        every interval: Double,
+        through duration: Double,
+        in dirtyRect: NSRect,
+        body: (CGFloat, Double) -> Void
+    ) {
+        let scale = pointsPerSecond
+        let firstVisible = max(Double((dirtyRect.minX - labelWidth) / scale), 0)
+        var index = Int((firstVisible / interval).rounded(.down))
+        while true {
+            let time = Double(index) * interval
+            guard time <= duration else { return }
+            let x = labelWidth + CGFloat(time) * scale
+            guard x <= min(dirtyRect.maxX, bounds.maxX) else { return }
+            body(x, time)
+            index += 1
         }
     }
 
@@ -1314,7 +1355,7 @@ final class TimelineCanvas: NSView {
         (text as NSString).draw(
             at: point,
             withAttributes: [
-                .font: NSFont.systemFont(ofSize: 10),
+                .font: Self.rulerFont,
                 .foregroundColor: color,
             ]
         )
@@ -1332,17 +1373,30 @@ final class TimelineCanvas: NSView {
         }
     }
 
-    private func rulerInterval() -> Double {
-        switch pointsPerSecond {
-        case 80...: 1
-        case 30...: 2
-        case 12...: 5
-        default: 10
-        }
+    /// Sizes the ruler increment against the labels this timeline actually
+    /// renders, so zooming out lengthens the increment before two labels can
+    /// touch. Sub-second increments need a wider label, which can in turn
+    /// demand a coarser increment, so the choice is made twice.
+    private func rulerScale() -> TimelineRulerScale {
+        let scale = Double(pointsPerSecond)
+        let usesHours = editingDuration.seconds >= 3_600
+        let coarse = TimelineRuler.scale(
+            pointsPerSecond: scale,
+            minimumLabelSpacing: minimumRulerLabelSpacing(usesHours: usesHours, usesTenths: false)
+        )
+        guard coarse.labelInterval < 1 else { return coarse }
+        return TimelineRuler.scale(
+            pointsPerSecond: scale,
+            minimumLabelSpacing: minimumRulerLabelSpacing(usesHours: usesHours, usesTenths: true)
+        )
     }
 
-    private func formatRuler(_ seconds: Double) -> String {
-        String(format: "%d:%02d", Int(seconds) / 60, Int(seconds) % 60)
+    private func minimumRulerLabelSpacing(usesHours: Bool, usesTenths: Bool) -> Double {
+        // Measure the widest label shape rather than the label at hand: every
+        // increment has to clear the longest one it will ever draw.
+        let sample = (usesHours ? "0:00:00" : "00:00") + (usesTenths ? ".0" : "")
+        let width = (sample as NSString).size(withAttributes: [.font: Self.rulerFont]).width
+        return Double(width) + 14
     }
 
     private func formatHoverTime(_ seconds: Double) -> String {

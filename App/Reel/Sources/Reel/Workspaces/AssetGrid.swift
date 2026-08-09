@@ -18,7 +18,13 @@ struct AssetGrid: View {
     @State private var renameValue = ""
 
     private let columns = [
-        GridItem(.adaptive(minimum: 152, maximum: 210), spacing: 14)
+        GridItem(
+            .adaptive(
+                minimum: AssetGridMetrics.minimumCardWidth,
+                maximum: AssetGridMetrics.maximumCardWidth
+            ),
+            spacing: AssetGridMetrics.spacing
+        )
     ]
 
     var body: some View {
@@ -126,7 +132,7 @@ struct AssetGrid: View {
     }
 
     private var grid: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: AssetGridMetrics.spacing) {
             ForEach(assets) { asset in
                 AssetCard(
                     title: asset.displayName,
@@ -342,26 +348,11 @@ struct AssetGrid: View {
     }
 
     private var calculatedLayout: ReelAppCore.GridLayout {
-        let spacing: CGFloat = 10
-        let count = max(1, Int((gridWidth + spacing) / (152 + spacing)))
-        let width = min(210, (gridWidth - CGFloat(count - 1) * spacing) / CGFloat(count))
-        let height = width / 1.6 + 58
-        var frames: [AssetID: CGRect] = [:]
-        for (index, id) in assetIDs.enumerated() {
-            let row = index / count
-            let column = index % count
-            frames[id] = CGRect(
-                x: CGFloat(column) * (width + spacing),
-                y: CGFloat(row) * (height + spacing),
-                width: width,
-                height: height
-            )
-        }
-        return ReelAppCore.GridLayout(frames: frames)
+        AssetGridMetrics.layout(of: assetIDs, gridWidth: gridWidth)
     }
 
     private func moveSelection(_ direction: MoveCommandDirection) {
-        let columns = max(1, Int((gridWidth + 10) / 162))
+        let columns = AssetGridMetrics.columnCount(gridWidth: gridWidth)
         let offset: Int
         switch direction {
         case .left: offset = -1

@@ -8,6 +8,14 @@ import TextEngine
 import UniformTypeIdentifiers
 
 struct TextEditorWorkspace: View {
+    private enum EditorPane: Hashable, Identifiable {
+        case project
+        case source
+        case preview
+
+        var id: Self { self }
+    }
+
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: TextEditorViewModel
@@ -143,29 +151,43 @@ struct TextEditorWorkspace: View {
     }
 
     private var editorSurface: some View {
-        // Keep the native text editor under one stable split-view hierarchy.
-        // Automatic language detection can promote a scratch buffer to LaTeX
-        // while AppKit is still delivering a key sequence. Replacing a lone
-        // CodeEditor with a new HSplitView at that moment destroys the first
-        // responder and drops the remaining characters.
+        // Stable pane IDs let SwiftUI move the native source editor without
+        // recreating it when LaTeX adds a preview or project navigator. Inactive
+        // panes are omitted instead of being represented by zero-width split
+        // children, which can collapse the source pane in NSSplitView.
         HSplitView {
-            if editor.language == .latex, editor.document.files.count > 1 {
-                TeXProjectSidebar(editor: editor)
-                    .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
-            }
-            codeEditor
-                .frame(minWidth: latexPaneMinimumWidth)
-            if editor.language == .latex {
-                TeXPDFPreview(
-                    editor: editor,
-                    forwardSearch: texForwardSearch,
-                    onInverseSearch: runInverseSearch
-                )
-                .frame(minWidth: latexPaneMinimumWidth)
+            ForEach(editorPanes) { pane in
+                editorPane(pane)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
+    }
+
+    private var editorPanes: [EditorPane] {
+        guard editor.language == .latex else { return [.source] }
+        return editor.document.files.count > 1
+            ? [.project, .source, .preview] : [.source, .preview]
+    }
+
+    @ViewBuilder
+    private func editorPane(_ pane: EditorPane) -> some View {
+        switch pane {
+        case .project:
+            TeXProjectSidebar(editor: editor)
+                .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
+        case .source:
+            codeEditor
+                .frame(minWidth: latexPaneMinimumWidth, maxWidth: .infinity)
+                .layoutPriority(1)
+        case .preview:
+            TeXPDFPreview(
+                editor: editor,
+                forwardSearch: texForwardSearch,
+                onInverseSearch: runInverseSearch
+            )
+            .frame(minWidth: latexPaneMinimumWidth)
+        }
     }
 
     /// The shell guarantees editors 760 points beside the inspector. Leave
@@ -185,49 +207,38 @@ struct TextEditorWorkspace: View {
     }
 
     private var codeEditor: some View {
-        ZStack(alignment: .topLeading) {
-            CodeEditor(
-                text: $editor.text,
-                language: editor.language,
-                settings: editor.settings,
-                documentIdentity: editorDocumentIdentity,
-                fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
-                isReadOnly: editor.isReadOnly,
-                undoManager: editor.undoManager,
-                onSave: editor.saveNow,
-                onLongLineModeChange: editor.setSoftWrapSuppressed,
-                onLargePaste: editor.enterLargePasteReadOnlyMode,
-                onPasteRefused: editor.reportPasteRefused,
-                onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
-                onSnippetNotice: editor.reportNotice,
-                diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
-                scrollToLine: nil,
-                navigation: sourceNavigation,
-                onVisibleLineChange: { _ in },
-                onSelectionChange: { selectedRange = $0 },
-                onMarkdownDocumentChange: { identity, document in
-                    guard identity == editorDocumentIdentity,
-                        document.source == editor.text
-                    else { return }
-                    markdownDocumentIdentity = identity
-                    markdownDocument = document
-                }
-            ) { line, column in
-                cursorLine = line
-                cursorColumn = column
+        // The empty-buffer prompt is painted by the text view itself, at the
+        // text container's own origin, so it cannot drift away from the first
+        // line the way a separately padded overlay does.
+        CodeEditor(
+            text: $editor.text,
+            language: editor.language,
+            settings: editor.settings,
+            documentIdentity: editorDocumentIdentity,
+            fileName: editor.activeFile?.relativePath ?? "Untitled.txt",
+            isReadOnly: editor.isReadOnly,
+            undoManager: editor.undoManager,
+            onSave: editor.saveNow,
+            onLongLineModeChange: editor.setSoftWrapSuppressed,
+            onLargePaste: editor.enterLargePasteReadOnlyMode,
+            onPasteRefused: editor.reportPasteRefused,
+            onPasteIntoEmptyBuffer: editor.detectPastedLanguage,
+            onSnippetNotice: editor.reportNotice,
+            diagnostics: editor.language == .latex ? activeFileDiagnostics : [],
+            scrollToLine: nil,
+            navigation: sourceNavigation,
+            onVisibleLineChange: { _ in },
+            onSelectionChange: { selectedRange = $0 },
+            onMarkdownDocumentChange: { identity, document in
+                guard identity == editorDocumentIdentity,
+                    document.source == editor.text
+                else { return }
+                markdownDocumentIdentity = identity
+                markdownDocument = document
             }
-            if editor.text.isEmpty {
-                Text("Start typing…")
-                    .font(theme.type.body.font)
-                    .foregroundStyle(theme.palette.textTertiary)
-                    .padding(
-                        .leading,
-                        editor.language == .plainText || editor.language == .markdown ? 28 : 72
-                    )
-                    .padding(.top, 20)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+        ) { line, column in
+            cursorLine = line
+            cursorColumn = column
         }
     }
 
@@ -936,20 +947,10 @@ struct TextEditorWorkspace: View {
     }
 
     private var latexStatusTitle: String {
-        if editor.texHasUnbuiltChanges { return "Changes not built" }
-        return editor.texCompilationState.statusTitle
-    }
-}
-
-extension TeXCompilationState {
-    fileprivate var statusTitle: String {
-        switch self {
-        case .idle: "Not built"
-        case .compiling: "Building"
-        case .succeeded: "PDF ready"
-        case .paused: "Build paused"
-        case .failed: "Build failed"
-        }
+        TeXStatusTitle.title(
+            state: editor.texCompilationState,
+            hasUnbuiltChanges: editor.texHasUnbuiltChanges
+        )
     }
 }
 

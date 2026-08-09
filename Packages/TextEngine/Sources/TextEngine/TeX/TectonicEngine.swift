@@ -47,6 +47,24 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
                 do {
                     var workspace = try TeXWorkspaceSandbox.prepare(job)
                     defer { workspace.remove() }
+                    // Tectonic is XeTeX. Documents written for pdfLaTeX reach
+                    // for a pdfTeX-only glyph table it cannot provide.
+                    if try workspace.installXeTeXCompatibilityShim() {
+                        continuation.yield(
+                            .diagnostic(
+                                TeXDiagnostic(
+                                    severity: .information,
+                                    message: """
+                                        Substituted glyphtounicode for XeTeX. \
+                                        \\pdfglyphtounicode is a pdfTeX command Clip's engine does \
+                                        not provide, and XeTeX already writes Unicode-mapped PDFs \
+                                        without it.
+                                        """,
+                                    file: TeXWorkspaceSandbox.xeTeXCompatibilityShimName
+                                )
+                            )
+                        )
+                    }
                     try FileManager.default.createDirectory(
                         at: cacheDirectory,
                         withIntermediateDirectories: true
@@ -88,6 +106,11 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
                             // side effects leak into the network-enabled attempt.
                             workspace.remove()
                             workspace = try TeXWorkspaceSandbox.prepare(job)
+                            // A restaged workspace starts from the project
+                            // again, so anything the first staging added has to
+                            // be added back or the retry compiles a document
+                            // the first attempt never saw.
+                            try workspace.installXeTeXCompatibilityShim()
                             await networkAccessObserver()
                             result = try await controller.run(
                                 executableURL: executableURL,

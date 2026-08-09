@@ -430,6 +430,34 @@ private struct ImageCanvasView: View {
     let onSearch: (String) -> Void
     let onRedact: ([NormalizedRect]) -> Void
     let onEdit: (String, [NormalizedRect]) -> Void
+    /// Whether recognized text can be selected on the canvas as drawn.
+    ///
+    /// The recogniser reports boxes against the source image, so the overlay
+    /// only lines up while the canvas still shows that framing. The prompt and
+    /// the overlay have to read this the same way: they were two separate
+    /// conditions, and the prompt kept inviting a drag after a crop or a
+    /// rotation had already withdrawn the overlay, so the drag did nothing and
+    /// said nothing about why.
+    fileprivate enum LiveTextAvailability: Equatable {
+        case ready
+        case needsOriginalFraming
+        case absent
+
+        var hint: String? {
+            switch self {
+            case .ready: "Live Text · Drag to select"
+            case .needsOriginalFraming: "Live Text · Undo the crop or rotation to select"
+            case .absent: nil
+            }
+        }
+    }
+
+    fileprivate var liveTextAvailability: LiveTextAvailability {
+        guard editor.activeTool == .select, !liveTextSpans.isEmpty else { return .absent }
+        return PhotoLiveTextGeometry.isSourceAligned(editor.document.geometry)
+            ? .ready : .needsOriginalFraming
+    }
+
     @State private var draftPoints: [CGPoint] = []
     @State private var selectionGestureDidBegin = false
     @State private var transientTransform: ImageLayerTransformState?
@@ -578,10 +606,7 @@ private struct ImageCanvasView: View {
                 selectionOverlay
             }
 
-            if editor.activeTool == .select,
-                PhotoLiveTextGeometry.isSourceAligned(editor.document.geometry),
-                !liveTextSpans.isEmpty
-            {
+            if liveTextAvailability == .ready {
                 // Keep recognized text above layer transform handles. The AppKit
                 // overlay returns nil from hitTest outside OCR regions, so empty
                 // canvas still reaches normal layer selection and transforms.
@@ -612,10 +637,13 @@ private struct ImageCanvasView: View {
         }
         .shadow(color: .black.opacity(0.38), radius: 26, y: 12)
         .overlay(alignment: .bottomLeading) {
-            if editor.activeTool == .select, !liveTextSpans.isEmpty {
-                Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+            if let hint = liveTextAvailability.hint {
+                Label(hint, systemImage: "text.viewfinder")
                     .font(theme.type.caption.font)
-                    .foregroundStyle(theme.palette.textPrimary)
+                    .foregroundStyle(
+                        liveTextAvailability == .ready
+                            ? theme.palette.textPrimary : theme.palette.textSecondary
+                    )
                     .padding(.vertical, 6)
                     .padding(.horizontal, 9)
                     .background(theme.palette.surfacePanel.opacity(0.9))

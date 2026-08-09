@@ -285,6 +285,201 @@ struct CodeEditorAppearanceTests {
         #expect(visibleGlyphRect.width > 0)
         #expect(visibleGlyphRect.height > 0)
         #expect(renderedForegroundPixelCount(in: promotedTextView, rect: visibleGlyphRect) > 20)
+
+        model.showsProjectSidebar = true
+        await settle(hostingView)
+
+        let projectTextView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let projectContainer = try #require(
+            descendant(CodeEditorContainerView.self, in: hostingView)
+        )
+        #expect(projectTextView === originalTextView)
+        #expect(projectContainer.bounds.width >= 250)
+        #expect(projectContainer.scrollView.contentView.documentVisibleRect.width > 0)
+        #expect(
+            renderedForegroundPixelCount(
+                in: projectTextView,
+                rect: projectContainer.scrollView.contentView.documentVisibleRect
+            ) > 20
+        )
+    }
+
+    @Test("Initially LaTeX source remains painted after workspace layout changes")
+    func initiallyLatexSourceSurvivesBuildOutputLayoutChange() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let textView = try #require(descendant(CodeTextView.self, in: hostingView))
+        #expect(window.makeFirstResponder(textView))
+
+        let source = """
+            \\documentclass{article}
+            \\begin{document}
+            SOURCE GLYPHS MUST REMAIN VISIBLE
+            \\end{document}
+            """
+        for character in source {
+            textView.insertText(String(character), replacementRange: textView.selectedRange())
+        }
+        await settle(hostingView)
+
+        #expect(model.text == source)
+        let initialPixels = compositedForegroundPixelCount(
+            in: textView,
+            ancestor: hostingView
+        )
+        #expect(initialPixels > 80)
+
+        // A build result adds a lower output pane while inspector or window
+        // changes can resize the source half of the split. Exercise both in
+        // one update and rasterize the complete hosting hierarchy, rather than
+        // asking NSTextView to render itself in isolation.
+        model.showsBuildOutput = true
+        window.setContentSize(NSSize(width: 760, height: 560))
+        await settle(hostingView)
+
+        let resizedTextView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let resizedPixels = compositedForegroundPixelCount(
+            in: resizedTextView,
+            ancestor: hostingView
+        )
+        #expect(resizedTextView.string == source)
+        #expect(
+            (resizedTextView.enclosingScrollView?.contentView.documentVisibleRect.width ?? 0) > 0
+        )
+        #expect(resizedPixels > 80)
+        #expect(resizedPixels > initialPixels / 3)
+    }
+
+    /// A scroll view showing an `NSRulerView` reserves the ruler by offsetting
+    /// its clip view's bounds, and inside the layer-backed hierarchy SwiftUI
+    /// hosts the editor in, the document view then never reaches the screen —
+    /// the gutter and background paint while every glyph, caret wash, and
+    /// bracket rect is missing. Nothing rendered through `cacheDisplay` can
+    /// observe that, so guard the structure instead: the clip view must stay
+    /// unreserved and the gutter must be an ordinary sibling view.
+    @Test("The source scroll view reserves no ruler space")
+    func sourceScrollViewLeavesItsClipViewUnreserved() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        model.text = "\\documentclass{article}"
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let container = try #require(descendant(CodeEditorContainerView.self, in: hostingView))
+        let scrollView = container.scrollView
+
+        #expect(scrollView.verticalRulerView == nil)
+        #expect(scrollView.horizontalRulerView == nil)
+        #expect(!scrollView.rulersVisible)
+        // A reserved ruler shows up as a horizontal offset on the clip view's
+        // bounds. The vertical offset is the find bar's own reservation, which
+        // is expected and harmless.
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        // The gutter takes real width beside the source instead of overlaying it.
+        #expect(container.gutter.superview === container)
+        #expect(container.showsGutter)
+        #expect(container.gutter.frame.width == LineNumberGutterView.thickness)
+        #expect(container.gutter.frame.height == container.bounds.height)
+        #expect(scrollView.frame.minX == LineNumberGutterView.thickness)
+        #expect(scrollView.frame.maxX == container.bounds.maxX)
+
+        // Prose languages hide the gutter and give the width back to the text.
+        model.language = .plainText
+        await settle(hostingView)
+        #expect(!container.showsGutter)
+        #expect(container.gutter.frame.width == 0)
+        #expect(scrollView.frame.minX == 0)
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
+    @Test("The source surface is opaque and repaints rather than reusing pixels")
+    func sourceSurfaceRepaintsInsteadOfReusingRenderedPixels() async throws {
+        let model = CodeEditorPromotionModel()
+        model.language = .latex
+        model.text = "\\documentclass{article}"
+        let hostingView = NSHostingView(
+            rootView: CodeEditorPromotionHarness(model: model)
+                .environment(\.theme, .dark)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_000, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        await settle(hostingView)
+        let container = try #require(descendant(CodeEditorContainerView.self, in: hostingView))
+        let textView = try #require(descendant(CodeTextView.self, in: hostingView))
+        let clipView = container.scrollView.contentView
+
+        // Nothing in the editor's chain may satisfy a repaint from pixels that
+        // were rendered for a different size or a different view.
+        #expect(textView.isOpaque)
+        #expect(textView.backgroundColor.alphaComponent >= 1)
+        #expect(clipView.layerContentsRedrawPolicy == .duringViewResize)
+        #expect(container.layerContentsRedrawPolicy == .duringViewResize)
+        let backingAlpha = try #require(container.layer?.backgroundColor?.alpha)
+        #expect(backingAlpha == 1)
+
+        // The ruler covers part of the scroll view, so a document sized from
+        // the full content width would wrap text past the visible edge.
+        let visibleWidth = clipView.bounds.width + clipView.bounds.origin.x
+        #expect(visibleWidth > 0)
+        #expect(textView.frame.width <= visibleWidth + 0.5)
+        let textContainer = try #require(textView.textContainer)
+        #expect(textContainer.containerSize.width <= visibleWidth)
+
+        // The same must hold after the pane resizes underneath the editor.
+        window.setContentSize(NSSize(width: 720, height: 560))
+        await settle(hostingView)
+        let resizedVisibleWidth = clipView.bounds.width + clipView.bounds.origin.x
+        #expect(resizedVisibleWidth > 0)
+        #expect(textView.frame.width <= resizedVisibleWidth + 0.5)
+        #expect(textContainer.containerSize.width <= resizedVisibleWidth)
     }
 
     private func settle<Content: View>(_ hostingView: NSHostingView<Content>) async {
@@ -349,6 +544,70 @@ struct CodeEditorAppearanceTests {
         return count
     }
 
+    private func compositedForegroundPixelCount(
+        in textView: NSTextView,
+        ancestor: NSView
+    ) -> Int {
+        guard let storage = textView.textStorage, storage.length > 0,
+            let textContainer = textView.textContainer,
+            let layoutManager = textView.layoutManager,
+            let backgroundRGB = textView.backgroundColor.usingColorSpace(.sRGB)
+        else { return 0 }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: 0, length: storage.length),
+            actualCharacterRange: nil
+        )
+        var glyphRect = layoutManager.boundingRect(
+            forGlyphRange: glyphRange,
+            in: textContainer
+        )
+        glyphRect.origin.x += textView.textContainerOrigin.x
+        glyphRect.origin.y += textView.textContainerOrigin.y
+        let visibleRect = glyphRect.intersection(textView.visibleRect).insetBy(dx: -2, dy: -2)
+        let renderRect = textView.convert(visibleRect, to: ancestor).intersection(ancestor.bounds)
+        var foregroundColors: [NSColor] = []
+        storage.enumerateAttribute(
+            .foregroundColor,
+            in: NSRange(location: 0, length: storage.length),
+            options: [.longestEffectiveRangeNotRequired]
+        ) { value, _, _ in
+            guard let color = value as? NSColor,
+                let rgb = color.usingColorSpace(.sRGB),
+                rgb.alphaComponent > 0.5,
+                self.colorDistance(rgb, backgroundRGB) > 0.3
+            else { return }
+            if !foregroundColors.contains(where: { self.colorDistance($0, rgb) < 0.01 }) {
+                foregroundColors.append(rgb)
+            }
+        }
+        guard !renderRect.isEmpty,
+            !foregroundColors.isEmpty,
+            let bitmap = ancestor.bitmapImageRepForCachingDisplay(in: renderRect)
+        else { return 0 }
+
+        ancestor.displayIfNeeded()
+        ancestor.cacheDisplay(in: renderRect, to: bitmap)
+        var count = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                    continue
+                }
+                let distanceFromBackground = colorDistance(pixel, backgroundRGB)
+                let distanceFromForeground =
+                    foregroundColors.map { colorDistance(pixel, $0) }.min() ?? .infinity
+                if distanceFromBackground > 0.18,
+                    distanceFromForeground < distanceFromBackground * 0.9
+                {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
     private func colorDistance(_ lhs: NSColor, _ rhs: NSColor) -> Double {
         let red = Double(lhs.redComponent - rhs.redComponent)
         let green = Double(lhs.greenComponent - rhs.greenComponent)
@@ -362,6 +621,16 @@ struct CodeEditorAppearanceTests {
 private final class CodeEditorPromotionModel {
     var text = ""
     var language: LanguageID = .plainText
+    var showsBuildOutput = false
+    var showsProjectSidebar = false
+}
+
+private enum CodeEditorPromotionPane: Hashable, Identifiable {
+    case project
+    case source
+    case preview
+
+    var id: Self { self }
 }
 
 private struct CodeEditorPromotionHarness: View {
@@ -369,39 +638,74 @@ private struct CodeEditorPromotionHarness: View {
     private let undoManager = UndoManager()
 
     var body: some View {
-        HSplitView {
-            CodeEditor(
-                text: $model.text,
-                language: model.language,
-                settings: EditorSettings(fontSize: 13),
-                documentIdentity: CodeEditorDocumentIdentity(
-                    documentID: DocumentID(rawValue: "latex-appearance-document"),
-                    fileID: FileID(rawValue: "latex-appearance-file")
-                ),
-                fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
-                isReadOnly: false,
-                undoManager: undoManager,
-                onSave: {},
-                onLongLineModeChange: { _ in },
-                onLargePaste: {},
-                onPasteRefused: {},
-                onPasteIntoEmptyBuffer: { _ in },
-                onSnippetNotice: { _ in },
-                diagnostics: [],
-                scrollToLine: nil,
-                navigation: nil,
-                onVisibleLineChange: { _ in },
-                onSelectionChange: { _ in },
-                onMarkdownDocumentChange: { _, _ in },
-                onCursorChange: { _, _ in }
-            )
-            .frame(minWidth: model.language == .latex ? 340 : 0)
+        VStack(spacing: 0) {
+            HSplitView {
+                ForEach(panes) { pane in
+                    paneView(pane)
+                }
+            }
 
-            if model.language == .latex {
-                Color.black
-                    .frame(minWidth: 340)
-                    .accessibilityIdentifier("latex-preview-test-double")
+            if model.showsBuildOutput {
+                Color(nsColor: .controlBackgroundColor)
+                    .overlay(alignment: .topLeading) {
+                        Text("Build output")
+                            .padding(12)
+                    }
+                    .frame(height: 150)
+                    .accessibilityIdentifier("latex-build-output-test-double")
             }
         }
+    }
+
+    private var panes: [CodeEditorPromotionPane] {
+        guard model.language == .latex else { return [.source] }
+        return model.showsProjectSidebar
+            ? [.project, .source, .preview] : [.source, .preview]
+    }
+
+    @ViewBuilder
+    private func paneView(_ pane: CodeEditorPromotionPane) -> some View {
+        switch pane {
+        case .project:
+            Color.gray
+                .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
+                .accessibilityIdentifier("latex-project-test-double")
+        case .source:
+            sourceEditor
+                .frame(minWidth: model.language == .latex ? 300 : 0, maxWidth: .infinity)
+                .layoutPriority(1)
+        case .preview:
+            Color.black
+                .frame(minWidth: model.showsProjectSidebar ? 300 : 340)
+                .accessibilityIdentifier("latex-preview-test-double")
+        }
+    }
+
+    private var sourceEditor: some View {
+        CodeEditor(
+            text: $model.text,
+            language: model.language,
+            settings: EditorSettings(fontSize: 13),
+            documentIdentity: CodeEditorDocumentIdentity(
+                documentID: DocumentID(rawValue: "latex-appearance-document"),
+                fileID: FileID(rawValue: "latex-appearance-file")
+            ),
+            fileName: model.language == .latex ? "Untitled.tex" : "Untitled.txt",
+            isReadOnly: false,
+            undoManager: undoManager,
+            onSave: {},
+            onLongLineModeChange: { _ in },
+            onLargePaste: {},
+            onPasteRefused: {},
+            onPasteIntoEmptyBuffer: { _ in },
+            onSnippetNotice: { _ in },
+            diagnostics: [],
+            scrollToLine: nil,
+            navigation: nil,
+            onVisibleLineChange: { _ in },
+            onSelectionChange: { _ in },
+            onMarkdownDocumentChange: { _, _ in },
+            onCursorChange: { _, _ in }
+        )
     }
 }

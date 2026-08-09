@@ -137,7 +137,11 @@ public struct Theme: Sendable {
             surfaceBase: Color(hex: 0xF7F7F8),
             surfacePanel: Color(hex: 0xFFFFFF),
             surfaceRaised: Color(hex: 0xF0F0F2),
-            surfaceSunken: Color(hex: 0x1B1B1E),
+            // One more step down the same ramp as the surfaces above it. This
+            // was a dark value, which made every recessed surface in the light
+            // theme — the build output, the PDF and photo canvases, the
+            // inspector well — render near-black under near-black text.
+            surfaceSunken: Color(hex: 0xE8E8EC),
             line: .black.opacity(0.08),
             lineStrong: .black.opacity(0.14),
             textPrimary: Color(hex: 0x18181B),

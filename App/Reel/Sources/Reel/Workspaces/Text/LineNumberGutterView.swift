@@ -1,48 +1,79 @@
 import AppKit
 import TextEngine
 
+/// Line-number gutter drawn beside the source view.
+///
+/// This is a plain sibling view rather than an `NSRulerView`. A scroll view
+/// with a visible ruler reserves the ruler by offsetting its clip view's
+/// bounds, and inside the layer-backed hierarchy SwiftUI hosts the editor in,
+/// the document view then stops reaching the screen: the gutter and the
+/// background still paint, but no glyph, caret wash, or bracket rect ever
+/// composites. Owning the gutter keeps line numbers and TeX diagnostics while
+/// leaving the scroll view in its ordinary, unreserved configuration.
 @MainActor
-final class LineNumberRulerView: NSRulerView {
+final class LineNumberGutterView: NSView {
+    static let thickness: CGFloat = 48
+
     private weak var textView: NSTextView?
     private var numberColor = NSColor.secondaryLabelColor
     private var separatorColor = NSColor.separatorColor
-    private var rulerBackground = NSColor.windowBackgroundColor
+    private var gutterBackground = NSColor.windowBackgroundColor
+    private var currentLineColor = NSColor.clear
     private var numberFont = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
     var lineIndex = TextLineIndex()
     var diagnostics: [TeXDiagnostic] = [] {
         didSet { needsDisplay = true }
     }
 
-    init(textView: NSTextView, scrollView: NSScrollView) {
+    init(textView: NSTextView) {
         self.textView = textView
-        super.init(scrollView: scrollView, orientation: .verticalRuler)
-        clientView = textView
-        ruleThickness = 48
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.thickness, height: 0))
     }
 
-    required init(coder: NSCoder) {
-        super.init(coder: coder)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isFlipped: Bool { true }
+
+    override var isOpaque: Bool {
+        gutterBackground.alphaComponent >= 1
     }
 
     func update(
         background: NSColor,
         foreground: NSColor,
         separator: NSColor,
+        currentLine: NSColor,
         fontSize: CGFloat
     ) {
-        rulerBackground = background
+        gutterBackground = background
         numberColor = foreground
         separatorColor = separator
+        currentLineColor = currentLine
         numberFont = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
         needsDisplay = true
     }
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
-        rulerBackground.setFill()
-        rect.fill()
+    override func draw(_ dirtyRect: NSRect) {
+        gutterBackground.setFill()
+        dirtyRect.fill()
+        guard let textView, textView.window != nil else {
+            separatorColor.setFill()
+            NSRect(x: bounds.maxX - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height).fill()
+            return
+        }
+        // Carry the active row across the gutter so it reads as one band
+        // rather than stopping at the separator.
+        if let lineRect = (textView as? CodeTextView)?.currentLineRect {
+            let row = convert(lineRect, from: textView)
+            currentLineColor.setFill()
+            NSRect(x: 0, y: row.minY, width: bounds.width, height: row.height)
+                .intersection(dirtyRect)
+                .fill()
+        }
         separatorColor.setFill()
-        NSRect(x: bounds.maxX - 1, y: rect.minY, width: 1, height: rect.height).fill()
-        guard let textView, textView.window != nil else { return }
+        NSRect(x: bounds.maxX - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height).fill()
 
         let source = textView.string as NSString
         let visible = textView.visibleRect
@@ -69,18 +100,18 @@ final class LineNumberRulerView: NSRulerView {
             guard let lineRect = localRect(for: range, in: textView) else { break }
             if lineRect.minY > visible.maxY { break }
             if lineRect.maxY >= visible.minY {
+                let gutterPoint = convert(
+                    NSPoint(x: textView.bounds.minX, y: lineRect.minY),
+                    from: textView
+                )
                 if let severity = diagnosticLines[lineNumber]?.map(\.1).sorted(by: {
                     $0.sortOrder < $1.sortOrder
                 }).first {
-                    let rulerPoint = convert(
-                        NSPoint(x: textView.bounds.minX, y: lineRect.minY),
-                        from: textView
-                    )
                     severity.markerColor.setFill()
                     NSBezierPath(
                         ovalIn: NSRect(
                             x: 7,
-                            y: rulerPoint.y + max((lineRect.height - 7) / 2, 0),
+                            y: gutterPoint.y + max((lineRect.height - 7) / 2, 0),
                             width: 7,
                             height: 7
                         )
@@ -88,14 +119,10 @@ final class LineNumberRulerView: NSRulerView {
                 }
                 let label = "\(lineNumber)" as NSString
                 let size = label.size(withAttributes: attributes)
-                let rulerPoint = convert(
-                    NSPoint(x: textView.bounds.minX, y: lineRect.minY),
-                    from: textView
-                )
                 label.draw(
                     at: NSPoint(
                         x: bounds.width - size.width - 9,
-                        y: rulerPoint.y + max((lineRect.height - size.height) / 2, 0)
+                        y: gutterPoint.y + max((lineRect.height - size.height) / 2, 0)
                     ),
                     withAttributes: attributes
                 )
