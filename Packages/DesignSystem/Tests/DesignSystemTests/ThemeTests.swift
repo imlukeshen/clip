@@ -53,6 +53,73 @@ struct ThemeTests {
         }
     }
 
+    /// Every surface in a theme has to sit on the same side of the divide as
+    /// the theme itself. A dark value among the light surfaces renders a whole
+    /// pane near-black under near-black text, which is how the light theme's
+    /// build output, PDF and photo canvases, and inspector well went blank.
+    @Test("Surfaces stay on the light or dark side their theme is named for")
+    func surfacesMatchTheirTheme() {
+        for surface in surfaces(of: Theme.light) {
+            #expect(luminance(components(of: surface.color)) > 0.5, "\(surface.name) is not light")
+        }
+        for surface in surfaces(of: Theme.dark) {
+            #expect(luminance(components(of: surface.color)) < 0.5, "\(surface.name) is not dark")
+        }
+    }
+
+    @Test("Body text is legible on every surface it can be drawn on")
+    func textContrastsWithEverySurface() {
+        for theme in [Theme.dark, Theme.light] {
+            for surface in surfaces(of: theme) {
+                let background = components(of: surface.color)
+                #expect(
+                    contrast(components(of: theme.palette.textPrimary), background) >= 4.5,
+                    "primary text on \(surface.name)"
+                )
+                #expect(
+                    contrast(components(of: theme.palette.textSecondary), background) >= 3,
+                    "secondary text on \(surface.name)"
+                )
+            }
+        }
+    }
+
+    /// Recessed reads as recessed: a sunken surface is never lighter than the
+    /// panel that sits above it, in either theme.
+    @Test("The surface ramp is ordered")
+    func surfaceRampIsOrdered() {
+        for theme in [Theme.dark, Theme.light] {
+            let panel = luminance(components(of: theme.palette.surfacePanel))
+            let sunken = luminance(components(of: theme.palette.surfaceSunken))
+            #expect(sunken <= panel)
+        }
+    }
+
+    private func surfaces(of theme: Theme) -> [(name: String, color: Color)] {
+        [
+            ("surfaceBase", theme.palette.surfaceBase),
+            ("surfacePanel", theme.palette.surfacePanel),
+            ("surfaceRaised", theme.palette.surfaceRaised),
+            ("surfaceSunken", theme.palette.surfaceSunken),
+        ]
+    }
+
+    /// WCAG relative-contrast ratio between two opaque colours.
+    private func contrast(
+        _ lhs: (Double, Double, Double),
+        _ rhs: (Double, Double, Double)
+    ) -> Double {
+        func relative(_ rgb: (Double, Double, Double)) -> Double {
+            func channel(_ value: Double) -> Double {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(rgb.0) + 0.7152 * channel(rgb.1) + 0.0722 * channel(rgb.2)
+        }
+        let first = relative(lhs)
+        let second = relative(rhs)
+        return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+    }
+
     private func components(of color: Color) -> (Double, Double, Double) {
         let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .black
         return (
