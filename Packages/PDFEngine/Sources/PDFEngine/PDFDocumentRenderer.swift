@@ -15,10 +15,16 @@ public struct PDFDocumentRenderer: Sendable {
         self.fontData = fontData
     }
 
+    /// Rasterizes a page of the edit document.
+    ///
+    /// `suppressedObjectIndexes` names source objects to leave undrawn, which is
+    /// how a text object being edited in place is taken out of the page instead
+    /// of being covered up.
     public func render(
         _ document: PDFEditDocument,
         pageID: PDFPageID,
-        maxPixelDimension: Int = 1_600
+        maxPixelDimension: Int = 1_600,
+        suppressedObjectIndexes: Set<Int> = []
     ) throws -> CGImage {
         guard let page = document.page(pageID) else {
             throw PDFDocumentError.pageNotFound(pageID)
@@ -41,6 +47,7 @@ public struct PDFDocumentRenderer: Sendable {
                 maxPixelDimension: maxPixelDimension,
                 rotation: page.rotation,
                 sourceTextEdits: directTextEdits,
+                suppressedObjectIndexes: suppressedObjectIndexes,
                 fontData: fontData
             )
             context.draw(

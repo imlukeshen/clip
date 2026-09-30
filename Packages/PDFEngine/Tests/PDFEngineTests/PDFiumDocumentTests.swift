@@ -218,6 +218,168 @@ struct PDFiumDocumentTests {
         #expect(try blackPixelCount(exported.renderPage(at: 0)) > 5_000)
     }
 
+    @Test("Glyphs name the text object that drew them")
+    func glyphsCarryOwningObject() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let analysis = try source.analyzePage(at: 0)
+        let block = try #require(
+            analysis.textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        let owned = analysis.glyphs.filter { $0.pageObjectIndex == block.pageObjectIndex }
+        #expect(!owned.isEmpty)
+        #expect(owned.map(\.text).joined().contains("Hello"))
+    }
+
+    @Test("A dragged text object moves in the exported PDF")
+    func movedTextExport() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            try source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "fixture"),
+            title: "Fixture"
+        )
+        let moved = block.bounds.offsetBy(dx: 0.1, dy: 0.05)
+        let edit = PDFTextLayer(
+            text: block.text,
+            frame: moved,
+            font: block.font,
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: block.pageObjectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName,
+                originalFrame: block.bounds
+            )
+        )
+        _ = try document.apply(.addLayer(.text(edit), to: document.pages[0].id, atIndex: 0))
+
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-moved-pdf-\(UUID().uuidString).pdf"
+        )
+        defer { try? FileManager.default.removeItem(at: output) }
+        try PDFDocumentRenderer(source: source).export(document, to: output)
+
+        let exported = try PDFiumDocument(url: output)
+        let result = try #require(
+            try exported.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        #expect(abs(result.bounds.minX - moved.minX) < 0.01)
+        #expect(abs(result.bounds.minY - moved.minY) < 0.01)
+    }
+
+    @Test("Editing only the text leaves the object exactly where it was")
+    func unmovedTextKeepsPosition() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            try source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "fixture"),
+            title: "Fixture"
+        )
+        let edit = PDFTextLayer(
+            text: "Hello PDFiums",
+            frame: block.bounds,
+            font: block.font,
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: block.pageObjectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName,
+                originalFrame: block.bounds
+            )
+        )
+        _ = try document.apply(.addLayer(.text(edit), to: document.pages[0].id, atIndex: 0))
+
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "clip-unmoved-pdf-\(UUID().uuidString).pdf"
+        )
+        defer { try? FileManager.default.removeItem(at: output) }
+        try PDFDocumentRenderer(source: source).export(document, to: output)
+
+        let exported = try PDFiumDocument(url: output)
+        let result = try #require(
+            try exported.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        #expect(abs(result.bounds.minX - block.bounds.minX) < 0.005)
+        #expect(abs(result.bounds.minY - block.bounds.minY) < 0.005)
+    }
+
+    @Test("A suppressed text object is absent from the rendered page")
+    func suppressedObjectIsNotDrawn() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            try source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        let full = try source.renderPage(at: 0)
+        let withoutText = try source.renderPage(
+            at: 0,
+            suppressedObjectIndexes: [block.pageObjectIndex]
+        )
+        #expect(full.width == withoutText.width)
+        #expect(full.height == withoutText.height)
+        // The glyphs are the only thing that changed, so the page must lose ink.
+        let before = try darkPixelCount(full)
+        let after = try darkPixelCount(withoutText)
+        #expect(after < before)
+    }
+
+    private func darkPixelCount(_ image: CGImage) throws -> Int {
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(
+            CGContext(
+                data: &pixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        )
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var count = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) where pixels[index] < 100 {
+            count += 1
+        }
+        return count
+    }
+
+    @Test("Analysis reflects an applied source edit")
+    func analysisReflectsAppliedEdit() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            try source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        let edit = PDFTextLayer(
+            text: "PDFium Hello",
+            frame: block.bounds,
+            font: block.font,
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: block.pageObjectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName,
+                originalFrame: block.bounds
+            )
+        )
+
+        let analysis = try source.analyzePage(at: 0, applying: [edit])
+        #expect(analysis.text.contains("PDFium Hello"))
+        #expect(!analysis.text.contains("Hello PDFium"))
+
+        // The untouched source is still readable, so the edit is not destructive.
+        #expect(try source.analyzePage(at: 0).text.contains("Hello PDFium"))
+    }
+
     private func fixturePDF() throws -> Data {
         let data = NSMutableData()
         let consumer = try #require(CGDataConsumer(data: data))
