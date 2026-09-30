@@ -94,8 +94,12 @@ private struct PDFEditorView: View {
                 model.closePDFEditor()
             } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 30, height: 30)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            // Matches the back button in every other workspace: the plain style
+            // only dips opacity, so this one alone gave no hover fill and no
+            // press feedback.
+            .buttonStyle(ReelIconButtonStyle())
             .help("Back to PDF library")
             EditableFileTitle(
                 name: model.assets.first(where: {
@@ -150,8 +154,9 @@ private struct PDFEditorView: View {
                 editor.undo()
             } label: {
                 Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(
                 model.renamingAssetIDs.contains(editor.document.sourceAssetID)
                     || !editor.undoManager.canUndo
@@ -161,8 +166,9 @@ private struct PDFEditorView: View {
                 editor.redo()
             } label: {
                 Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(
                 model.renamingAssetIDs.contains(editor.document.sourceAssetID)
                     || !editor.undoManager.canRedo
@@ -196,12 +202,14 @@ private struct PDFEditorView: View {
                     editor.addBlankPage()
                 } label: {
                     Image(systemName: "plus")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Add a blank page")
                 Button {
                     editor.duplicateSelectedPage()
                 } label: {
                     Image(systemName: "plus.square.on.square")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Duplicate selected page")
                 .accessibilityLabel("Duplicate selected page")
@@ -210,10 +218,11 @@ private struct PDFEditorView: View {
                     editor.deleteSelectedPage()
                 } label: {
                     Image(systemName: "trash")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Delete selected page")
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .padding(.bottom, 10)
         }
         .frame(width: 124)

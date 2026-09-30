@@ -134,8 +134,12 @@ struct EditorView: View {
                 model.closeEditor()
             } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 30, height: 30)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            // Matches the back button in every other workspace: the plain style
+            // only dips opacity, so this one alone gave no hover fill and no
+            // press feedback.
+            .buttonStyle(ReelIconButtonStyle())
             .help("Back to video library")
 
             projectTitle
@@ -259,8 +263,9 @@ struct EditorView: View {
                 if isCompact {
                     Button(action: editor.cancelExport) {
                         Image(systemName: "xmark")
+                            .frame(width: 26, height: 26)
                     }
-                    .buttonStyle(ReelPlainButtonStyle())
+                    .buttonStyle(ReelIconButtonStyle())
                     .help("Cancel export")
                 } else {
                     Button("Cancel") { editor.cancelExport() }
@@ -287,8 +292,9 @@ struct EditorView: View {
                 editor.undo()
             } label: {
                 Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             .help("Undo")
@@ -298,8 +304,9 @@ struct EditorView: View {
                 editor.redo()
             } label: {
                 Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
@@ -583,35 +590,46 @@ struct EditorView: View {
                     editor.togglePlayback()
                 } label: {
                     Image(systemName: editor.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 .help(editor.isPlaying ? "Pause · Space" : "Play · Space")
                 .accessibilityIdentifier("video-playback-toggle")
                 Button {
                     editor.shuttleBackward()
                 } label: {
                     Image(systemName: "backward.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 Button {
                     editor.shuttlePause()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .frame(width: 18)
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 Button {
                     editor.shuttleForward()
                 } label: {
                     Image(systemName: "forward.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
-                Button("I") { editor.setInPoint() }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .help("Set In point")
-                Button("O") { editor.setOutPoint() }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .help("Set Out point")
+                .buttonStyle(ReelIconButtonStyle())
+                Button {
+                    editor.setInPoint()
+                } label: {
+                    Text("I").frame(width: 26, height: 26)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .help("Set In point")
+                Button {
+                    editor.setOutPoint()
+                } label: {
+                    Text("O").frame(width: 26, height: 26)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .help("Set Out point")
                 Spacer()
                 Text(timecode(editor.duration))
                     .frame(width: isCompact ? 68 : 78, alignment: .trailing)
@@ -757,8 +775,9 @@ struct EditorView: View {
                 )
             } label: {
                 Image(systemName: "minus.magnifyingglass")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom <= TimelineViewport.fitZoom)
             .keyboardShortcut("-", modifiers: .command)
             .help("Zoom out")
@@ -781,8 +800,9 @@ struct EditorView: View {
                 )
             } label: {
                 Image(systemName: "plus.magnifyingglass")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom >= TimelineViewport.maximumZoom)
             .keyboardShortcut("=", modifiers: .command)
             .help("Zoom in")
@@ -799,11 +819,12 @@ struct EditorView: View {
             } label: {
                 if isCompact {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .frame(width: 26, height: 26)
                 } else {
-                    Text("Fit")
+                    Text("Fit").frame(height: 26).padding(.horizontal, 6)
                 }
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom == TimelineViewport.fitZoom)
             .help("Fit the complete project")
             .accessibilityLabel("Fit complete project")
