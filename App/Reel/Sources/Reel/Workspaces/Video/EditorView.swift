@@ -19,6 +19,11 @@ struct EditorView: View {
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
     @State private var liveTextSpans: [OCRSpan] = []
+    /// Whether dragging the preview selects recognized text instead of moving
+    /// the clip. The two gestures cannot share a drag: the overlay only claims
+    /// events over a recognized word, so a selection that starts on a gap also
+    /// panned the video underneath it.
+    @State private var isSelectingLiveText = false
     @State private var timelineReferenceDuration = 0.0
     @AppStorage("clip.timeline.zoom") private var timelineZoom = TimelineViewport.fitZoom
 
@@ -58,6 +63,12 @@ struct EditorView: View {
                 NSPasteboard.general.setString(url.path, forType: .string)
             case .nothing: break
             }
+        }
+        .onChange(of: liveTextSpans.isEmpty) { _, isEmpty in
+            if isEmpty { isSelectingLiveText = false }
+        }
+        .onChange(of: editor.isPlaying) { _, isPlaying in
+            if isPlaying { isSelectingLiveText = false }
         }
         .task(id: liveTextRequestID) {
             await refreshLiveText()
@@ -464,6 +475,7 @@ struct EditorView: View {
                         .frame(width: contentSize.width, height: contentSize.height)
                         .scaleEffect(previewScale)
                         .offset(previewDragOffset)
+                        .allowsHitTesting(isSelectingLiveText)
                     }
 
                     if editor.isBuilding {
@@ -504,7 +516,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .clipped()
-                .gesture(previewPanGesture(in: contentSize))
+                .gesture(previewPanGesture(in: contentSize), isEnabled: !isSelectingLiveText)
                 .simultaneousGesture(previewMagnificationGesture)
                 .overlay(alignment: .topLeading) {
                     if editor.selectedItem != nil {
@@ -534,15 +546,38 @@ struct EditorView: View {
                 }
                 .overlay(alignment: .bottomLeading) {
                     if !editor.isPlaying, !liveTextSpans.isEmpty {
-                        Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+                        Button {
+                            isSelectingLiveText.toggle()
+                        } label: {
+                            Label(
+                                isSelectingLiveText
+                                    ? "Live Text · Selecting" : "Live Text · Click to select",
+                                systemImage: isSelectingLiveText
+                                    ? "text.viewfinder" : "text.viewfinder"
+                            )
                             .font(theme.type.caption.font)
-                            .foregroundStyle(theme.palette.textPrimary)
+                            .foregroundStyle(
+                                isSelectingLiveText
+                                    ? theme.palette.accentOn : theme.palette.textPrimary
+                            )
                             .padding(.vertical, 6)
                             .padding(.horizontal, 9)
-                            .background(theme.palette.surfacePanel.opacity(0.9))
+                            .background(
+                                isSelectingLiveText
+                                    ? theme.palette.accent
+                                    : theme.palette.surfacePanel.opacity(0.9)
+                            )
                             .clipShape(Capsule())
-                            .padding(10)
-                            .allowsHitTesting(false)
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(ReelPlainButtonStyle())
+                        .padding(10)
+                        .help(
+                            isSelectingLiveText
+                                ? "Drag across the video to select text"
+                                : "Select recognized text instead of moving the clip"
+                        )
+                        .accessibilityIdentifier("video-live-text-toggle")
                     }
                 }
                 .accessibilityLabel("Video preview")
