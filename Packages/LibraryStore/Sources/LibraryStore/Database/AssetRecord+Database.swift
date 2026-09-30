@@ -58,9 +58,10 @@ extension AssetRecord {
                   created_at, imported_at, byte_size, content_hash, width, height,
                   duration_value, duration_scale, nominal_fps, is_variable_fps,
                   has_audio, preferred_xform, event_track_path, event_alignment,
-                  thumb_path, peaks_path, ingest_state, missing_since
+                  thumb_path, peaks_path, ingest_state, missing_since,
+                  external_bookmark_key
                 ) VALUES (
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
             arguments: [
@@ -88,6 +89,7 @@ extension AssetRecord {
                 peaksPath,
                 ingestState.rawValue,
                 missingSince?.timeIntervalSince1970,
+                externalBookmarkKey,
             ]
         )
     }
@@ -141,6 +143,7 @@ extension AssetRecord {
             eventAlignment: alignment,
             thumbnailPath: row["thumb_path"],
             peaksPath: row["peaks_path"],
+            externalBookmarkKey: row["external_bookmark_key"],
             ingestState: ingestState,
             missingSince: (row["missing_since"] as Double?).map(Date.init(timeIntervalSince1970:))
         )

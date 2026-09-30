@@ -26,8 +26,19 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
     public var peaksPath: String?
     public var ingestState: IngestState
     public var missingSince: Date?
+    /// Bookmark key for a file the library references rather than owns.
+    ///
+    /// Nil means the file was copied into the library, which owns those bytes.
+    /// Non-nil means it stayed where the user had it and is reached through a
+    /// security-scoped bookmark, so edits save back to the original file
+    /// (ADR-0013). `relativePath` then records where it was last seen, for
+    /// display and for recovery when a bookmark cannot be resolved.
+    public var externalBookmarkKey: String?
 
     public var isMissing: Bool { missingSince != nil }
+
+    /// Whether the library points at this file rather than owning a copy.
+    public var isReferenced: Bool { externalBookmarkKey != nil }
 
     public init(
         id: AssetID,
@@ -51,6 +62,7 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         eventAlignment: EventAlignmentKind? = nil,
         thumbnailPath: String? = nil,
         peaksPath: String? = nil,
+        externalBookmarkKey: String? = nil,
         ingestState: IngestState,
         missingSince: Date? = nil
     ) {
@@ -77,6 +89,7 @@ public struct AssetRecord: Codable, Sendable, Equatable, Identifiable {
         self.eventAlignment = eventAlignment
         self.thumbnailPath = thumbnailPath
         self.peaksPath = peaksPath
+        self.externalBookmarkKey = externalBookmarkKey
         self.ingestState = ingestState
         self.missingSince = missingSince.map(Self.databaseDate)
     }

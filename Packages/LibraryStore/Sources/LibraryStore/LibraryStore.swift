@@ -101,6 +101,61 @@ public actor LibraryStore {
         changeContinuation.yield(.assetInserted(asset.id))
     }
 
+    /// Indexes a file where it already lives, without copying it in.
+    ///
+    /// The library records a security-scoped bookmark instead of taking
+    /// ownership of the bytes, so the file stays where the user put it and
+    /// edits later save back to that path (ADR-0013). Library path safety is
+    /// deliberately not applied: the file was never meant to live inside the
+    /// library root.
+    public func insertReference(_ asset: AssetRecord, originalURL: URL) async throws {
+        try LibraryPathSafety.validateIdentifier(asset.id.rawValue)
+        let url = originalURL.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw LibraryError.assetFileMissing(url.path)
+        }
+        guard let key = asset.externalBookmarkKey, !key.isEmpty else {
+            throw LibraryError.fileOperationFailed("referenced asset needs a bookmark key")
+        }
+        if try await self.asset(id: asset.id) != nil {
+            throw LibraryError.duplicateAsset(asset.id)
+        }
+
+        try await bookmarks.store(url, key: key)
+        do {
+            try MetadataCodec.encode(asset).write(
+                to: try metadataURL(for: asset.id),
+                options: .atomic
+            )
+        } catch {
+            throw LibraryError.fileOperationFailed("persist asset metadata")
+        }
+        do {
+            try await database.write { db in
+                try asset.insert(db)
+            }
+        } catch {
+            throw LibraryError.databaseOperationFailed("insert referenced asset")
+        }
+        changeContinuation.yield(.assetInserted(asset.id))
+    }
+
+    /// Runs `body` with the asset's file reachable, wherever it lives.
+    ///
+    /// An owned asset resolves under the library root. A referenced one is
+    /// reached through its security-scoped bookmark, and the scope stays active
+    /// only for the duration of the call.
+    public func withAssetFile<T: Sendable>(
+        _ asset: AssetRecord,
+        _ body: @Sendable (URL) async throws -> T
+    ) async throws -> T {
+        guard let key = asset.externalBookmarkKey else {
+            let url = try resolvedURL(forRelativePath: asset.relativePath, under: assetsURL)
+            return try await body(url)
+        }
+        return try await bookmarks.withAccess(key: key, body)
+    }
+
     /// Looks up an asset by typed identifier.
     public func asset(id: AssetID) async throws -> AssetRecord? {
         do {
@@ -550,7 +605,8 @@ public actor LibraryStore {
         } catch {
             throw LibraryError.corruptMetadata("project \(document.id.rawValue)")
         }
-        let relativePackagePath = "Projects/\(document.id.rawValue).reelproj"
+        let relativePackagePath = LibraryLayout.projectPackageRelativePath(
+            forProjectID: document.id.rawValue)
         let packageURL = try resolvedURL(
             forRelativePath: relativePackagePath,
             under: projectsURL
@@ -586,7 +642,8 @@ public actor LibraryStore {
     public func appendHistory(_ inverse: GraphPatch, project: ProjectID) async throws {
         try LibraryPathSafety.validateIdentifier(project.rawValue)
         let packageURL = try resolvedURL(
-            forRelativePath: "Projects/\(project.rawValue).reelproj",
+            forRelativePath: LibraryLayout.projectPackageRelativePath(
+                forProjectID: project.rawValue),
             under: projectsURL
         )
         let historyURL = packageURL.appendingPathComponent("history", isDirectory: true)
@@ -769,7 +826,7 @@ extension LibraryStore {
     private func metadataURL(for assetID: AssetID) throws -> URL {
         try LibraryPathSafety.validateIdentifier(assetID.rawValue)
         return try resolvedURL(
-            forRelativePath: ".reel/assets/\(assetID.rawValue).json",
+            forRelativePath: LibraryLayout.metadataRelativePath(forAssetID: assetID.rawValue),
             under: LibraryLayout.metadata(in: root)
         )
     }
@@ -848,7 +905,7 @@ extension LibraryStore {
             at: projectsURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ).filter { $0.pathExtension == "reelproj" }
+        ).filter { $0.pathExtension == LibraryLayout.projectPackageExtension }
         return try packages.map { packageURL in
             do {
                 let safePackageURL = try resolvedURL(

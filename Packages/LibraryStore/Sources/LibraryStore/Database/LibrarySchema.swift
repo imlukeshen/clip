@@ -309,6 +309,12 @@ enum LibrarySchema {
                     """
             )
         }
+        // ADR-0013: an asset may now point at a file the library does not own.
+        migrator.registerMigration("v9-referenced-assets") { db in
+            try db.alter(table: "asset") { table in
+                table.add(column: "external_bookmark_key", .text)
+            }
+        }
         try migrator.migrate(database)
     }
 }
