@@ -105,19 +105,9 @@ struct EditorView: View {
                         // whole editor: run it the full height of the window and
                         // the timeline stops short of the edge.
                         if model.showsVideoEditorInspector, model.isInspectorVisible {
-                            InspectorResizeDivider(
+                            VideoInspectorRail(
                                 model: model,
-                                displayedWidth: InspectorLayout.displayedWidth(
-                                    requestedWidth: model.inspectorWidth,
-                                    availableWindowWidth: availableSize.width
-                                )
-                            )
-                            UnifiedInspector(
-                                model: model,
-                                width: InspectorLayout.displayedWidth(
-                                    requestedWidth: model.inspectorWidth,
-                                    availableWindowWidth: availableSize.width
-                                )
+                                availableWindowWidth: availableSize.width
                             )
                         }
                     }
@@ -1642,6 +1632,29 @@ private struct KeyframeSlider: View {
                 .help("Set keyframe at playhead")
             }
             Slider(value: $value, in: range)
+        }
+    }
+}
+
+/// Holds the rail, and the only read of its width.
+///
+/// Reading `inspectorWidth` from the editor's own body made the whole editor —
+/// tool rail, preview, transport controls and the timeline representable —
+/// re-evaluate on every frame of a resize, because an `@Observable` property
+/// invalidates every view that reads it. Keeping the read in a leaf means a
+/// drag rebuilds the rail and nothing else.
+private struct VideoInspectorRail: View {
+    @Bindable var model: AppModel
+    let availableWindowWidth: CGFloat
+
+    var body: some View {
+        let width = InspectorLayout.displayedWidth(
+            requestedWidth: model.inspectorWidth,
+            availableWindowWidth: availableWindowWidth
+        )
+        HStack(spacing: 0) {
+            InspectorResizeDivider(model: model, displayedWidth: width)
+            UnifiedInspector(model: model, width: width)
         }
     }
 }
