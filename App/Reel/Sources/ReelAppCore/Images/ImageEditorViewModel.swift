@@ -814,6 +814,33 @@ public final class ImageEditorViewModel {
         }
     }
 
+    /// Runs an assistant-issued image command and reports what it did.
+    ///
+    /// Goes through `perform`, the same mutation path the UI uses, so the edit
+    /// is one undo entry. Redaction suggestions are kept, because
+    /// `applyRedactions` names the ones a previous `suggestRedactions` returned
+    /// and would otherwise find nothing to apply.
+    public func runAssistantCommand(_ invocation: ToolInvocation) async throws -> String {
+        let result = try await ImageToolExecutor().execute(
+            invocation,
+            context: ImageToolExecutionContext(
+                document: document,
+                sourceURL: sourceURL,
+                suggestions: redactionSuggestions
+            )
+        )
+        if !result.suggestions.isEmpty { redactionSuggestions = result.suggestions }
+        if let value = result.value { altText = value }
+        if !result.patches.isEmpty {
+            try perform(
+                result.patches,
+                actionName: CommandRegistry.command(named: invocation.name)?.title
+                    ?? invocation.name
+            )
+        }
+        return result.message
+    }
+
     public func runImageCommand(_ id: String) {
         let arguments: JSONValue
         switch id {
