@@ -1854,9 +1854,27 @@ public final class AppModel {
 
     public func sendAssistantMessage() {
         let prompt = assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isAssistantWorking, let runtime,
-            let session = assistantSession(runtime: runtime)
-        else { return }
+        guard !prompt.isEmpty, !isAssistantWorking else { return }
+        // Say why rather than returning quietly. A composer that swallows the
+        // Return key and leaves the text sitting there reads as the app being
+        // broken, which is what an unreachable session used to look like in the
+        // PDF and photo workspaces.
+        guard let runtime else {
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status,
+                    text: "The library is still opening. Try again in a moment."
+                ))
+            return
+        }
+        guard let session = assistantSession(runtime: runtime) else {
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status,
+                    text: "Open a document first — the assistant works inside an editor."
+                ))
+            return
+        }
         assistantDraft = ""
         assistantMessages.append(AssistantMessage(role: .user, text: prompt))
         isAssistantWorking = true
@@ -1865,6 +1883,14 @@ public final class AppModel {
         let context = session.context
         let sessionToken = session.token
         let settings = aiSettings
+        let categories = openWorkspaceCommandCategories
+        // Rendered here, on the main actor and before the turn detaches, so the
+        // model sees the window as it looked when the question was asked rather
+        // than after whatever the turn itself changes.
+        let frame =
+            settings.sharesWindowWithAssistant
+            ? WindowFrameRenderer.pngOfActiveWindow().map(ChatImage.png)
+            : nil
         let operationID = UUID()
         assistantOperationID = operationID
         assistantAwaitingProviderOperationID = operationID
@@ -1874,13 +1900,26 @@ public final class AppModel {
             defer { self.finishAssistantOperation(operationID) }
             do {
                 let provider = try await settings.provider()
+                // When the editing model cannot see, a vision model reads the
+                // window first and its answer travels as text. Best effort: if
+                // the describe pass fails, the turn still runs blind rather than
+                // failing the request the person actually made.
+                var attachedFrame = frame
+                var windowDescription: String?
+                if let frame, let seeing = await settings.visionProvider() {
+                    windowDescription = await WindowDescriber().describe(frame, using: seeing)
+                    attachedFrame = nil
+                }
                 let turn = try await AssistantTurnRunner().run(
                     prompt: prompt,
                     turnID: turnID,
                     provider: provider,
                     policy: settings.confirmationPolicy,
                     digest: digest,
-                    context: context
+                    context: context,
+                    frame: attachedFrame,
+                    windowDescription: windowDescription,
+                    expanding: categories
                 )
                 self.assistantAwaitingProviderOperationID = nil
                 try Task.checkCancellation()
@@ -2067,10 +2106,57 @@ public final class AppModel {
                 )
             )
         }
-        guard let textEditor,
+        if let textEditor {
+            return documentSession(
+                runtime: runtime,
+                name: textEditor.activeFile?.relativePath ?? "Text document",
+                canvas: "text:\(textEditor.language.rawValue)",
+                document: .text(textEditor.document.id),
+                revision: assistantRevision(textEditor.document, text: textEditor.text)
+            )
+        }
+        // The PDF and photo workspaces have the same chat panel as the others.
+        // Without these the composer sent into nothing: no session meant an
+        // early return that left the draft in the box and said nothing.
+        if let pdfEditor {
+            return documentSession(
+                runtime: runtime,
+                name: pdfEditor.document.title,
+                canvas: "pdf:\(pdfEditor.document.pages.count)pp",
+                document: .pdf(pdfEditor.document.id),
+                revision: assistantRevision(pdfEditor.document)
+            )
+        }
+        if let imageEditor {
+            return documentSession(
+                runtime: runtime,
+                name: assets.first { $0.id == imageEditor.document.sourceAssetID }?.displayName
+                    ?? "Image",
+                canvas: "image:\(Int(imageEditor.document.canvas.width))x"
+                    + "\(Int(imageEditor.document.canvas.height))",
+                document: .image(imageEditor.document.id),
+                revision: assistantRevision(imageEditor.document)
+            )
+        }
+        return nil
+    }
+
+    /// A session for a workspace whose document is not a timeline.
+    ///
+    /// These share one shape: the library-wide tools still apply, but there is
+    /// no timeline to describe, so the digest carries the document's identity
+    /// and nothing else.
+    private func documentSession(
+        runtime: AppRuntime,
+        name: String,
+        canvas: String,
+        document: AssistantSessionToken.Document,
+        revision: Data
+    ) -> (digest: ContextDigest, context: ToolExecutionContext, token: AssistantSessionToken)? {
+        guard
             let emptyProject = try? ProjectDocument(
                 id: .generate(),
-                name: textEditor.activeFile?.relativePath ?? "Text document",
+                name: name,
                 createdAt: .now,
                 modifiedAt: .now
             )
@@ -2082,22 +2168,34 @@ public final class AppModel {
             resolving: { assetID in try await runtime.url(for: assetID) }
         )
         configureSharedAssistantServices(&context, runtime: runtime)
-        let digest = ContextDigest(
-            projectName: textEditor.activeFile?.relativePath ?? "Text document",
-            duration: 0,
-            canvas: "text:\(textEditor.language.rawValue)",
-            selectedItemID: nil,
-            items: []
-        )
         return (
-            digest,
+            ContextDigest(
+                projectName: name,
+                duration: 0,
+                canvas: canvas,
+                selectedItemID: nil,
+                items: []
+            ),
             context,
             AssistantSessionToken(
-                document: .text(textEditor.document.id),
+                document: document,
                 generation: assistantDocumentGeneration,
-                revision: assistantRevision(textEditor.document, text: textEditor.text)
+                revision: revision
             )
         )
+    }
+
+    /// The command categories offered directly, rather than left behind
+    /// meta-tool discovery.
+    ///
+    /// Every editing category, not just the open workspace's. Discovery costs a
+    /// round trip and asks the model to guess at a name it was never shown, and
+    /// a request that spans workspaces — redact this photo, then put it on the
+    /// timeline — needs both sets at once. The open workspace is listed first so
+    /// the tools for what is actually on screen appear earliest in the schema
+    /// list, which is where a model's attention is best.
+    private var openWorkspaceCommandCategories: Set<CommandCategory> {
+        [.clip, .effect, .audio, .timeline, .pdf, .image, .text, .asset, .file]
     }
 
     private func assistantDocumentDidChange() {
@@ -2115,6 +2213,8 @@ public final class AppModel {
     private func currentAssistantDocument() -> AssistantSessionToken.Document? {
         if let editor { return .timeline(editor.document.id) }
         if let textEditor { return .text(textEditor.document.id) }
+        if let pdfEditor { return .pdf(pdfEditor.document.id) }
+        if let imageEditor { return .image(imageEditor.document.id) }
         return nil
     }
 
@@ -2123,6 +2223,8 @@ public final class AppModel {
         if let textEditor {
             return assistantRevision(textEditor.document, text: textEditor.text)
         }
+        if let pdfEditor { return assistantRevision(pdfEditor.document) }
+        if let imageEditor { return assistantRevision(imageEditor.document) }
         return nil
     }
 
@@ -2203,6 +2305,19 @@ public final class AppModel {
         }
         context.searchingSimilar = { assetID, limit in
             try await runtime.similarAssets(to: assetID, limit: limit)
+        }
+        // Bound to whichever editor is open, so a PDF or photo tool the model
+        // calls reaches the document the person is looking at. Without these the
+        // whole category answered "Unknown tool".
+        if let pdfEditor {
+            context.pdfCommand = { @MainActor invocation in
+                try await pdfEditor.runAssistantCommand(invocation)
+            }
+        }
+        if let imageEditor {
+            context.imageCommand = { @MainActor invocation in
+                try await imageEditor.runAssistantCommand(invocation)
+            }
         }
         context.conversionDestination = conversionDestinationFolder
         context.conversionCapabilities = conversionCapabilities
