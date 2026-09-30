@@ -52,6 +52,7 @@ struct InspectorResizeDivider: View {
             }
             .onEnded { _ in
                 widthAtDragStart = nil
+                model.persistInspectorWidth()
                 syncCursor()
             }
     }

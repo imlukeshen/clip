@@ -1198,11 +1198,21 @@ public final class AppModel {
     /// Clamping lives here rather than in a `didSet`: `@Observable` turns the
     /// property into a computed one, so assigning to it from its own observer
     /// recurses until the stack runs out.
+    /// Resizes the rail. Deliberately does not persist.
+    ///
+    /// A drag calls this on every frame, and writing the preference each time
+    /// meant a disk-backed store was hit sixty to a hundred and twenty times a
+    /// second while the pointer moved, which is what made resizing stutter.
+    /// ``persistInspectorWidth()`` records the result once the drag ends.
     public func setInspectorWidth(_ width: Double) {
         let width = InspectorLayout.clamped(width)
         guard width != inspectorWidth else { return }
         inspectorWidth = width
-        InspectorLayout.store(width)
+    }
+
+    /// Remembers the width the user settled on.
+    public func persistInspectorWidth() {
+        InspectorLayout.store(inspectorWidth)
     }
 
     /// The sidebar shows the library's folder name rather than its full path,

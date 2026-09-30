@@ -84,8 +84,9 @@ struct AssistantChatComposer: View {
         .padding(theme.metrics.spacing.md)
         // The rail clips its contents, and the shadow falls below the box it
         // surrounds, so without this the composer's lower edge is sliced flat
-        // against the bottom of the window.
-        .padding(.bottom, theme.metrics.spacing.sm)
+        // against the bottom of the window. Enough clearance that it reads as
+        // sitting in the panel rather than wedged against its edge.
+        .padding(.bottom, theme.metrics.spacing.lg)
         .accessibilityIdentifier("assistant-chat-composer")
     }
 
