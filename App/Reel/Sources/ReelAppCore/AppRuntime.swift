@@ -676,17 +676,19 @@ public actor AppRuntime {
 
     private func imageDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.imageDocuments(in: libraryRoot)
-            .appendingPathComponent("\(assetID.rawValue).reelimage")
+            .appendingPathComponent(
+                LibraryLayout.imageDocumentFilename(forAssetID: assetID.rawValue))
     }
 
     private func pdfDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.pdfDocuments(in: libraryRoot)
-            .appendingPathComponent("\(assetID.rawValue).reelpdf")
+            .appendingPathComponent(
+                LibraryLayout.pdfDocumentFilename(forAssetID: assetID.rawValue))
     }
 
     private func textDocumentURL(for assetID: AssetID) -> URL {
         LibraryLayout.textDocuments(in: libraryRoot)
-            .appendingPathComponent("\(assetID.rawValue).reeltext")
+            .appendingPathComponent(LibraryLayout.textDocumentFilename(forKey: assetID.rawValue))
     }
 
     private func texProjectDocumentURL(for relativeFolder: String) -> URL {
@@ -694,7 +696,7 @@ public actor AppRuntime {
             .map { String(format: "%02x", $0) }
             .joined()
         return LibraryLayout.texProjects(in: libraryRoot)
-            .appendingPathComponent("\(digest).reeltext")
+            .appendingPathComponent(LibraryLayout.textDocumentFilename(forKey: digest))
     }
 
     private static func indexStages(for asset: AssetRecord) -> Set<IndexStage> {

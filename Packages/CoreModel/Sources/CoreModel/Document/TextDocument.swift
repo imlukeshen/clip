@@ -260,6 +260,13 @@ public struct TextDocument: EditableDocument {
     /// The newest schema version this build writes.
     public static let currentSchemaVersion = 1
 
+    /// Filename extension of a persisted text-document overlay.
+    ///
+    /// Owned beside the type it serializes rather than in a layout helper:
+    /// `TextEngine` and `LibraryStore` both write these files and `CoreModel`
+    /// is the only package they share.
+    public static let fileExtension = "reeltext"
+
     /// The schema version the document was encoded with.
     public var schemaVersion: Int
     /// The document identifier.

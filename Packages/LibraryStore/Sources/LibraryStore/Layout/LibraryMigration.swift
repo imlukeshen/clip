@@ -93,7 +93,8 @@ public enum LibraryMigration {
             if let thumbnail = original.thumbnailPath,
                 FileManager.default.fileExists(atPath: root.appendingPathComponent(thumbnail).path)
             {
-                let destination = ".reel/thumbs/\(original.id.rawValue).thumb.heic"
+                let destination = LibraryLayout.thumbnailRelativePath(
+                    forAssetID: original.id.rawValue)
                 migrated.thumbnailPath = destination
                 moves.append(
                     .init(sourceRelativePath: thumbnail, destinationRelativePath: destination))
@@ -101,7 +102,8 @@ public enum LibraryMigration {
             if let peaks = original.peaksPath,
                 FileManager.default.fileExists(atPath: root.appendingPathComponent(peaks).path)
             {
-                let destination = ".reel/peaks/\(original.id.rawValue).peaks.bin"
+                let destination = LibraryLayout.peaksRelativePath(
+                    forAssetID: original.id.rawValue)
                 migrated.peaksPath = destination
                 moves.append(.init(sourceRelativePath: peaks, destinationRelativePath: destination))
             }
@@ -112,7 +114,8 @@ public enum LibraryMigration {
                 moves.append(
                     .init(
                         sourceRelativePath: relativePath(legacyMetadata, root: root),
-                        destinationRelativePath: ".reel/assets/\(original.id.rawValue).json"
+                        destinationRelativePath: LibraryLayout.metadataRelativePath(
+                            forAssetID: original.id.rawValue)
                     )
                 )
             }
@@ -122,8 +125,8 @@ public enum LibraryMigration {
         if FileManager.default.fileExists(atPath: legacyDatabase.path) {
             moves.append(
                 .init(
-                    sourceRelativePath: "Library.sqlite",
-                    destinationRelativePath: ".reel/Library.sqlite"
+                    sourceRelativePath: LibraryLayout.databaseName,
+                    destinationRelativePath: LibraryLayout.databaseRelativePath
                 )
             )
         }

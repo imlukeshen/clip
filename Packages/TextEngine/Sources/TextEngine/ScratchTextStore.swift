@@ -28,7 +28,7 @@ public actor ScratchTextStore {
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ).filter { $0.pathExtension == "reeltext" }
+        ).filter { $0.pathExtension == TextDocument.fileExtension }
         var records: [ScratchTextRecord] = []
         records.reserveCapacity(urls.count)
         for url in urls {
@@ -111,7 +111,7 @@ public actor ScratchTextStore {
     }
 
     private func structureURL(for id: DocumentID) -> URL {
-        directory.appendingPathComponent("\(id.rawValue).reeltext")
+        directory.appendingPathComponent("\(id.rawValue).\(TextDocument.fileExtension)")
     }
 
     private func prepareDirectory() throws {

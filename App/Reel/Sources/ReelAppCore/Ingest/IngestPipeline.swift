@@ -256,13 +256,14 @@ public actor IngestPipeline {
     ) throws -> DerivativePaths {
         let thumbnail = try staged.thumbnail.map { source in
             let destination = LibraryLayout.thumbnails(in: libraryRoot)
-                .appendingPathComponent("\(assetID.rawValue).thumb.heic")
+                .appendingPathComponent(
+                    LibraryLayout.thumbnailFilename(forAssetID: assetID.rawValue))
             try FileManager.default.moveItem(at: source, to: destination)
             return destination
         }
         let peaks = try staged.peaks.map { source in
             let destination = LibraryLayout.peaks(in: libraryRoot)
-                .appendingPathComponent("\(assetID.rawValue).peaks.bin")
+                .appendingPathComponent(LibraryLayout.peaksFilename(forAssetID: assetID.rawValue))
             try FileManager.default.moveItem(at: source, to: destination)
             return destination
         }

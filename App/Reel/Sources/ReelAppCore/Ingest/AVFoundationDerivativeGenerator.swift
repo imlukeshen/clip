@@ -3,6 +3,7 @@ import CoreMedia
 import CoreModel
 import Foundation
 import ImageIO
+import LibraryStore
 import UniformTypeIdentifiers
 
 /// Production best-effort thumbnail and 100 Hz audio-envelope generation.
@@ -64,7 +65,7 @@ public struct AVFoundationDerivativeGenerator: DerivativeGenerating {
         )
         let result = try await generator.image(at: time)
         let destination = destinationFolder.appendingPathComponent(
-            "\(assetID.rawValue).thumb.heic"
+            LibraryLayout.thumbnailFilename(forAssetID: assetID.rawValue)
         )
         try writeHEIC(result.image, to: destination)
         return destination
@@ -89,7 +90,7 @@ public struct AVFoundationDerivativeGenerator: DerivativeGenerating {
             return nil
         }
         let destination = destinationFolder.appendingPathComponent(
-            "\(assetID.rawValue).thumb.heic"
+            LibraryLayout.thumbnailFilename(forAssetID: assetID.rawValue)
         )
         try writeHEIC(image, to: destination)
         return destination
@@ -188,7 +189,7 @@ public struct AVFoundationDerivativeGenerator: DerivativeGenerating {
         }
 
         let destination = destinationFolder.appendingPathComponent(
-            "\(assetID.rawValue).peaks.bin"
+            LibraryLayout.peaksFilename(forAssetID: assetID.rawValue)
         )
         try peaksData(peaks, sampleRate: Float32(sampleRate)).write(
             to: destination,
