@@ -82,6 +82,10 @@ struct AssistantChatComposer: View {
         }
         .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
         .padding(theme.metrics.spacing.md)
+        // The rail clips its contents, and the shadow falls below the box it
+        // surrounds, so without this the composer's lower edge is sliced flat
+        // against the bottom of the window.
+        .padding(.bottom, theme.metrics.spacing.sm)
         .accessibilityIdentifier("assistant-chat-composer")
     }
 
@@ -127,21 +131,28 @@ private struct PDFLayerInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
+    @State private var panel: Panel = .inspector
+
+    private enum Panel: String, CaseIterable, Identifiable {
+        case inspector = "Inspector"
+        case chat = "Chat"
+
+        var id: Self { self }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: theme.metrics.spacing.sm) {
-                Text("PDF Inspector")
-                    .font(theme.type.title.font)
-                    // The rail can be dragged narrow; truncate rather than let
-                    // the title run under the divider.
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(1)
-                Spacer(minLength: theme.metrics.spacing.xs)
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                .fixedSize()
                 Text("Page \(editor.selectedPageNumber)")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(theme.palette.surfaceRaised)
@@ -151,6 +162,62 @@ private struct PDFLayerInspector: View {
             .frame(height: EditorChromeMetrics.headerHeight)
 
             Divider().overlay(theme.palette.line)
+
+            if panel == .chat {
+                pdfChat
+            } else {
+                inspectorBody
+            }
+        }
+        .background(theme.palette.surfacePanel)
+    }
+
+    /// The assistant already drives this editor through its PDF tools; without a
+    /// panel here the only way to reach it was to open a different workspace.
+    private var pdfChat: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if model.assistantMessages.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                SectionLabel("Document context")
+                                Text("\(editor.document.pages.count) pages")
+                                    .foregroundStyle(theme.palette.textSecondary)
+                                Text(
+                                    "Ask Clip to redact, highlight, recognise text, "
+                                        + "or rewrite what is on the page."
+                                )
+                                .foregroundStyle(theme.palette.textTertiary)
+                            }
+                            .font(theme.type.caption.font)
+                        }
+                        ForEach(model.assistantMessages) { message in
+                            AssistantChatBubble(message: message).id(message.id)
+                        }
+                        ForEach(model.pendingAssistantActions) { action in
+                            PendingActionCard(model: model, action: action)
+                        }
+                        if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                    }
+                    .padding(14)
+                }
+                .onChange(of: model.assistantMessages.count) {
+                    if let id = model.assistantMessages.last?.id {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            AssistantChatComposer(
+                draft: $model.assistantDraft,
+                isWorking: model.isAssistantWorking,
+                send: model.sendAssistantMessage
+            )
+        }
+    }
+
+    private var inspectorBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -182,13 +249,12 @@ private struct PDFLayerInspector: View {
                     )
                     .accessibilityIdentifier("pdf-signature-name")
 
-                Picker("Style", selection: $editor.signatureStyle) {
-                    ForEach(PDFSignatureStyle.allCases) { style in
-                        Text(style.title).tag(style)
+                ReelSegmentedControl(
+                    selection: $editor.signatureStyle,
+                    options: PDFSignatureStyle.allCases.map {
+                        .init(value: $0, title: $0.title)
                     }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                )
 
                 signaturePreview
 

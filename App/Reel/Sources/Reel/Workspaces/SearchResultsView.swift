@@ -160,6 +160,20 @@ struct SearchResultsView: View {
                     }
                 }
                 .scrollIndicators(.hidden)
+                // Fade the trailing edge rather than slicing the last chip flat
+                // against the card. With the indicator hidden, a hard cut reads
+                // as broken layout instead of as more content to scroll to.
+                .mask(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.94),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
                 .padding(.leading, 105)
             }
         }
