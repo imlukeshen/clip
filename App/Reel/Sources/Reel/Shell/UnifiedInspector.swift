@@ -130,10 +130,15 @@ private struct PDFLayerInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: theme.metrics.spacing.sm) {
                 Text("PDF Inspector")
                     .font(theme.type.title.font)
-                Spacer()
+                    // The rail can be dragged narrow; truncate rather than let
+                    // the title run under the divider.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                Spacer(minLength: theme.metrics.spacing.xs)
                 Text("Page \(editor.selectedPageNumber)")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
@@ -149,6 +154,7 @@ private struct PDFLayerInspector: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if editor.activeTool == .signature { signatureCard }
                     directTextCard
                     editsCard
                     fontsCard
@@ -158,6 +164,57 @@ private struct PDFLayerInspector: View {
             }
             .scrollIndicators(.visible)
         }
+    }
+
+    private var signatureCard: some View {
+        inspectorCard("Signature", symbol: "signature") {
+            VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
+                TextField("Full name", text: $editor.signatureName)
+                    .textFieldStyle(.plain)
+                    .font(theme.type.body.font)
+                    .padding(theme.metrics.spacing.sm)
+                    .background(theme.palette.surfaceRaised)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.input,
+                            style: .continuous
+                        )
+                    )
+                    .accessibilityIdentifier("pdf-signature-name")
+
+                Picker("Style", selection: $editor.signatureStyle) {
+                    ForEach(PDFSignatureStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                signaturePreview
+
+                Text("Click the page to place it, then drag to position.")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+        }
+    }
+
+    /// Shows the name in the chosen face before it is committed to the page.
+    private var signaturePreview: some View {
+        let trimmed = editor.signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Text(trimmed.isEmpty ? "Your name" : trimmed)
+            .font(.custom(editor.signatureStyle.fontDescriptor.postScriptName, size: 26))
+            .foregroundStyle(
+                trimmed.isEmpty ? theme.palette.textTertiary : theme.palette.textPrimary
+            )
+            .lineLimit(1)
+            .minimumScaleFactor(0.4)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(theme.palette.surfaceSunken)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+            )
+            .accessibilityLabel("Signature preview")
     }
 
     @ViewBuilder private var directTextCard: some View {
@@ -469,7 +526,7 @@ private struct ImageLayerInspector: View {
                     Image(systemName: "ellipsis")
                         .frame(width: 24, height: 24)
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
             }
 

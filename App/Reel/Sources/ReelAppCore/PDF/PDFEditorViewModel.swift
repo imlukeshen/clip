@@ -10,6 +10,7 @@ public enum PDFEditorTool: String, CaseIterable, Sendable, Identifiable {
     case text
     case highlight
     case redact
+    case signature
 
     public var id: String { rawValue }
 
@@ -19,6 +20,7 @@ public enum PDFEditorTool: String, CaseIterable, Sendable, Identifiable {
         case .text: "Add Text"
         case .highlight: "Highlight"
         case .redact: "Redact"
+        case .signature: "Signature"
         }
     }
 
@@ -28,6 +30,8 @@ public enum PDFEditorTool: String, CaseIterable, Sendable, Identifiable {
         case .text: "Click to place text or drag a text box, then type in the inspector."
         case .highlight: "Drag across an area to highlight it."
         case .redact: "Drag over sensitive content. Redaction is permanent in the exported PDF."
+        case .signature:
+            "Type a name in the inspector, then click the page to place it. Drag to reposition."
         }
     }
 
@@ -37,6 +41,7 @@ public enum PDFEditorTool: String, CaseIterable, Sendable, Identifiable {
         case .text: "textformat"
         case .highlight: "highlighter"
         case .redact: "eye.slash"
+        case .signature: "signature"
         }
     }
 }
@@ -48,6 +53,12 @@ public final class PDFEditorViewModel {
     public private(set) var renderedPage: CGImage?
     public private(set) var thumbnails: [PDFPageID: CGImage] = [:]
     public private(set) var pageAnalysis: PDFPageAnalysis?
+    /// Paragraph structure for the selected page, rebuilt with every analysis.
+    ///
+    /// Editing waits on this rather than on individual text objects: a click
+    /// has to resolve against the finished page so it lands in a paragraph,
+    /// not in whichever fragment the content stream happened to split out.
+    public private(set) var pageTextIndex = PDFPageTextIndex.empty
     public private(set) var isRendering = false
     public private(set) var isExporting = false
     public private(set) var isRecognizingText = false
@@ -60,7 +71,12 @@ public final class PDFEditorViewModel {
     public var selectedPageID: PDFPageID
     public var selectedLayerID: PDFLayerID?
     public var selectedSourceTextBlockID: Int?
+    /// Source objects currently open for in-place editing, withheld from the render.
+    public private(set) var editingSourceObjectIDs: Set<Int> = []
     public var activeTool: PDFEditorTool = .select
+    /// Name the signature tool will place, shared with its composer.
+    public var signatureName = ""
+    public var signatureStyle: PDFSignatureStyle = .flowing
     public var automaticallyResolveMissingFonts: Bool
     /// Current library location for the source PDF.
     public private(set) var sourceURL: URL
@@ -124,14 +140,16 @@ public final class PDFEditorViewModel {
 
     public var editableTextBlocks: [PDFTextBlock] {
         guard let analysis = pageAnalysis else { return [] }
+        let edits = sourceTextEditsByObjectIndex
         return analysis.textBlocks.map { block in
-            guard let edit = sourceTextEdit(for: block.pageObjectIndex) else { return block }
+            guard let edit = edits[block.pageObjectIndex] else { return block }
             return PDFTextBlock(
                 pageObjectIndex: block.pageObjectIndex,
                 text: edit.text,
                 bounds: edit.frame,
                 font: edit.font,
                 fontSize: edit.fontSize,
+                matrixScale: block.matrixScale,
                 color: edit.color
             )
         }
@@ -140,6 +158,92 @@ public final class PDFEditorViewModel {
     public var selectedSourceTextBlock: PDFTextBlock? {
         guard let selectedSourceTextBlockID else { return nil }
         return editableTextBlocks.first { $0.pageObjectIndex == selectedSourceTextBlockID }
+    }
+
+    /// Whether the page has finished indexing and can be edited as text.
+    public var isPageIndexed: Bool { !isRendering && !pageTextIndex.isEmpty }
+
+    /// A caret position inside a source text object.
+    public struct TextHit: Sendable, Equatable {
+        public var pageObjectIndex: Int
+        public var characterOffset: Int
+
+        public init(pageObjectIndex: Int, characterOffset: Int) {
+            self.pageObjectIndex = pageObjectIndex
+            self.characterOffset = characterOffset
+        }
+    }
+
+    /// Resolves a normalized page point to a caret inside the text under it.
+    ///
+    /// Editing in place means a click has to name both an object and an offset
+    /// within it. The point is first narrowed to the smallest block containing
+    /// it, so clicking blank space edits nothing, and the offset is then the
+    /// number of that block's glyphs to the left of the click on the nearest
+    /// line. Glyphs are compared with a vertical bias so a click lands on the
+    /// line it was aimed at rather than a horizontally closer neighbour.
+    public func textHit(at point: CGPoint) -> TextHit? {
+        guard let analysis = pageAnalysis else { return nil }
+        let containing = analysis.textBlocks
+            .filter { $0.bounds.insetBy(dx: -0.003, dy: -0.003).contains(point) }
+            .min { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
+        guard let block = containing else { return nil }
+
+        var offset = 0
+        var best: (score: CGFloat, offset: Int)?
+        for glyph in analysis.glyphs where glyph.pageObjectIndex == block.pageObjectIndex {
+            defer { offset += 1 }
+            guard let bounds = glyph.bounds else { continue }
+            let verticalGap = max(bounds.minY - point.y, point.y - bounds.maxY, 0)
+            let horizontalGap = max(bounds.minX - point.x, point.x - bounds.maxX, 0)
+            let score = verticalGap * 4 + horizontalGap
+            let landsAfter = point.x > bounds.midX
+            let candidate = landsAfter ? offset + 1 : offset
+            if score < (best?.score ?? .greatestFiniteMagnitude) {
+                best = (score, candidate)
+            }
+        }
+        let text = sourceTextEdit(for: block.pageObjectIndex)?.text ?? block.text
+        let resolved = min(best?.offset ?? text.count, text.count)
+        return TextHit(pageObjectIndex: block.pageObjectIndex, characterOffset: resolved)
+    }
+
+    /// A caret position inside a paragraph's assembled text.
+    public struct ParagraphHit: Sendable, Equatable {
+        public var paragraphID: Int
+        public var characterOffset: Int
+
+        public init(paragraphID: Int, characterOffset: Int) {
+            self.paragraphID = paragraphID
+            self.characterOffset = characterOffset
+        }
+    }
+
+    /// Resolves a page point to a caret inside the paragraph under it.
+    ///
+    /// The object-level hit gives an offset within one text object; converting
+    /// it walks that object's spans to find where they sit in the paragraph, so
+    /// the caret lands in the continuous text rather than in a fragment.
+    public func paragraphHit(at point: CGPoint) -> ParagraphHit? {
+        guard let paragraph = pageTextIndex.paragraph(containing: point) else { return nil }
+        guard let hit = textHit(at: point) else {
+            return ParagraphHit(
+                paragraphID: paragraph.id,
+                characterOffset: paragraph.text.count
+            )
+        }
+        var consumed = 0
+        for placement in paragraph.spanPlacements
+        where placement.span.pageObjectIndex == hit.pageObjectIndex {
+            if hit.characterOffset <= consumed + placement.length {
+                return ParagraphHit(
+                    paragraphID: paragraph.id,
+                    characterOffset: placement.start + (hit.characterOffset - consumed)
+                )
+            }
+            consumed += placement.length
+        }
+        return ParagraphHit(paragraphID: paragraph.id, characterOffset: paragraph.text.count)
     }
 
     public var selectedPageNumber: Int {
@@ -163,7 +267,23 @@ public final class PDFEditorViewModel {
     public func stop() {
         renderTask?.cancel()
         thumbnailTask?.cancel()
+        flushPersistence()
+    }
+
+    /// Lets the pending local write finish as the editor goes away.
+    ///
+    /// `persist()` writes asynchronously, so cancelling its task here raced the
+    /// write and silently dropped whatever had just been edited: closing a PDF
+    /// shortly after a change reopened it with the change missing. The write is
+    /// detached so closing the editor cannot cancel it.
+    private func flushPersistence() {
         persistenceTask?.cancel()
+        persistenceTask = nil
+        let document = document
+        let persistence = persistence
+        Task.detached(priority: .userInitiated) {
+            try? await persistence(document)
+        }
     }
 
     /// Rebinds the editor after the library moves its source asset.
@@ -307,6 +427,10 @@ public final class PDFEditorViewModel {
         switch activeTool {
         case .select:
             return
+        // A signature is placed by clicking, not by dragging out a box: its
+        // size comes from the name, so a dragged rectangle would distort it.
+        case .signature:
+            return
         case .text:
             _ = addText(in: rect)
             return
@@ -337,6 +461,76 @@ public final class PDFEditorViewModel {
             y: min(max(point.y - height / 2, 0), 1 - height)
         )
         return addText(in: CGRect(origin: origin, size: CGSize(width: width, height: height)))
+    }
+
+    /// Places a typed signature, sized to the name it spells.
+    ///
+    /// A signature is a text layer in a script face rather than a pasted image,
+    /// so it stays vector in the page and can be re-typed instead of redrawn.
+    @discardableResult
+    public func addSignature(
+        _ name: String,
+        style: PDFSignatureStyle,
+        at point: CGPoint
+    ) -> PDFLayerID? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            notice = "Type a name to sign with."
+            return nil
+        }
+        let pageSize = selectedPage?.size ?? PDFPageSize(width: 612, height: 792)
+        // Measure rather than estimate. Script faces vary enormously in width —
+        // Zapfino runs several times wider than Snell for the same string — and
+        // a frame too small for the text makes CoreText draw nothing at all
+        // rather than overflow, so the signature simply never appeared.
+        let pointSize = pageSize.height * 0.045
+        let measured = style.measure(trimmed, atPointSize: pointSize)
+        let width = min(max(measured.width / pageSize.width, 0.08), 0.6)
+        let height = min(max(measured.height / pageSize.height, 0.02), 0.25)
+        let origin = CGPoint(
+            x: min(max(point.x - width / 2, 0), max(1 - width, 0)),
+            y: min(max(point.y - height / 2, 0), max(1 - height, 0))
+        )
+        let signature = PDFTextLayer(
+            text: trimmed,
+            frame: CGRect(origin: origin, size: CGSize(width: width, height: height)),
+            font: style.fontDescriptor,
+            fontSize: pointSize
+        )
+        do {
+            try perform(
+                .addLayer(
+                    .text(signature),
+                    to: selectedPageID,
+                    atIndex: selectedPage?.layers.count ?? 0
+                ),
+                actionName: "Add Signature"
+            )
+            selectedLayerID = signature.id
+            return signature.id
+        } catch {
+            notice = "The signature could not be added."
+            return nil
+        }
+    }
+
+    /// Moves a placed layer so its frame origin lands at `origin`.
+    public func moveLayer(_ id: PDFLayerID, to origin: CGPoint) {
+        guard let page = selectedPage,
+            let layer = page.layers.first(where: { $0.id == id })
+        else { return }
+        guard case .text(var text) = layer, text.sourceReference == nil else { return }
+        let clamped = CGPoint(
+            x: min(max(origin.x, 0), max(1 - text.frame.width, 0)),
+            y: min(max(origin.y, 0), max(1 - text.frame.height, 0))
+        )
+        guard clamped != text.frame.origin else { return }
+        text.frame.origin = clamped
+        do {
+            try perform(.updateLayer(.text(text), on: selectedPageID), actionName: "Move")
+        } catch {
+            notice = "That edit could not be moved."
+        }
     }
 
     @discardableResult
@@ -380,6 +574,133 @@ public final class PDFEditorViewModel {
             }?.id
     }
 
+    /// Applies edited paragraph text back to the objects it was assembled from.
+    ///
+    /// The edit is narrowed to the region between the unchanged prefix and
+    /// suffix, then attributed to the spans that region covers. A change inside
+    /// one span rewrites only that object, so a bold phrase beside it keeps its
+    /// own object, face and position — which is what stops a paragraph behaving
+    /// like a row of separate boxes. Every object changes in one patch, so the
+    /// whole paragraph edit is a single undo step.
+    public func replaceParagraphText(_ paragraph: PDFTextParagraph, with edited: String) {
+        let placements = paragraph.spanPlacements
+        let original = Array(paragraph.text)
+        let updated = Array(edited)
+        guard original != updated else { return }
+
+        var prefix = 0
+        while prefix < original.count, prefix < updated.count, original[prefix] == updated[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < original.count - prefix, suffix < updated.count - prefix,
+            original[original.count - 1 - suffix] == updated[updated.count - 1 - suffix]
+        {
+            suffix += 1
+        }
+        let changedStart = prefix
+        let changedEnd = original.count - suffix
+        let replacement = String(updated[prefix..<(updated.count - suffix)])
+
+        // A pure insertion covers no span, so it is attributed to the span it
+        // was typed into rather than dropped.
+        var affected = placements.filter { $0.end > changedStart && $0.start < changedEnd }
+        if affected.isEmpty {
+            let host =
+                placements.last { $0.start <= changedStart && changedStart <= $0.end }
+                ?? placements.first
+            affected = host.map { [$0] } ?? []
+        }
+        guard let first = affected.first else { return }
+
+        var rebuilt: [Int: String] = [:]
+        for placement in placements {
+            let object = placement.span.pageObjectIndex
+            rebuilt[object, default: ""] += text(
+                for: placement,
+                in: affected,
+                first: first,
+                changedStart: changedStart,
+                changedEnd: changedEnd,
+                replacement: replacement
+            )
+        }
+
+        var patches: [PDFPatch] = []
+        for (objectIndex, value) in rebuilt.sorted(by: { $0.key < $1.key }) {
+            // A PDF text object holds one run and cannot carry a line break.
+            // The paragraph's own breaks belong to no span, so one only reaches
+            // here when an edit spanned a boundary; it becomes a space.
+            let flattened = value.replacingOccurrences(of: "\n", with: " ")
+            if let patch = sourceTextPatch(objectIndex: objectIndex, with: flattened) {
+                patches.append(patch)
+            }
+        }
+        guard !patches.isEmpty else { return }
+        do {
+            try perform(patches, actionName: "Edit PDF Text")
+        } catch {
+            notice = "That PDF text could not be changed."
+        }
+    }
+
+    /// The text one span contributes after the edit.
+    private func text(
+        for placement: PDFTextParagraph.SpanPlacement,
+        in affected: [PDFTextParagraph.SpanPlacement],
+        first: PDFTextParagraph.SpanPlacement,
+        changedStart: Int,
+        changedEnd: Int,
+        replacement: String
+    ) -> String {
+        guard affected.contains(where: { $0.start == placement.start }) else {
+            return placement.span.text
+        }
+        let characters = Array(placement.span.text)
+        let localStart = min(max(changedStart - placement.start, 0), characters.count)
+        let localEnd = min(max(changedEnd - placement.start, 0), characters.count)
+        let head = String(characters[0..<localStart])
+        let tail = String(characters[localEnd...])
+        // The replacement lands whole in the first covered span; later spans
+        // keep only whatever survived past the edit.
+        return placement.start == first.start ? head + replacement + tail : tail
+    }
+
+    /// The patch that sets one source object's text, creating its edit layer on
+    /// first use.
+    private func sourceTextPatch(objectIndex: Int, with value: String) -> PDFPatch? {
+        if let existing = sourceTextEdit(for: objectIndex) {
+            guard existing.text != value else { return nil }
+            var updated = existing
+            updated.text = value
+            return .updateLayer(.text(updated), on: selectedPageID)
+        }
+        guard
+            let block = pageAnalysis?.textBlocks.first(where: {
+                $0.pageObjectIndex == objectIndex
+            }),
+            block.text != value
+        else { return nil }
+        let edit = PDFTextLayer(
+            text: value,
+            frame: block.bounds,
+            font: block.font,
+            fontSize: block.fontSize,
+            color: block.color,
+            sourceReference: PDFSourceTextReference(
+                pageObjectIndex: objectIndex,
+                originalText: block.text,
+                originalFontPostScriptName: block.font.postScriptName,
+                originalFrame: block.bounds
+            )
+        )
+        return .addLayer(
+            .text(edit),
+            to: selectedPageID,
+            atIndex: selectedPage?.layers.count ?? 0
+        )
+    }
+
     public func replaceSourceText(objectIndex: Int, with value: String) {
         guard
             editableTextBlocks.contains(where: {
@@ -416,7 +737,8 @@ public final class PDFEditorViewModel {
             sourceReference: PDFSourceTextReference(
                 pageObjectIndex: objectIndex,
                 originalText: sourceBlock.text,
-                originalFontPostScriptName: sourceBlock.font.postScriptName
+                originalFontPostScriptName: sourceBlock.font.postScriptName,
+                originalFrame: sourceBlock.bounds
             )
         )
         do {
@@ -498,6 +820,19 @@ public final class PDFEditorViewModel {
             isExporting = false
         }
         return true
+    }
+
+    /// Handles Command-S.
+    ///
+    /// The source PDF is immutable, so there is nothing to write back into and
+    /// every edit is already persisted to the library overlay as it is made.
+    /// Save therefore confirms that, and refreshes an exported copy when one
+    /// has already been chosen. It deliberately never opens a file picker:
+    /// choosing a destination is Save As, on Shift-Command-S.
+    public func saveEdits() {
+        persist()
+        guard !saveToLastDerivative() else { return }
+        notice = "Edits saved. Use Save As to export a copy."
     }
 
     /// Saves to the last successful edited copy. Returning false asks the view
@@ -607,6 +942,17 @@ public final class PDFEditorViewModel {
 
     public func clearNotice() { notice = nil }
 
+    /// Opens or closes in-place editing for a source text object.
+    ///
+    /// The page is re-rasterized without the object so its original glyphs are
+    /// absent while it is edited, rather than obscured by the editor drawn over
+    /// them. Passing nil restores the full page.
+    public func setEditingSourceObjects(_ objectIndexes: Set<Int>) {
+        guard editingSourceObjectIDs != objectIndexes else { return }
+        editingSourceObjectIDs = objectIndexes
+        rebuild()
+    }
+
     private func rebuild() {
         renderTask?.cancel()
         let document = document
@@ -614,11 +960,29 @@ public final class PDFEditorViewModel {
         guard let page = document.page(pageID) else { return }
         let renderer = renderer
         let source = source
+        let suppressed = editingSourceObjectIDs
+        // Analyse the page as it is drawn. Reading the untouched source instead
+        // left the paragraph model one edit behind what was on screen.
+        let appliedEdits = page.layers.compactMap { layer -> PDFTextLayer? in
+            guard case .text(let text) = layer, text.sourceReference != nil else { return nil }
+            return text
+        }
+        let fontStore = fontStore
         isRendering = true
         renderTask = Task {
             let result = await Task.detached(priority: .userInitiated) {
-                let image = try renderer.render(document, pageID: pageID)
-                let analysis = try page.sourcePageIndex.map { try source.analyzePage(at: $0) }
+                let image = try renderer.render(
+                    document,
+                    pageID: pageID,
+                    suppressedObjectIndexes: suppressed
+                )
+                let analysis = try page.sourcePageIndex.map {
+                    try source.analyzePage(
+                        at: $0,
+                        applying: appliedEdits,
+                        fontData: { fontStore.cachedData(for: $0) }
+                    )
+                }
                 return (image, analysis)
             }.result
             guard !Task.isCancelled, self.selectedPageID == pageID else { return }
@@ -626,6 +990,7 @@ public final class PDFEditorViewModel {
             case .success(let output):
                 renderedPage = output.0
                 pageAnalysis = output.1
+                pageTextIndex = output.1.map(PDFPageTextIndex.build(from:)) ?? .empty
             case .failure:
                 notice = "This PDF page could not be rendered."
             }
@@ -750,8 +1115,25 @@ public final class PDFEditorViewModel {
         )
     }
 
+    /// Source text edits on the selected page, keyed by the source object each replaces.
+    ///
+    /// `editableTextBlocks` is read from a SwiftUI body on every invalidation
+    /// while the select tool is active. Indexing the page's layers once keeps
+    /// that O(blocks + layers); rescanning every layer per block made a
+    /// text-heavy page quadratic and allocated an array per block.
+    private var sourceTextEditsByObjectIndex: [Int: PDFTextLayer] {
+        guard let selectedPage else { return [:] }
+        return selectedPage.layers.reduce(into: [:]) { index, layer in
+            guard case .text(let text) = layer,
+                let reference = text.sourceReference,
+                index[reference.pageObjectIndex] == nil
+            else { return }
+            index[reference.pageObjectIndex] = text
+        }
+    }
+
     private func sourceTextEdit(for objectIndex: Int) -> PDFTextLayer? {
-        selectedPage?.layers.compactMap { layer -> PDFTextLayer? in
+        selectedPage?.layers.lazy.compactMap { layer -> PDFTextLayer? in
             guard case .text(let text) = layer,
                 text.sourceReference?.pageObjectIndex == objectIndex
             else { return nil }
