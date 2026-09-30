@@ -124,6 +124,14 @@ struct ClipApp: App {
                             && model.pdfEditor == nil && model.textEditor == nil
                             && !model.undoManager.canRedo)
                 )
+                Divider()
+                // No key equivalent: the Delete key is handled per editor by
+                // `onDeleteCommand`, which respects focus. A menu shortcut here
+                // would take the key from every text field in the app.
+                Button(commandTitle("edit.delete")) {
+                    AppCommandRouter.run("edit.delete", in: model)
+                }
+                .disabled(AppCommandRouter.availability(of: "edit.delete", in: model) != .available)
             }
             CommandMenu("Assets") {
                 Button(commandTitle("asset.search")) {

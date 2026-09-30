@@ -31,9 +31,9 @@ struct AssetGrid: View {
         Group {
             if assets.isEmpty {
                 emptyState
-                    .padding(.vertical, 26)
+                    .padding(.vertical, theme.metrics.spacing.xxl)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.lg) {
                     browserToolbar
 
                     if model.browserViewMode == .grid {
@@ -68,7 +68,7 @@ struct AssetGrid: View {
     }
 
     private var browserToolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: theme.metrics.spacing.md) {
             Text("\(assets.count) item\(assets.count == 1 ? "" : "s")")
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -95,7 +95,7 @@ struct AssetGrid: View {
                     } label: {
                         Label("Organize", systemImage: "folder")
                     }
-                    .menuStyle(.borderlessButton)
+                    .menuStyle(ReelMenuStyle())
                     .fixedSize()
                     .help("Rename or move the selected files")
                 }
@@ -158,12 +158,12 @@ struct AssetGrid: View {
                     if asset.isMissing {
                         Text("Missing")
                             .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, theme.metrics.spacing.sm)
+                            .padding(.vertical, theme.metrics.spacing.xs)
                             .background(.black.opacity(0.75))
                             .foregroundStyle(.white)
                             .clipShape(Capsule())
-                            .padding(6)
+                            .padding(theme.metrics.spacing.sm)
                     }
                 }
                 .draggable(dragValue(for: asset)) {
@@ -222,7 +222,7 @@ struct AssetGrid: View {
             if let rect = marqueeRect {
                 Rectangle()
                     .fill(theme.palette.accentDim)
-                    .stroke(theme.palette.accentLine, lineWidth: 1)
+                    .stroke(theme.palette.accentLine, lineWidth: theme.metrics.hairline)
                     .frame(width: rect.width, height: rect.height)
                     .offset(x: rect.minX, y: rect.minY)
                     .allowsHitTesting(false)
@@ -279,7 +279,7 @@ struct AssetGrid: View {
         let count =
             model.selection.selected.contains(asset.id)
             ? max(1, model.selection.selected.count) : 1
-        return HStack(spacing: 8) {
+        return HStack(spacing: theme.metrics.spacing.md) {
             AssetThumbnail(asset: asset, libraryRoot: model.libraryRoot)
                 .frame(width: 44, height: 28)
                 .background(theme.palette.surfaceSunken)
@@ -291,7 +291,7 @@ struct AssetGrid: View {
                 .foregroundStyle(theme.palette.textPrimary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, theme.metrics.spacing.md)
         .frame(height: 44)
         .frame(maxWidth: 220)
         .fixedSize()
@@ -408,7 +408,7 @@ private struct AssetList: View {
             }
             .font(theme.type.caption.font)
             .foregroundStyle(theme.palette.textTertiary)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, theme.metrics.spacing.md)
             .frame(height: 28)
 
             ForEach(assets) { asset in
@@ -449,6 +449,7 @@ extension View {
 /// window is narrow it sheds the least useful columns instead of squeezing the
 /// name to nothing.
 private struct AssetListColumns<Leading: View>: View {
+    @Environment(\.theme) private var theme
     let kind: String
     let duration: String
     let size: String
@@ -471,7 +472,7 @@ private struct AssetListColumns<Leading: View>: View {
         size showSize: Bool,
         modified showModified: Bool
     ) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: theme.metrics.spacing.lg) {
             leading
             if showKind {
                 Text(kind).frame(width: 90, alignment: .leading)
@@ -512,7 +513,7 @@ private struct AssetListRow: View {
                 Text(asset.displayName).assetListName()
             }
             .font(theme.type.caption.font)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, theme.metrics.spacing.md)
             .frame(height: 34)
             .background(rowBackground)
             .contentShape(Rectangle())
@@ -663,7 +664,7 @@ struct AssetThumbnail: View {
                 .scaledToFill()
                 .clipped()
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: theme.metrics.spacing.md) {
                 Image(systemName: systemImage)
                     .font(.system(size: 22, weight: .regular))
                 Text(asset.container?.uppercased() ?? asset.kind.rawValue.uppercased())

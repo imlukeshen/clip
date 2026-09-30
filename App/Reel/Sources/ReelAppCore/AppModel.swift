@@ -62,7 +62,24 @@ public final class AppModel {
     public var selectedFolderPath: String? = "Inbox"
     public var browserViewMode: BrowserViewMode = .grid
     public var assetSort: AssetSort = .modified
-    public var isInspectorVisible = true
+    /// Whether the right rail is shown.
+    ///
+    /// Starts hidden so a workspace opens at full width; the titlebar toggle and
+    /// commands that prepare something in the rail reveal it.
+    public var isInspectorVisible = false
+    /// Whether the inbox shows its capture status and shortcut rows.
+    ///
+    /// The grid is what people come to the inbox for; the capture chrome above
+    /// it is reference material most of the time, so it collapses and stays
+    /// collapsed until it is asked for.
+    public var showsCaptureTools: Bool {
+        didSet {
+            guard showsCaptureTools != oldValue else { return }
+            UserDefaults.standard.set(showsCaptureTools, forKey: Self.captureToolsKey)
+        }
+    }
+
+    static let captureToolsKey = "clip.inbox.showsCaptureTools"
     public private(set) var inspectorWidth = InspectorLayout.defaultWidth
     public var appearance: AppearancePreference {
         didSet {
@@ -259,6 +276,8 @@ public final class AppModel {
         self.isPDFFontAutoDownloadEnabled =
             UserDefaults.standard.object(forKey: Self.pdfFontAutoDownloadPreferenceKey)
             as? Bool ?? true
+        self.showsCaptureTools =
+            UserDefaults.standard.object(forKey: Self.captureToolsKey) as? Bool ?? false
         self.inspectorWidth = InspectorLayout.restoredWidth()
         self.undoManager.groupsByEvent = false
     }

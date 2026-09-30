@@ -53,6 +53,22 @@ public enum AppCommandRouter {
                 || model.pdfEditor?.undoManager.canRedo == true
                 || model.editor?.undoManager.canRedo == true || model.undoManager.canRedo
                 ? .available : .unavailable(reason: "There is nothing to redo.")
+        case "edit.delete":
+            // Each editor owns what "the selection" means; the command is only
+            // offered when the open one actually has something selected.
+            if let editor = model.editor {
+                return editor.selection.isEmpty
+                    ? .unavailable(reason: "Select video or audio to delete.") : .available
+            }
+            if let editor = model.imageEditor {
+                return editor.selectedLayerID == nil
+                    ? .unavailable(reason: "Select a layer to delete.") : .available
+            }
+            if let editor = model.pdfEditor {
+                return editor.selectedLayerID == nil
+                    ? .unavailable(reason: "Select a PDF edit to delete.") : .available
+            }
+            return .unavailable(reason: "Open an editor to delete its contents.")
         case "asset.selectAll":
             return model.visibleAssets.isEmpty
                 ? .unavailable(reason: "This view contains no assets.") : .available
@@ -128,6 +144,15 @@ public enum AppCommandRouter {
                 editor.undo()
             } else {
                 model.undoLibraryAction()
+            }
+            return .completed
+        case "edit.delete":
+            if let editor = model.editor {
+                editor.deleteSelected()
+            } else if let editor = model.imageEditor {
+                editor.removeSelectedLayer()
+            } else if let editor = model.pdfEditor {
+                editor.removeSelectedLayer()
             }
             return .completed
         case "edit.redo":

@@ -14,14 +14,40 @@ struct InboxView: View {
                 searchResults
             } else {
                 WorkspaceDropZone(model: model, workspace: .inbox)
-                WatcherStatusStrip(model: model)
-                    .padding(.top, 10)
-                ShortcutRow(model: model)
-                    .padding(.top, 10)
+                captureToolsToggle
+                    .padding(.top, theme.metrics.spacing.md)
+                if model.showsCaptureTools {
+                    WatcherStatusStrip(model: model)
+                        .padding(.top, theme.metrics.spacing.md)
+                    ShortcutRow(model: model)
+                        .padding(.top, theme.metrics.spacing.md)
+                }
                 AssetGrid(model: model, assets: model.visibleAssets)
-                    .padding(.top, 24)
+                    .padding(.top, theme.metrics.spacing.xl)
             }
         }
+    }
+
+    private var captureToolsToggle: some View {
+        Button {
+            model.showsCaptureTools.toggle()
+        } label: {
+            HStack(spacing: theme.metrics.spacing.sm) {
+                Image(systemName: model.showsCaptureTools ? "chevron.down" : "chevron.right")
+                    .font(theme.type.micro.font)
+                Text("Capture tools")
+                    .font(theme.type.caption.font)
+            }
+            .foregroundStyle(theme.palette.textTertiary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ReelPlainButtonStyle())
+        .help(
+            model.showsCaptureTools
+                ? "Hide capture status and screenshot shortcuts"
+                : "Show capture status and screenshot shortcuts"
+        )
+        .accessibilityIdentifier("inbox-capture-tools-toggle")
     }
 
     @ViewBuilder private var searchResults: some View {

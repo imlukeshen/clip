@@ -95,6 +95,11 @@ public enum CommandRegistry {
             kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
+        command(
+            "edit.delete", "Delete Selection", .app, destructive: true,
+            description:
+                "Delete the selected element in the open editor: timeline items, an image layer, or a PDF edit.",
+            kind: .confirm, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
         command(
             "asset.deselectAll", "Deselect All", .asset,

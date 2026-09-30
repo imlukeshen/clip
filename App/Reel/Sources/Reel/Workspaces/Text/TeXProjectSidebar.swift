@@ -29,7 +29,7 @@ struct TeXProjectSidebar: View {
                     Image(systemName: "target")
                         .frame(width: 24, height: 24)
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .menuIndicator(.hidden)
                 .help("Choose the main LaTeX file")
                 .accessibilityLabel("Choose main LaTeX file")

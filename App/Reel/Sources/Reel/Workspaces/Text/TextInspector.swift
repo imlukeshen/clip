@@ -213,7 +213,7 @@ struct TextInspector: View {
             } label: {
                 menuValue(texPackageAccessTitle)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .disabled(editor.isTeXPackageCacheResetting)
             .accessibilityIdentifier("text-inspector-tex-package-access")
@@ -259,7 +259,7 @@ struct TextInspector: View {
                 Button("CRLF") { editor.normalizeLineEndings(to: .crlf) }
                 Button("CR") { editor.normalizeLineEndings(to: .cr) }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
         }
         .padding(.horizontal, theme.metrics.spacing.md)
@@ -342,7 +342,7 @@ struct TextInspector: View {
             } label: {
                 menuValue(editor.language.editorDisplayName)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .accessibilityIdentifier("text-inspector-language-menu")
         }
@@ -373,7 +373,7 @@ struct TextInspector: View {
             } label: {
                 menuValue("\(editor.settings.tabWidth) spaces")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .accessibilityIdentifier("text-inspector-tab-width-menu")
         }

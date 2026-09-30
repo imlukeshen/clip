@@ -27,6 +27,7 @@ struct EditorView: View {
             editorContent(availableSize: proxy.size)
         }
         .background(theme.palette.surfaceBase)
+        .onDeleteCommand { editor.deleteSelected() }
         .sheet(isPresented: $showsExportSheet) {
             ExportDestinationSheet(
                 model: model,
@@ -159,7 +160,7 @@ struct EditorView: View {
                     Label("Add media", systemImage: "plus")
                 }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help("Add video, photos, or audio to the targeted timeline track")
             .accessibilityIdentifier("video-add-media-menu")
@@ -219,7 +220,7 @@ struct EditorView: View {
                     Label(targetedTrackSummary, systemImage: "square.stack.3d.up")
                 }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help(
                 "Target V and A tracks for new media, add tracks, or remove an empty unlocked track"
@@ -1061,6 +1062,7 @@ private struct SavedExportPreference: Codable {
 
 private struct ToolButton: View {
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     let systemName: String
     let title: String
@@ -1118,7 +1120,7 @@ private struct ToolButton: View {
             }
         }
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+            withAnimation(reduceMotion ? nil : ReelMotion.buttonHover) { isHovered = hovering }
         }
         .help("\(title): \(detail)")
         .zIndex(isHovered ? 100 : 0)
