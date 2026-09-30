@@ -271,7 +271,7 @@ public struct GoogleProvider: AIProvider {
     }
 }
 
-private func validateMedia(_ request: ChatRequest, supportsVision: Bool) throws {
+func validateMedia(_ request: ChatRequest, supportsVision: Bool) throws {
     if request.mediaAttached && (!supportsVision || !request.mediaConsent) {
         throw AIKitError.mediaConsentRequired
     }
@@ -309,11 +309,63 @@ private func jsonRequest(url: URL, body: JSONValue) throws -> URLRequest {
     return request
 }
 
+/// Messages in Anthropic's shape.
+///
+/// Anthropic takes image bytes under a `source` object, and a message carrying
+/// any image must send its text as a content block too rather than a bare
+/// string.
 private func messages(_ request: ChatRequest) -> JSONValue {
     .array(
         request.messages.map { message in
-            .object(["role": .string(message.role.rawValue), "content": .string(message.content)])
+            guard !message.images.isEmpty else {
+                return .object([
+                    "role": .string(message.role.rawValue), "content": .string(message.content),
+                ])
+            }
+            var blocks: [JSONValue] = []
+            if !message.content.isEmpty {
+                blocks.append(.object(["type": .string("text"), "text": .string(message.content)]))
+            }
+            for image in message.images {
+                blocks.append(
+                    .object([
+                        "type": .string("image"),
+                        "source": .object([
+                            "type": .string("base64"),
+                            "media_type": .string(image.mediaType),
+                            "data": .string(image.base64),
+                        ]),
+                    ]))
+            }
+            return .object(["role": .string(message.role.rawValue), "content": .array(blocks)])
         })
+}
+
+/// Messages in the OpenAI-compatible shape, which every local server follows.
+///
+/// Images travel as `image_url` parts holding a `data:` URL. A message without
+/// images keeps its plain string content, because some compatible servers
+/// reject the array form when no image is present.
+private func openAIMessages(_ request: ChatRequest) -> [JSONValue] {
+    request.messages.map { message in
+        guard !message.images.isEmpty else {
+            return .object([
+                "role": .string(message.role.rawValue), "content": .string(message.content),
+            ])
+        }
+        var parts: [JSONValue] = []
+        if !message.content.isEmpty {
+            parts.append(.object(["type": .string("text"), "text": .string(message.content)]))
+        }
+        for image in message.images {
+            parts.append(
+                .object([
+                    "type": .string("image_url"),
+                    "image_url": .object(["url": .string(image.dataURL)]),
+                ]))
+        }
+        return .object(["role": .string(message.role.rawValue), "content": .array(parts)])
+    }
 }
 
 private func openAITools(_ tools: [ToolSchema]) -> JSONValue {
@@ -329,11 +381,11 @@ private func openAITools(_ tools: [ToolSchema]) -> JSONValue {
         })
 }
 
-private func openAIRequestBody(_ request: ChatRequest, supportsTools: Bool) -> JSONValue {
+func openAIRequestBody(_ request: ChatRequest, supportsTools: Bool) -> JSONValue {
     var allMessages: [JSONValue] = [
         .object(["role": .string("system"), "content": .string(request.system)])
     ]
-    if case .array(let following) = messages(request) { allMessages.append(contentsOf: following) }
+    allMessages.append(contentsOf: openAIMessages(request))
     var body: [String: JSONValue] = [
         "model": .string(request.model), "stream": .bool(true),
         "messages": .array(allMessages), "max_tokens": .number(Double(request.maxTokens)),
@@ -343,7 +395,7 @@ private func openAIRequestBody(_ request: ChatRequest, supportsTools: Bool) -> J
     return .object(body)
 }
 
-private func anthropicRequestBody(_ request: ChatRequest) -> JSONValue {
+func anthropicRequestBody(_ request: ChatRequest) -> JSONValue {
     .object([
         "model": .string(request.model), "system": .string(request.system),
         "messages": messages(request), "max_tokens": .number(Double(request.maxTokens)),
@@ -358,7 +410,7 @@ private func anthropicRequestBody(_ request: ChatRequest) -> JSONValue {
     ])
 }
 
-private func geminiRequestBody(_ request: ChatRequest) -> JSONValue {
+func geminiRequestBody(_ request: ChatRequest) -> JSONValue {
     let declarations: JSONValue = .array(
         request.tools.map { tool in
             .object([
@@ -371,9 +423,21 @@ private func geminiRequestBody(_ request: ChatRequest) -> JSONValue {
         ),
         "contents": .array(
             request.messages.map { message in
-                .object([
+                // Gemini names the field inline_data and wants the bytes bare,
+                // without the data: prefix the compatible servers expect.
+                var parts: [JSONValue] = [.object(["text": .string(message.content)])]
+                for image in message.images {
+                    parts.append(
+                        .object([
+                            "inline_data": .object([
+                                "mime_type": .string(image.mediaType),
+                                "data": .string(image.base64),
+                            ])
+                        ]))
+                }
+                return .object([
                     "role": .string(message.role == .assistant ? "model" : "user"),
-                    "parts": .array([.object(["text": .string(message.content)])]),
+                    "parts": .array(parts),
                 ])
             }),
         "tools": .array([.object(["functionDeclarations": declarations])]),
