@@ -1375,6 +1375,45 @@ public final class AppModel {
         accept(urls, source: .drop)
     }
 
+    /// Imports dropped files straight into `folder` instead of the inbox.
+    ///
+    /// Ingest has no notion of a destination, so this imports and then files the
+    /// results through the same move the Move To menu uses. Doing it that way
+    /// rather than teaching the pipeline about folders keeps path validation,
+    /// event-track relocation, and the undo entry in one place. It also stays on
+    /// the library workspace: a drop onto a folder is filing, not opening, so
+    /// routing to the video or photo editor the way ``accept(_:source:)`` does
+    /// would throw the person out of what they were organising.
+    public func accept(_ urls: [URL], source: IngestSource, into folder: String) {
+        guard !urls.isEmpty else { return }
+        ingestCount += urls.count
+
+        Task {
+            defer { ingestCount -= urls.count }
+            guard let runtime else {
+                lastMessage = "The library is still opening. Try the drop again in a moment."
+                return
+            }
+            var imported: [AssetID] = []
+            for url in urls {
+                do {
+                    imported.append(try await runtime.ingest(url, source: source).id)
+                } catch {
+                    lastMessage =
+                        "Couldn't read \(url.lastPathComponent). It may still be writing — try again in a moment."
+                }
+            }
+            guard !imported.isEmpty else { return }
+            do {
+                _ = try await runtime.moveAssets(imported, to: folder)
+                selectFolder(folder)
+            } catch {
+                lastMessage = "The files were imported but could not be filed into that folder."
+            }
+            await refreshAssets()
+        }
+    }
+
     public func selectAsset(_ id: AssetID, modifiers: EventModifiers = []) {
         selection.click(id, modifiers: modifiers)
     }

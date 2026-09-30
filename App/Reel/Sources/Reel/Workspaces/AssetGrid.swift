@@ -307,7 +307,7 @@ struct AssetGrid: View {
         let ids =
             model.selection.selected.contains(asset.id)
             ? model.selection.selected : Set([asset.id])
-        return "assets:" + ids.map(\.rawValue).sorted().joined(separator: ",")
+        return LibraryFolderDrop.payload(forAssets: Array(ids))
     }
 
     private var currentModifiers: ReelAppCore.EventModifiers {
@@ -542,7 +542,7 @@ private struct AssetListRow: View {
         let ids =
             model.selection.selected.contains(asset.id)
             ? model.selection.selected : Set([asset.id])
-        return "assets:" + ids.map(\.rawValue).sorted().joined(separator: ",")
+        return LibraryFolderDrop.payload(forAssets: Array(ids))
     }
 
     @ViewBuilder private var contextMenu: some View {

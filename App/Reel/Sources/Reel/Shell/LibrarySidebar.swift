@@ -4,6 +4,7 @@ import DesignSystem
 import LibraryStore
 import ReelAppCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LibrarySidebar: View {
     @Environment(\.theme) private var theme
@@ -334,6 +335,7 @@ private struct FolderTreeRow: View {
     @State private var showsNewFolder = false
     @State private var newFolderValue = ""
     @State private var isHovered = false
+    @State private var isDropTargeted = false
 
     private var isSelected: Bool {
         model.selectedWorkspace == .inbox && model.selectedFolderPath == node.id
@@ -380,10 +382,27 @@ private struct FolderTreeRow: View {
                     .padding(.horizontal, 6)
                     .frame(height: 28)
                     .background(
-                        isSelected
+                        isDropTargeted
                             ? theme.palette.accentDim
-                            : (isHovered ? theme.palette.surfaceRaised : Color.clear)
+                            : (isSelected
+                                ? theme.palette.accentDim
+                                : (isHovered ? theme.palette.surfaceRaised : Color.clear))
                     )
+                    .overlay {
+                        // Without this a drag over the tree gives no sign which
+                        // row would receive it, which reads as the drop being
+                        // refused even when it would have worked.
+                        if isDropTargeted {
+                            RoundedRectangle(
+                                cornerRadius: theme.metrics.radius.control,
+                                style: .continuous
+                            )
+                            .strokeBorder(
+                                theme.palette.accent,
+                                lineWidth: theme.metrics.hairline * 2
+                            )
+                        }
+                    }
                     .clipShape(
                         RoundedRectangle(
                             cornerRadius: theme.metrics.radius.control,
@@ -392,6 +411,7 @@ private struct FolderTreeRow: View {
                     )
                     .animation(.easeOut(duration: 0.18), value: isSelected)
                     .animation(.easeOut(duration: 0.16), value: isHovered)
+                    .animation(.easeOut(duration: 0.12), value: isDropTargeted)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ReelPlainButtonStyle())
@@ -399,21 +419,17 @@ private struct FolderTreeRow: View {
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
             .padding(.leading, CGFloat(depth) * 13)
-            .draggable("folder:\(node.id)")
-            .dropDestination(for: String.self) { values, _ in
-                var accepted = false
-                for value in values {
-                    if value.hasPrefix("assets:") {
-                        let ids = value.dropFirst("assets:".count).split(separator: ",")
-                            .map { AssetID(rawValue: String($0)) }
-                        model.moveAssets(ids, to: node.id)
-                        accepted = true
-                    } else if value.hasPrefix("folder:") {
-                        model.moveFolder(String(value.dropFirst("folder:".count)), to: node.id)
-                        accepted = true
-                    }
-                }
-                return accepted
+            .draggable(LibraryFolderDrop.payload(forFolder: node.id))
+            // `onDrop` rather than `dropDestination` so each item provider can be
+            // inspected directly. A folder takes two unrelated kinds of drag —
+            // library items moving between folders, and files arriving from
+            // Finder — and `Transferable` would coerce between them: "assets:a,b"
+            // parses as a URL, and a dragged file also offers its path as text.
+            .onDrop(
+                of: [.fileURL, .utf8PlainText, .plainText],
+                isTargeted: $isDropTargeted
+            ) { providers in
+                receive(providers)
             }
             .contextMenu {
                 Button("New Folder") {
@@ -449,6 +465,57 @@ private struct FolderTreeRow: View {
                 name: $newFolderValue
             ) {
                 model.createFolder(named: newFolderValue, in: node.id)
+            }
+        }
+    }
+
+    /// Routes each dragged item by the type it actually offers: anything that
+    /// is a file gets imported into this folder, everything else is read as an
+    /// in-app move.
+    private func receive(_ providers: [NSItemProvider]) -> Bool {
+        let isFile = { (provider: NSItemProvider) in
+            provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        let files = providers.filter(isFile)
+        let payloads = providers.filter { !isFile($0) }
+        guard !files.isEmpty || !payloads.isEmpty else { return false }
+
+        if !files.isEmpty {
+            Task { @MainActor in
+                var urls: [URL] = []
+                for provider in files {
+                    if let url = await Self.fileURL(from: provider) { urls.append(url) }
+                }
+                model.accept(urls, source: .drop, into: node.id)
+            }
+        }
+        for provider in payloads {
+            Task { @MainActor in
+                guard let text = await Self.text(from: provider),
+                    let drop = LibraryFolderDrop(payload: text),
+                    drop.canDrop(into: node.id)
+                else { return }
+                switch drop {
+                case .assets(let ids): model.moveAssets(ids, to: node.id)
+                case .folder(let path): model.moveFolder(path, to: node.id)
+                }
+            }
+        }
+        return true
+    }
+
+    private static func fileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                continuation.resume(returning: url?.standardizedFileURL)
+            }
+        }
+    }
+
+    private static func text(from provider: NSItemProvider) async -> String? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: String.self) { value, _ in
+                continuation.resume(returning: value)
             }
         }
     }
