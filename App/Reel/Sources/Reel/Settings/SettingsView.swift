@@ -194,6 +194,18 @@ private struct SettingsContent: View {
                         .foregroundStyle(theme.palette.textSecondary)
                         .textSelection(.enabled)
                 }
+                Toggle(
+                    "Let the assistant see this window", isOn: $settings.sharesWindowWithAssistant)
+                Text(
+                    "Off by default. When on, each request includes a picture of the clipx window "
+                        + "so the assistant can tell what you mean by \"this\". It draws clipx's own "
+                        + "view, never the desktop or another app, and needs no screen recording "
+                        + "permission — but the window's contents do reach the provider you have "
+                        + "configured. The assistant still changes things only through tools."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+
                 Picker("Confirm edits", selection: $settings.confirmationPolicy) {
                     Text("Destructive edits").tag(ConfirmationPolicy.confirmDestructive)
                     Text("Every edit").tag(ConfirmationPolicy.confirmAll)
@@ -265,7 +277,13 @@ private struct SettingsContent: View {
     /// questions and change nothing.
     @ViewBuilder private var localModels: some View {
         if !settings.installedLocalModels.isEmpty {
-            Picker("Installed", selection: $settings.model) {
+            Picker("Editing model", selection: $settings.model) {
+                ForEach(settings.installedLocalModels, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            Picker("Vision model", selection: $settings.visionModel) {
+                Text("None").tag("")
                 ForEach(settings.installedLocalModels, id: \.self) { name in
                     Text(name).tag(name)
                 }
@@ -302,21 +320,46 @@ private struct SettingsContent: View {
                     Button("Dismiss") { settings.dismissLocalModelDownloadFailure() }
                 }
             }
-        } else if !settings.availableLocalModelSuggestions.isEmpty {
-            Menu("Download a model…") {
-                ForEach(settings.availableLocalModelSuggestions) { suggestion in
-                    Button(Self.label(for: suggestion)) {
-                        settings.downloadLocalModel(suggestion.name)
+        } else {
+            if !settings.availableLocalModelPairings.isEmpty {
+                Menu("Install a pair…") {
+                    ForEach(settings.availableLocalModelPairings) { pairing in
+                        Button(Self.label(for: pairing)) { settings.installPairing(pairing) }
                     }
                 }
             }
-            .menuStyle(ReelMenuStyle())
+            if !settings.availableLocalModelSuggestions.isEmpty {
+                Menu("Download one model…") {
+                    ForEach(LocalModelRole.allCases, id: \.self) { role in
+                        let matching = settings.availableLocalModelSuggestions.filter {
+                            $0.role == role
+                        }
+                        if !matching.isEmpty {
+                            Section(role == .editing ? "Editing" : "Vision") {
+                                ForEach(matching) { suggestion in
+                                    Button(Self.label(for: suggestion)) {
+                                        settings.downloadLocalModel(suggestion.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let warning = settings.localModelWarning {
+            Text(warning)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.danger)
+                .textSelection(.enabled)
         }
 
         Text(
-            "Ollama downloads the model; clipx only talks to your machine. Sizes are "
-                + "approximate, and any other Ollama model can be installed by typing its "
-                + "name above. Only models that support tool calling can edit for you."
+            "Locally these are two jobs: the editing model calls tools, the vision model "
+                + "reads the window, and almost no model does both. Install a pair and clipx "
+                + "uses each for what it can do. Ollama does the downloading; clipx only "
+                + "talks to your machine, and sizes are approximate."
         )
         .font(theme.type.caption.font)
         .foregroundStyle(theme.palette.textTertiary)
@@ -325,6 +368,11 @@ private struct SettingsContent: View {
     private static func label(for suggestion: LocalModelSuggestion) -> String {
         let size = String(format: "%.1f", suggestion.approximateGigabytes)
         return "\(suggestion.name) — about \(size) GB · \(suggestion.summary)"
+    }
+
+    private static func label(for pairing: LocalModelPairing) -> String {
+        let size = String(format: "%.1f", pairing.approximateGigabytes)
+        return "\(pairing.title) — \(pairing.editing) + \(pairing.vision), about \(size) GB"
     }
 
     private var captureDestinationBinding: Binding<CaptureDestination> {

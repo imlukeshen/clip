@@ -22,18 +22,39 @@ public final class AISettingsModel {
     public var confirmationPolicy: ConfirmationPolicy {
         didSet { defaults.set(confirmationPolicy.rawValue, forKey: Self.confirmationPreferenceKey) }
     }
+    /// Whether the assistant may be shown a picture of clipx's own window.
+    ///
+    /// Off by default. This renders the app's view hierarchy, so it needs no
+    /// Screen Recording permission and can never include another app, the
+    /// desktop, or anything clipx is not already drawing. It does mean the
+    /// window's contents reach whichever provider is configured, which for a
+    /// remote one is a real disclosure — hence an explicit switch rather than
+    /// something inferred from the model supporting vision.
+    public var sharesWindowWithAssistant: Bool {
+        didSet { defaults.set(sharesWindowWithAssistant, forKey: Self.windowSharingPreferenceKey) }
+    }
+    /// The local model used to read the window when the editing model cannot.
+    ///
+    /// Empty means none. Kept separate from ``model`` because locally the two
+    /// roles need two models: the one that emits tool calls generally cannot see,
+    /// and the one that sees cannot emit tool calls.
+    public var visionModel: String {
+        didSet { defaults.set(visionModel, forKey: Self.visionModelPreferenceKey) }
+    }
     public private(set) var configuredProviders: [ProviderID] = []
     public private(set) var egressEntries: [EgressEntry] = []
     public private(set) var notice: String?
     public private(set) var isCheckingCompatibleProvider = false
     public private(set) var installedLocalModels: [String] = []
     public private(set) var localModelDownload: LocalModelDownloadState?
+    /// What the selected local model reports it can do, for the Settings warning.
+    public private(set) var localModelCapabilities: LocalModelCapabilities = .unreported
 
     public let credentialStore: CredentialStore
     public let ledger: EgressLedger
     private let defaults: UserDefaults
     private let compatiblePreflight: any CompatibleProviderPreflighting
-    private let modelInstaller: any LocalModelInstalling
+    private let modelInstaller: any LocalModelServing
     private var isRestoringProvider = false
     private var downloadTask: Task<Void, Never>?
 
@@ -43,7 +64,7 @@ public final class AISettingsModel {
             defaults: .standard,
             credentialStore: CredentialStore(),
             compatiblePreflight: CompatibleProviderPreflight(),
-            modelInstaller: OllamaModelInstaller()
+            modelInstaller: OllamaModelService()
         )
     }
 
@@ -52,7 +73,7 @@ public final class AISettingsModel {
         defaults: UserDefaults,
         credentialStore: CredentialStore,
         compatiblePreflight: any CompatibleProviderPreflighting,
-        modelInstaller: any LocalModelInstalling = OllamaModelInstaller()
+        modelInstaller: any LocalModelServing = OllamaModelService()
     ) {
         self.defaults = defaults
         self.credentialStore = credentialStore
@@ -74,6 +95,8 @@ public final class AISettingsModel {
             defaults.string(forKey: Self.confirmationPreferenceKey)
             .flatMap(ConfirmationPolicy.init(rawValue:))
             ?? .confirmDestructive
+        self.sharesWindowWithAssistant = defaults.bool(forKey: Self.windowSharingPreferenceKey)
+        self.visionModel = defaults.string(forKey: Self.visionModelPreferenceKey) ?? ""
     }
 
     public func selectProvider(_ provider: ProviderID) {
@@ -148,9 +171,19 @@ public final class AISettingsModel {
                 baseURL: configuration.url,
                 model: configuration.model
             )
+            // Asked fresh rather than cached: the model can be changed from the
+            // picker between turns, and sending tool schemas to a model without
+            // them is a 400 from Ollama, not a degraded answer.
+            let capabilities = await localCapabilities(for: configuration)
             return OpenAICompatibleProvider(
                 baseURL: configuration.url,
                 defaultModel: configuration.model,
+                supportsTools: capabilities.tools,
+                // Both must hold: the person opted in, and the model can read an
+                // image. Claiming vision for a model without it means sending a
+                // picture that is silently dropped, which reads as the assistant
+                // ignoring what is plainly on screen.
+                supportsVision: sharesWindowWithAssistant && capabilities.vision,
                 ledger: ledger
             )
         case .openAI:
@@ -187,6 +220,14 @@ public final class AISettingsModel {
         return OllamaEndpoint.isLocalOllama(configuration.url)
     }
 
+    /// Pairings whose models are not both installed yet.
+    public var availableLocalModelPairings: [LocalModelPairing] {
+        let installed = Set(installedLocalModels.map(Self.withoutLatestTag))
+        return LocalModelPairing.catalog.filter { pairing in
+            !pairing.models.allSatisfy { installed.contains(Self.withoutLatestTag($0)) }
+        }
+    }
+
     /// Suggestions that are not installed yet.
     public var availableLocalModelSuggestions: [LocalModelSuggestion] {
         let installed = Set(installedLocalModels.map(Self.withoutLatestTag))
@@ -195,14 +236,122 @@ public final class AISettingsModel {
         }
     }
 
-    /// Re-reads which models the local server already has.
+    /// Re-reads which models the local server already has, and what the selected
+    /// one can do.
     public func refreshInstalledLocalModels() async {
         guard canInstallLocalModels, let native = nativeBaseURL() else {
             installedLocalModels = []
+            localModelCapabilities = .unreported
             return
         }
         installedLocalModels =
             (try? await modelInstaller.installedModels(nativeBaseURL: native)) ?? []
+        await adoptInstalledModels(nativeBaseURL: native)
+        localModelCapabilities = await modelInstaller.capabilities(
+            of: model.trimmingCharacters(in: .whitespacesAndNewlines),
+            nativeBaseURL: native
+        )
+    }
+
+    /// Points the two roles at models that are actually present.
+    ///
+    /// The shipped default is a model name, not a promise that it exists. Left
+    /// alone, a fresh install or a removed model leaves the assistant configured
+    /// for something the server has never heard of, and every turn fails a
+    /// preflight the person cannot act on. Choices already pointing at an
+    /// installed model are never overridden.
+    private func adoptInstalledModels(nativeBaseURL: URL) async {
+        guard !installedLocalModels.isEmpty else { return }
+        var roles: [String: LocalModelCapabilities] = [:]
+        for name in installedLocalModels {
+            roles[name] = await modelInstaller.capabilities(of: name, nativeBaseURL: nativeBaseURL)
+        }
+
+        if !installedLocalModels.contains(where: { Self.namesMatch($0, model) }) {
+            // Prefer one that can call tools: an editing model that cannot edit
+            // is the failure this whole adoption step exists to avoid.
+            if let replacement = installedLocalModels.first(where: { roles[$0]?.tools == true })
+                ?? installedLocalModels.first
+            {
+                model = replacement
+            }
+        }
+        if visionModel.isEmpty
+            || !installedLocalModels.contains(where: { Self.namesMatch($0, visionModel) })
+        {
+            visionModel = installedLocalModels.first { roles[$0]?.vision == true } ?? ""
+        }
+    }
+
+    /// Ollama reports an untagged install as `name:latest`, so the two spellings
+    /// have to compare equal.
+    private static func namesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        withoutLatestTag(lhs) == withoutLatestTag(rhs.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// Installs both halves of a pairing, then points each role at its model.
+    public func installPairing(_ pairing: LocalModelPairing) {
+        downloadLocalModels(pairing.models) { [weak self] in
+            guard let self else { return }
+            self.model = pairing.editing
+            self.visionModel = pairing.vision
+        }
+    }
+
+    /// A provider bound to the vision model, when one is configured and the
+    /// editing model cannot see for itself.
+    ///
+    /// Returns nil when the editing model already has vision, since describing
+    /// the window in words would then be strictly worse than showing it.
+    public func visionProvider() async -> (any AIProvider)? {
+        guard sharesWindowWithAssistant, selectedProvider == .openAICompatible,
+            let configuration = try? compatibleConfiguration()
+        else { return nil }
+        let name = visionModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !Self.namesMatch(name, configuration.model) else { return nil }
+
+        let editing = await localCapabilities(for: configuration)
+        guard !editing.vision else { return nil }
+        let seeing = await localCapabilities(for: (url: configuration.url, model: name))
+        guard seeing.vision else { return nil }
+
+        return OpenAICompatibleProvider(
+            baseURL: configuration.url,
+            defaultModel: name,
+            // A vision model that cannot call tools is the normal case, and the
+            // describe pass needs none.
+            supportsTools: false,
+            supportsVision: true,
+            ledger: ledger
+        )
+    }
+
+    /// Why the selected local model will not do what the settings ask of it.
+    public var localModelWarning: String? {
+        guard canInstallLocalModels, !installedLocalModels.isEmpty else { return nil }
+        if !localModelCapabilities.tools {
+            return
+                "`\(model)` cannot call tools, so it can answer questions but cannot edit "
+                + "anything. Choose a model that supports tools."
+        }
+        if sharesWindowWithAssistant && !localModelCapabilities.vision
+            && visionModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return
+                "`\(model)` cannot read images, and no vision model is chosen, so the window "
+                + "will not be seen. Pick one below or install a pair."
+        }
+        return nil
+    }
+
+    private func localCapabilities(
+        for configuration: (url: URL, model: String)
+    ) async -> LocalModelCapabilities {
+        guard OllamaEndpoint.isLocalOllama(configuration.url) else { return .unreported }
+        return await modelInstaller.capabilities(
+            of: configuration.model,
+            nativeBaseURL: OllamaEndpoint.nativeBaseURL(forCompatible: configuration.url)
+        )
     }
 
     /// Installs `name` through the local server, reporting progress as it goes.
@@ -211,50 +360,98 @@ public final class AISettingsModel {
     /// model bytes and no request for them leave through clipx, and nothing is
     /// written to the library.
     public func downloadLocalModel(_ name: String) {
-        let requested = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        downloadLocalModels([name]) { [weak self] in self?.model = name }
+    }
+
+    /// Installs each model in turn, stopping at the first failure.
+    ///
+    /// Sequential rather than concurrent: two multi-gigabyte pulls at once are
+    /// slower than one after the other on any connection that is the bottleneck,
+    /// and one progress bar can only honestly describe one transfer.
+    private func downloadLocalModels(
+        _ names: [String],
+        onCompletion: @escaping @MainActor () -> Void
+    ) {
+        let requested =
+            names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         guard !requested.isEmpty, localModelDownload?.isRunning != true,
             let native = nativeBaseURL()
         else { return }
 
         notice = nil
         localModelDownload = .running(
-            model: requested,
+            model: requested[0],
             progress: LocalModelDownloadProgress(status: "starting")
         )
         downloadTask = Task { [modelInstaller] in
-            do {
-                for try await event in modelInstaller.pull(requested, nativeBaseURL: native) {
-                    switch event {
-                    case .progress(let progress):
-                        localModelDownload = .running(model: requested, progress: progress)
-                    case .finished:
-                        localModelDownload = nil
-                        model = requested
-                        await refreshInstalledLocalModels()
-                        notice = "Installed `\(requested)`. It is now the assistant's model."
-                        return
-                    case .failed(let message):
-                        localModelDownload = .failed(model: requested, message: message)
-                        return
-                    }
-                }
-                // The stream ended without a success line, which happens when
-                // the server closes mid-transfer. Treating that as done would
-                // leave a model selected that is not actually installed.
-                if localModelDownload?.isRunning == true {
-                    localModelDownload = .failed(
-                        model: requested,
-                        message: "The download ended before it finished."
-                    )
-                }
-            } catch is CancellationError {
-                localModelDownload = nil
-            } catch {
-                localModelDownload = .failed(
-                    model: requested,
-                    message: "Ollama is not reachable. Start it and try again."
+            for name in requested {
+                localModelDownload = .running(
+                    model: name,
+                    progress: LocalModelDownloadProgress(status: "starting")
                 )
+                do {
+                    guard try await pull(name, from: native, using: modelInstaller) else { return }
+                } catch is CancellationError {
+                    localModelDownload = nil
+                    return
+                } catch {
+                    localModelDownload = .failed(
+                        model: name,
+                        message: "Ollama is not reachable. Start it and try again."
+                    )
+                    return
+                }
             }
+            localModelDownload = nil
+            onCompletion()
+            await refreshInstalledLocalModels()
+            notice =
+                requested.count == 1
+                ? "Installed `\(requested[0])`."
+                : "Installed \(requested.map { "`\($0)`" }.joined(separator: " and "))."
+        }
+    }
+
+    /// Runs one pull to completion. Returns false once a failure has been shown.
+    private func pull(
+        _ name: String,
+        from native: URL,
+        using installer: any LocalModelServing
+    ) async throws -> Bool {
+        for try await event in installer.pull(name, nativeBaseURL: native) {
+            switch event {
+            case .progress(let progress):
+                localModelDownload = .running(model: name, progress: progress)
+            case .finished:
+                return true
+            case .failed(let message):
+                localModelDownload = .failed(model: name, message: message)
+                return false
+            }
+        }
+        // The stream ended without a success line, which happens when the server
+        // closes mid-transfer. Treating that as done would select a model that
+        // is not actually installed.
+        localModelDownload = .failed(
+            model: name,
+            message: "The download ended before it finished."
+        )
+        return false
+    }
+
+    /// Drops both role models from the local server's memory.
+    ///
+    /// Called when clipx quits. Ollama holds a model for five minutes after the
+    /// last request, so without this a server the person thinks they are done
+    /// with keeps several gigabytes resident well after the app is gone.
+    /// Awaited rather than fired and forgotten, because the process is about to
+    /// end and an unawaited task would simply die first.
+    public func releaseLocalModels() async {
+        guard let native = nativeBaseURL() else { return }
+        for name in Set([model, visionModel]) where !name.isEmpty {
+            await modelInstaller.unload(name, nativeBaseURL: native)
         }
     }
 
@@ -345,6 +542,8 @@ public final class AISettingsModel {
     ]
     private static let providerPreferenceKey = "clip.ai.provider"
     private static let compatibleBaseURLPreferenceKey = "clip.ai.compatibleBaseURL"
+    private static let windowSharingPreferenceKey = "clip.ai.sharesWindow"
+    private static let visionModelPreferenceKey = "clip.ai.visionModel"
     private static let confirmationPreferenceKey = "clip.ai.confirmationPolicy"
     private static let defaultCompatibleBaseURL = "http://localhost:11434/v1"
 }

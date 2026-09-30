@@ -106,6 +106,34 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         hotKey.unregister()
     }
 
+    /// Frees the local models before the process goes away.
+    ///
+    /// Ollama keeps a model resident for five minutes after the last request, so
+    /// quitting clipx otherwise leaves several gigabytes held by a server the
+    /// person believes they are finished with. The unload has to happen before
+    /// the process ends, and `applicationWillTerminate` cannot wait for async
+    /// work, so the reply is deferred instead.
+    ///
+    /// Deadlined rather than simply awaited: these are loopback requests that
+    /// normally answer in milliseconds, but nothing about freeing memory is
+    /// worth holding a quit open for if the server is wedged.
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        Task { @MainActor in
+            let release = Task { await model.aiSettings.releaseLocalModels() }
+            let deadline = Task {
+                try? await Task.sleep(for: .milliseconds(1_200))
+                release.cancel()
+            }
+            await release.value
+            deadline.cancel()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// Responds to the global Command-Shift-C.
     ///
     /// A Carbon hotkey takes the key event before the responder chain, so this

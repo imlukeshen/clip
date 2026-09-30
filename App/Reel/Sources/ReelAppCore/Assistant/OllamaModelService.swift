@@ -1,18 +1,47 @@
 import Foundation
 
-/// Lists and installs local models through Ollama's native API.
-protocol LocalModelInstalling: Sendable {
+/// Asks a local Ollama what it has, what those models can do, and installs more.
+protocol LocalModelServing: Sendable {
     func installedModels(nativeBaseURL: URL) async throws -> [String]
+    func capabilities(of model: String, nativeBaseURL: URL) async -> LocalModelCapabilities
+    func unload(_ model: String, nativeBaseURL: URL) async
     func pull(
         _ model: String,
         nativeBaseURL: URL
     ) -> AsyncThrowingStream<LocalModelPullEvent, any Error>
 }
 
-struct OllamaModelInstaller: LocalModelInstalling {
+struct OllamaModelService: LocalModelServing {
     private struct InstalledList: Decodable {
         struct Model: Decodable { var name: String }
         var models: [Model]
+    }
+
+    private struct ShowResponse: Decodable {
+        var capabilities: [String]?
+    }
+
+    /// Reads one model's capabilities, or falls back when the server cannot say.
+    ///
+    /// Never throws. A server that does not answer `/api/show` is not an error
+    /// worth failing an assistant turn over — it just means clipx keeps the
+    /// behaviour it had before it could ask.
+    func capabilities(of model: String, nativeBaseURL: URL) async -> LocalModelCapabilities {
+        var request = URLRequest(url: nativeBaseURL.appendingPathComponent("api/show"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 3
+        guard
+            let body = try? JSONSerialization.data(withJSONObject: ["model": model])
+        else { return .unreported }
+        request.httpBody = body
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+            let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let shown = try? JSONDecoder().decode(ShowResponse.self, from: data),
+            let reported = shown.capabilities
+        else { return .unreported }
+        return LocalModelCapabilities(reported: reported)
     }
 
     func installedModels(nativeBaseURL: URL) async throws -> [String] {
@@ -29,6 +58,30 @@ struct OllamaModelInstaller: LocalModelInstalling {
         return list.models.map(\.name).sorted {
             $0.localizedStandardCompare($1) == .orderedAscending
         }
+    }
+
+    /// Drops a model from memory now instead of after Ollama's idle timeout.
+    ///
+    /// Ollama keeps a model resident for five minutes after the last request,
+    /// which on a 16 GB machine is several gigabytes still held by a server the
+    /// person may think they finished with when they quit clipx. A generate
+    /// request with `keep_alive: 0` unloads it immediately.
+    ///
+    /// Never throws: this runs while the app is going away, and there is nothing
+    /// useful to do about a failure at that point.
+    func unload(_ model: String, nativeBaseURL: URL) async {
+        let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var request = URLRequest(url: nativeBaseURL.appendingPathComponent("api/generate"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 2
+        guard
+            let body = try? JSONSerialization.data(
+                withJSONObject: ["model": name, "keep_alive": 0])
+        else { return }
+        request.httpBody = body
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     func pull(
