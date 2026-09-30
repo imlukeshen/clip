@@ -19,6 +19,8 @@ public enum TextEngineError: Error, Sendable, Equatable {
     case binaryFile(URL)
     /// A persisted scratch-buffer record is incomplete or malformed.
     case invalidScratchBuffer(URL)
+    /// A scratch-buffer file could not be moved to the Trash.
+    case scratchBufferNotTrashed(URL)
     /// No toolchain for the language is installed where clipx looks for one.
     case runToolchainUnavailable(LanguageID)
     /// The interpreter or compiler could not be started.
