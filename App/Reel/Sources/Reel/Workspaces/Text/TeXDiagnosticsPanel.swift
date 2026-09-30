@@ -20,12 +20,10 @@ struct TeXDiagnosticsPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: theme.metrics.spacing.md) {
-                Picker("Build output", selection: $selectedTab) {
-                    ForEach(TeXOutputTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
+                ReelSegmentedControl(
+                    selection: $selectedTab,
+                    options: TeXOutputTab.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
                 .frame(width: 220)
 
                 if selectedTab == .problems {

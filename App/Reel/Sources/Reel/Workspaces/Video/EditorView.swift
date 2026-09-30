@@ -1142,11 +1142,18 @@ struct EditorInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("Panel", selection: $panel) {
-                ForEach(Panel.allCases) { Text($0.rawValue).tag($0) }
+            // Sized to its content and centred in the header, rather than
+            // stretched to fill it: a switch between two panels does not need
+            // the height of a title bar.
+            HStack {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                // Sized to its labels: a two-item switch stretched across the
+                // whole rail reads as a banner rather than a control.
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 12)
             .frame(height: EditorChromeMetrics.headerHeight)
 
@@ -1529,32 +1536,6 @@ private struct EffectInspectorRow: View {
         case .text: "Text"
         case .unknown(let name): name
         }
-    }
-}
-
-private struct PendingActionCard: View {
-    @Environment(\.theme) private var theme
-    @Bindable var model: AppModel
-    let action: PendingAssistantAction
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Review \(action.name)").font(theme.type.label.font)
-            Text(action.result.message)
-                .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.textSecondary)
-            HStack {
-                Button("Apply") { model.approveAssistantAction(action.id) }
-                    .buttonStyle(ReelBorderedButtonStyle())
-                Button("Skip") { model.rejectAssistantAction(action.id) }
-                    .buttonStyle(ReelPlainButtonStyle())
-            }
-        }
-        .padding(9)
-        .background(theme.palette.surfaceRaised)
-        .clipShape(
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-        )
     }
 }
 

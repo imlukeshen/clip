@@ -19,11 +19,15 @@ struct TextInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("Panel", selection: $panel) {
-                ForEach(Panel.allCases) { Text($0.rawValue).tag($0) }
+            HStack {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                // Sized to its labels: a two-item switch stretched across the
+                // whole rail reads as a banner rather than a control.
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 12)
             .frame(height: EditorChromeMetrics.headerHeight)
             Divider().overlay(theme.palette.line)
