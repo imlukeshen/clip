@@ -68,9 +68,48 @@ import Testing
     }
 }
 
+@Test func textAssetsWithEqualBytesCoexist() async throws {
+    let root = try temporaryTextRoot(named: "shared-hash")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    // Two new empty files share a hash; so does a file saved to match another.
+    let first = try textAsset(id: "empty-1", root: root, contents: "", hash: "hash-empty")
+    let second = try textAsset(id: "empty-2", root: root, contents: "", hash: "hash-empty")
+    let third = try textAsset(id: "note-3", root: root, contents: "x\n")
+
+    try await store.insert(first)
+    try await store.insert(second)
+    try await store.insert(third)
+    _ = try await store.saveTextContents(Data(), for: third.id, contentHash: "hash-empty")
+
+    #expect(try await store.assets(kind: .text, limit: 10, offset: 0).count == 3)
+}
+
+@Test func mediaAssetsWithEqualBytesAreStillRefused() async throws {
+    let root = try temporaryTextRoot(named: "media-hash")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    try await store.insert(try mediaAsset(id: "clip-a", root: root, hash: "hash-clip"))
+
+    await #expect(throws: LibraryError.duplicateContentHash("hash-clip")) {
+        try await store.insert(try mediaAsset(id: "clip-b", root: root, hash: "hash-clip"))
+    }
+}
+
 // MARK: - Fixtures
 
-private func textAsset(id rawID: String, root: URL, contents: String) throws -> AssetRecord {
+private func textAsset(
+    id rawID: String,
+    root: URL,
+    contents: String,
+    hash: String? = nil
+) throws -> AssetRecord {
     let id = AssetID(rawValue: rawID)
     let folder = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -87,12 +126,12 @@ private func textAsset(id rawID: String, root: URL, contents: String) throws -> 
         createdAt: createdAt,
         importedAt: createdAt.addingTimeInterval(1),
         byteSize: Int64(Data(contents.utf8).count),
-        contentHash: "hash-\(rawID)",
+        contentHash: hash ?? "hash-\(rawID)",
         ingestState: .ready
     )
 }
 
-private func mediaAsset(id rawID: String, root: URL) throws -> AssetRecord {
+private func mediaAsset(id rawID: String, root: URL, hash: String? = nil) throws -> AssetRecord {
     let id = AssetID(rawValue: rawID)
     let folder = LibraryLayout.inbox(in: root)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -109,7 +148,7 @@ private func mediaAsset(id rawID: String, root: URL) throws -> AssetRecord {
         createdAt: createdAt,
         importedAt: createdAt.addingTimeInterval(1),
         byteSize: 4,
-        contentHash: "hash-\(rawID)",
+        contentHash: hash ?? "hash-\(rawID)",
         duration: RationalTime(seconds: 1),
         nominalFPS: 60,
         hasAudio: false,

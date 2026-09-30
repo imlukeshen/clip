@@ -67,7 +67,9 @@ public actor LibraryStore {
         if try await self.asset(id: asset.id) != nil {
             throw LibraryError.duplicateAsset(asset.id)
         }
-        if try await self.asset(contentHash: asset.contentHash) != nil {
+        // Text is edited in place, so equal bytes do not mean the same file
+        // (ADR-0009). Every other kind is immutable and deduplicated by hash.
+        if asset.kind != .text, try await self.asset(contentHash: asset.contentHash) != nil {
             throw LibraryError.duplicateContentHash(asset.contentHash)
         }
 

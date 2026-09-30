@@ -315,6 +315,18 @@ enum LibrarySchema {
                 table.add(column: "external_bookmark_key", .text)
             }
         }
+        // ADR-0009: text assets are edited in place, so two of them can hold
+        // the same bytes — two new empty files, or a file saved to match
+        // another. Ingest still deduplicates imports by hash; the index only
+        // stops enforcing it.
+        migrator.registerMigration("v10-shared-text-hashes") { db in
+            try db.execute(
+                sql: """
+                    DROP INDEX idx_asset_hash;
+                    CREATE INDEX idx_asset_hash ON asset(content_hash);
+                    """
+            )
+        }
         try migrator.migrate(database)
     }
 }
