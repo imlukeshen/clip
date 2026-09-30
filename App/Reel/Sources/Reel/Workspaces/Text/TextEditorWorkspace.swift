@@ -153,10 +153,10 @@ struct TextEditorWorkspace: View {
     private var texPackageAlertMessage: String {
         if let resource = editor.texPackageRecoveryResource {
             return
-                "\(resource) is not available in Clip's package cache. Allow downloads to fetch it and retry this build, or stay offline without retrying."
+                "\(resource) is not available in clipx's package cache. Allow downloads to fetch it and retry this build, or stay offline without retrying."
         }
         return
-            "Tectonic may need to download LaTeX packages. Clip records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
+            "Tectonic may need to download LaTeX packages. clipx records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
     }
 
     private var editorSurface: some View {
@@ -306,7 +306,7 @@ struct TextEditorWorkspace: View {
                 .menuStyle(ReelMenuStyle())
                 .fixedSize()
                 .disabled(model.textEditorExportTargets.isEmpty)
-                .help("Export through Clip's conversion queue")
+                .help("Export through clipx's conversion queue")
                 .accessibilityIdentifier("markdown-export")
             }
 

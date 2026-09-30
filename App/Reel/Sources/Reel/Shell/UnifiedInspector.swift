@@ -46,7 +46,7 @@ struct AssistantChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
-            TextField("Ask Clip anything…", text: $draft, axis: .vertical)
+            TextField("Ask clipx anything…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(theme.type.body.font)
                 .lineLimit(1...5)
@@ -186,7 +186,7 @@ private struct PDFLayerInspector: View {
                                 Text("\(editor.document.pages.count) pages")
                                     .foregroundStyle(theme.palette.textSecondary)
                                 Text(
-                                    "Ask Clip to redact, highlight, recognise text, "
+                                    "Ask clipx to redact, highlight, recognise text, "
                                         + "or rewrite what is on the page."
                                 )
                                 .foregroundStyle(theme.palette.textTertiary)
@@ -607,7 +607,7 @@ private struct ImageLayerInspector: View {
                                 Text("\(editor.document.layers.count) layers")
                                     .foregroundStyle(theme.palette.textSecondary)
                                 Text(
-                                    "Ask Clip to crop, annotate, redact, add padding, "
+                                    "Ask clipx to crop, annotate, redact, add padding, "
                                         + "number steps, or describe this image."
                                 )
                                 .foregroundStyle(theme.palette.textTertiary)

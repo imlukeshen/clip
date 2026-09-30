@@ -54,20 +54,20 @@ private struct SettingsContent: View {
                 )
                 .accessibilityIdentifier("settings-clipboard-capture")
                 Text(
-                    "Off by default. When enabled, Clip stores eligible copied text, images, "
+                    "Off by default. When enabled, clipx stores eligible copied text, images, "
                         + "and file locations locally for up to seven days. Sensitive, transient, "
                         + "and oversized pasteboard items are ignored. Disable this at any time to stop watching."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
                 Toggle(
-                    "Global Clip Clipboard shortcut (Command-Shift-C)",
+                    "Global clipx Clipboard shortcut (Command-Shift-C)",
                     isOn: clipboardShortcutBinding
                 )
                 .accessibilityIdentifier("settings-global-clipboard-shortcut")
                 Text(
                     "Turn this off if Maccy or another clipboard manager uses Command-Shift-C. "
-                        + "Clip Clipboard remains available from the sidebar and Capture menu."
+                        + "clipx Clipboard remains available from the sidebar and Capture menu."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -80,9 +80,9 @@ private struct SettingsContent: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
                 Text(
-                    "While Clip is open, screenshots enter Clip Clipboard. Recordings can "
+                    "While clipx is open, screenshots enter clipx Clipboard. Recordings can "
                         + "open in the video editor, enter the clipboard, or stay untouched. "
-                        + "Clip stops watching when you quit, and the original macOS file stays put."
+                        + "clipx stops watching when you quit, and the original macOS file stays put."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -139,7 +139,7 @@ private struct SettingsContent: View {
                     }
                 }
                 Text(
-                    "Clip first uses the PDF's embedded or installed font. If new text needs "
+                    "clipx first uses the PDF's embedded or installed font. If new text needs "
                         + "missing glyphs, it can download a pinned, SHA-256 verified open font "
                         + "from the Google Fonts repository. PDF-provided URLs are never opened."
                 )
@@ -228,7 +228,7 @@ private struct SettingsContent: View {
         .background(theme.palette.surfaceBase)
         .task { await settings.refresh() }
         // Re-read on every appearance and whenever the endpoint changes: Ollama
-        // is a separate process, so models can arrive or be removed without Clip
+        // is a separate process, so models can arrive or be removed without clipx
         // hearing about it.
         .task(id: settings.compatibleBaseURL) { await settings.refreshInstalledLocalModels() }
         .task(id: settings.selectedProvider) { await settings.refreshInstalledLocalModels() }
@@ -261,7 +261,7 @@ private struct SettingsContent: View {
     /// Installing and choosing models on a local Ollama.
     ///
     /// Only the models that advertise tool calling are suggested. The assistant
-    /// drives Clip by emitting tool calls, so one without it will answer
+    /// drives clipx by emitting tool calls, so one without it will answer
     /// questions and change nothing.
     @ViewBuilder private var localModels: some View {
         if !settings.installedLocalModels.isEmpty {
@@ -314,7 +314,7 @@ private struct SettingsContent: View {
         }
 
         Text(
-            "Ollama downloads the model; Clip only talks to your machine. Sizes are "
+            "Ollama downloads the model; clipx only talks to your machine. Sizes are "
                 + "approximate, and any other Ollama model can be installed by typing its "
                 + "name above. Only models that support tool calling can edit for you."
         )

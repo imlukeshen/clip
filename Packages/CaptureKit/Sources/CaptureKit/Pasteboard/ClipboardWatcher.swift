@@ -78,7 +78,7 @@ public actor ClipboardWatcher {
     /// change is not reported back as something the user copied.
     ///
     /// Pass the count `CapturePasteboard.write` returned: recording it before the
-    /// next poll closes the window in which Clip's own paste-back would otherwise
+    /// next poll closes the window in which clipx's own paste-back would otherwise
     /// re-enter the history.
     public func markSelfCopy(expected changeCount: Int) {
         selfCopyChangeCount = changeCount

@@ -5,7 +5,7 @@
 
 ## Context
 
-Clip routes document mutations through invertible patches so undo, autosave, and
+clipx routes document mutations through invertible patches so undo, autosave, and
 assistant actions share one path. Character-by-character text edits are a poor
 fit for that model: patches would duplicate `NSTextStorage`, grow rapidly, and
 lose the typing-group behavior people expect from a macOS editor.

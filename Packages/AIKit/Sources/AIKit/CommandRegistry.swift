@@ -70,7 +70,7 @@ public struct CommandDefinition: Command, Sendable, Equatable, Identifiable {
     }
 }
 
-/// The single capability catalog for Clip's user and assistant surfaces.
+/// The single capability catalog for clipx's user and assistant surfaces.
 public enum CommandRegistry {
     public static let all: [CommandDefinition] = [
         command(
@@ -88,10 +88,10 @@ public enum CommandRegistry {
         command(
             "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
         command(
-            "capture.history", "Open Clip Clipboard", .app,
+            "capture.history", "Open clipx Clipboard", .app,
             shortcut: .init("c", modifiers: ["command", "shift"]), kind: .read, exposure: .never),
         command(
-            "capture.clearHistory", "Clear Clip Clipboard", .app, destructive: true,
+            "capture.clearHistory", "Clear clipx Clipboard", .app, destructive: true,
             kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
@@ -172,7 +172,7 @@ public enum CommandRegistry {
         command(
             "convert.run", "Run Conversion", .file,
             description:
-                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise Clip uses the configured export folder.",
+                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise clipx uses the configured export folder.",
             kind: .confirm,
             exposure: .always,
             required: ["assetIDs", "target"],
@@ -215,7 +215,7 @@ public enum CommandRegistry {
         command(
             "tex.compile", "Compile LaTeX", .text,
             description:
-                "Compile the active LaTeX project in Clip's confined TeX workspace and wait for success or diagnostics.",
+                "Compile the active LaTeX project in clipx's confined TeX workspace and wait for success or diagnostics.",
             exposure: .always),
         command(
             "tex.diagnostics", "Read LaTeX Diagnostics", .text,

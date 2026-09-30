@@ -1,4 +1,4 @@
-# Clip — Phase S: Search & Indexing
+# clipx — Phase S: Search & Indexing
 
 > **Delivery status:** S0–S5 are complete and validated. S6 remains the roadmap's
 > explicit evidence-gated experiment and is not required for R5 completion.

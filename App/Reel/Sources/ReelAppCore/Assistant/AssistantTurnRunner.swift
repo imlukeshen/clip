@@ -202,8 +202,8 @@ public struct AssistantTurnRunner: Sendable {
     }
 
     private static let systemPrompt = """
-        You are Clip's editing assistant. Use the supplied tools for timeline edits, library search,
-        and file conversion. Keep each requested operation as a separate tool call. Clip coalesces
+        You are clipx's editing assistant. Use the supplied tools for timeline edits, library search,
+        and file conversion. Keep each requested operation as a separate tool call. clipx coalesces
         completed timeline edits into one undo.
         Never invent audio or click availability; trust hasAudio and alignment in the context.
         For requests that refer to visible or spoken content, decompose the task: search the library,

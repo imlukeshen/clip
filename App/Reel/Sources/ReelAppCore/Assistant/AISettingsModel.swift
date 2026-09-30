@@ -179,7 +179,7 @@ public final class AISettingsModel {
     }
 
     /// Whether the configured compatible server is a local Ollama, which is the
-    /// only one Clip can install models into.
+    /// only one clipx can install models into.
     public var canInstallLocalModels: Bool {
         guard selectedProvider == .openAICompatible,
             let configuration = try? compatibleConfiguration()
@@ -207,8 +207,8 @@ public final class AISettingsModel {
 
     /// Installs `name` through the local server, reporting progress as it goes.
     ///
-    /// Clip only ever talks to loopback here. Ollama does the downloading, so no
-    /// model bytes and no request for them leave through Clip, and nothing is
+    /// clipx only ever talks to loopback here. Ollama does the downloading, so no
+    /// model bytes and no request for them leave through clipx, and nothing is
     /// written to the library.
     public func downloadLocalModel(_ name: String) {
         let requested = name.trimmingCharacters(in: .whitespacesAndNewlines)

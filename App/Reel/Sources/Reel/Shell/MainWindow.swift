@@ -139,7 +139,7 @@ struct MainWindow: View {
     var body: some View {
         content
             .environment(\.theme, theme)
-            // Keeps stock controls (sliders, toggles, pickers) on Clip's neutral
+            // Keeps stock controls (sliders, toggles, pickers) on clipx's neutral
             // accent instead of the system blue.
             .tint(theme.palette.accent)
             .preferredColorScheme(model.appearance.colorScheme)
@@ -259,10 +259,10 @@ private struct MigrationPlanView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Upgrade your Clip library")
+            Text("Upgrade your clipx library")
                 .font(.title2.weight(.semibold))
             Text(
-                "Clip will give \(plan.records.count) assets readable filenames, move them into Media/Inbox, and hide generated previews in .reel. Asset IDs and projects will not change."
+                "clipx will give \(plan.records.count) assets readable filenames, move them into Media/Inbox, and hide generated previews in .reel. Asset IDs and projects will not change."
             )
             List(plan.moves.prefix(40), id: \.sourceRelativePath) { move in
                 VStack(alignment: .leading, spacing: 3) {

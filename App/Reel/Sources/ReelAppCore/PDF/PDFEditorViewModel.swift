@@ -1231,7 +1231,7 @@ public final class PDFEditorViewModel {
                 try applyAuxiliary(.updateLayer(.text(current), on: selectedPageID))
                 notice = resolution.detail
             } catch {
-                notice = "Clip could not verify and cache the replacement font."
+                notice = "clipx could not verify and cache the replacement font."
             }
         }
     }

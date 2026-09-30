@@ -5,11 +5,11 @@
 
 ## Context
 
-Clip normally treats imported media as immutable assets (invariant I5). A text
+clipx normally treats imported media as immutable assets (invariant I5). A text
 editor that can open library files but only save copies would make ordinary
 notes, source files, Markdown, and LaTeX unexpectedly cumbersome.
 
-Text files differ from captured media: their primary purpose in Clip is direct
+Text files differ from captured media: their primary purpose in clipx is direct
 editing, and an in-place save is the expected document behavior.
 
 ## Decision

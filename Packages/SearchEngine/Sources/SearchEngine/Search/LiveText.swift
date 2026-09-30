@@ -35,7 +35,7 @@ public struct LiveTextFrame: Sendable, Equatable {
         return spans[lower...upper].map(\.boundingBox)
     }
 
-    /// Converts Vision's bottom-left normalized coordinates to Clip's top-left canvas space.
+    /// Converts Vision's bottom-left normalized coordinates to clipx's top-left canvas space.
     public static func canvasRect(for visionRect: NormalizedRect) -> NormalizedRect {
         NormalizedRect(
             x: visionRect.x,

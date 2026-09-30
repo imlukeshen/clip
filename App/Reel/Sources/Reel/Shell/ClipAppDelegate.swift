@@ -80,7 +80,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // A SwiftUI `WindowGroup` can restore the valid state "no windows".
-        // That is useful for document apps, but Clip is a library app: launching
+        // That is useful for document apps, but clipx is a library app: launching
         // it should always reveal the library. Wait until SwiftUI has installed
         // its scene commands, then use the scene's own New Window command when
         // restoration did not create a window.
@@ -110,7 +110,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// A Carbon hotkey takes the key event before the responder chain, so this
     /// always uses the process-wide floating panel. That keeps the shortcut
-    /// available over another app and while Clip already has an editor or sheet
+    /// available over another app and while clipx already has an editor or sheet
     /// open. If Carbon registration is unavailable, the menu command remains a
     /// local fallback and opens the same history in-window.
     func handleHotKey() {
@@ -171,7 +171,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
 
         // SwiftUI can restore a scene session with no windows, and its New
         // Window menu action is not available until a scene is already active.
-        // Keep a native host as the reliable launch/reopen path so Clip never
+        // Keep a native host as the reliable launch/reopen path so clipx never
         // becomes an invisible background process.
         let rootView = MainWindow(model: model)
             .frame(minWidth: 1024, minHeight: 680)
@@ -181,7 +181,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Clip"
+        window.title = "clipx"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 1024, height: 680)

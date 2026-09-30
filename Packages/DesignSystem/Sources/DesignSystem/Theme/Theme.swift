@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Clip's complete visual token set.
+/// clipx's complete visual token set.
 public struct Theme: Sendable {
     public struct Palette: Sendable {
         public let surfaceBase: Color
@@ -12,7 +12,7 @@ public struct Theme: Sendable {
         public let textPrimary: Color
         public let textSecondary: Color
         public let textTertiary: Color
-        /// Neutral emphasis colour. Clip keeps its accent monochrome, so
+        /// Neutral emphasis colour. clipx keeps its accent monochrome, so
         /// emphasis reads as contrast rather than hue.
         public let accent: Color
         /// Content drawn on top of an `accent` fill.

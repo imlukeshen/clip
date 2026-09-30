@@ -1,4 +1,4 @@
-# Clip UI — Current Implementation
+# clipx UI — Current Implementation
 
 Audited from the direct Debug build in dark appearance at 1440 × 900 on
 2026-08-03, plus the light and dark theme definitions in
@@ -7,7 +7,7 @@ system are the source of truth; `UI.md` remains historical intent.
 
 ## Visual language
 
-Clip is monochrome and content-first. Dark mode uses near-black nested surfaces;
+clipx is monochrome and content-first. Dark mode uses near-black nested surfaces;
 light mode uses white and cool-neutral grays. Accent emphasis is neutral rather
 than blue. Semantic color is reserved for click tracking, success, and danger.
 Edges are hairlines, and controls use continuous rounded corners.
@@ -81,7 +81,7 @@ persistent browsing inspector.
 - Search is wider, centered, rounded, and dismisses focus on an outside click.
 - The library inspector was replaced by an on-demand Get Info surface.
 - Editors use full-bleed layouts while browsing views retain the centered column.
-- The product name and iconography are Clip rather than the former Reel
+- The product name and iconography are clipx rather than the former Reel
   placeholder.
 
 ## Current hardcoded geometry audit

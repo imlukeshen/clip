@@ -135,9 +135,9 @@ public final class AppModel {
     public private(set) var captureHistory: [CaptureHistoryItem] = []
     public private(set) var isAddingTimelineMedia = false
     public var isCaptureHistoryPresented = false
-    /// Whether Clip owns the system-wide Command-Shift-C shortcut. This stays
+    /// Whether clipx owns the system-wide Command-Shift-C shortcut. This stays
     /// separate from clipboard capture so users can keep Maccy or another
-    /// clipboard manager on that key combination without disabling Clip's
+    /// clipboard manager on that key combination without disabling clipx's
     /// history itself.
     public var isGlobalClipboardShortcutEnabled: Bool {
         didSet {
@@ -148,7 +148,7 @@ public final class AppModel {
             )
         }
     }
-    /// Whether Clip records eligible system clipboard changes into its local history.
+    /// Whether clipx records eligible system clipboard changes into its local history.
     /// This privacy-sensitive feature is independent from the panel shortcut and is
     /// disabled until the user explicitly enables it.
     public var isClipboardCaptureEnabled: Bool {
@@ -167,7 +167,7 @@ public final class AppModel {
             }
         }
     }
-    /// Allows Clip to fetch only pinned, hash-verified open fonts when a PDF's
+    /// Allows clipx to fetch only pinned, hash-verified open fonts when a PDF's
     /// embedded subset cannot represent newly typed characters.
     public var isPDFFontAutoDownloadEnabled: Bool {
         didSet {
@@ -308,15 +308,21 @@ public final class AppModel {
         return preferredAppDirectory(in: support)
     }
 
+    /// Names this app has shipped under, newest first.
+    ///
+    /// A library built under an earlier name keeps working where it is. Pointing
+    /// at a fresh `clipx` folder beside it would look, from the outside, exactly
+    /// like the library having been emptied.
+    static let legacyAppDirectoryNames = ["Clip", "Reel"]
+
     static func preferredAppDirectory(in parent: URL) -> URL {
-        let current = parent.appendingPathComponent("Clip", isDirectory: true)
-        let legacy = parent.appendingPathComponent("Reel", isDirectory: true)
-        if FileManager.default.fileExists(atPath: current.path)
-            || !FileManager.default.fileExists(atPath: legacy.path)
-        {
-            return current
+        let current = parent.appendingPathComponent("clipx", isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: current.path) else { return current }
+        for name in legacyAppDirectoryNames {
+            let legacy = parent.appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
         }
-        return legacy
+        return current
     }
 
     public var visibleAssets: [AssetRecord] {
@@ -558,8 +564,8 @@ public final class AppModel {
                 await refreshCaptureHistory()
                 lastMessage =
                     kind == .video
-                    ? "Recording added to Clip Clipboard."
-                    : "Screenshot added to Clip Clipboard."
+                    ? "Recording added to clipx Clipboard."
+                    : "Screenshot added to clipx Clipboard."
             } catch {
                 // A format the history cannot hold is not worth interrupting for;
                 // the file is still exactly where the system put it.
@@ -1290,7 +1296,7 @@ public final class AppModel {
 
     public func deferMigration() {
         pendingMigrationPlan = nil
-        lastMessage = "The library was left unchanged. Reopen Clip when you're ready to upgrade."
+        lastMessage = "The library was left unchanged. Reopen clipx when you're ready to upgrade."
     }
 
     public func revertLibraryMigration() {
@@ -1304,7 +1310,7 @@ public final class AppModel {
                 canRevertMigration = false
                 assets = []
                 isWatching = false
-                lastMessage = "Migration reverted. Quit Clip before opening this library with v1."
+                lastMessage = "Migration reverted. Quit clipx before opening this library with v1."
             } catch {
                 runtime = activeRuntime
                 lastMessage = "The migration could not be reverted."
@@ -1343,7 +1349,7 @@ public final class AppModel {
                 lastMessage = "Watching \(status.url.lastPathComponent) for new captures."
             } catch {
                 isCaptureDirectoryWatched = false
-                lastMessage = "Clip couldn't access that capture folder."
+                lastMessage = "clipx couldn't access that capture folder."
             }
         }
     }
@@ -1523,7 +1529,7 @@ public final class AppModel {
                     )
                 }
             } catch {
-                lastMessage = "Clip couldn't check whether those files are in a project."
+                lastMessage = "clipx couldn't check whether those files are in a project."
             }
         }
     }
@@ -2657,11 +2663,11 @@ public final class AppModel {
             } catch let error as TextEngineError {
                 switch error {
                 case .binaryFile:
-                    lastMessage = "This looks like a binary file, so Clip did not open it as text."
+                    lastMessage = "This looks like a binary file, so clipx did not open it as text."
                 case .tooLarge:
                     lastMessage = "This file is larger than 20 MB. Open it in an external editor."
                 case .undecodable:
-                    lastMessage = "Clip could not detect a supported text encoding."
+                    lastMessage = "clipx could not detect a supported text encoding."
                 case .unreadable:
                     lastMessage = "The selected text file could not be read."
                 case .unencodable, .invalidScratchBuffer:
@@ -2854,7 +2860,7 @@ public final class AppModel {
             await refreshFolderTree()
         } catch {
             guard generation == assetRefreshGeneration else { return }
-            lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
+            lastMessage = "The library index could not be read. Reopen clipx to rebuild it."
         }
     }
 
@@ -3040,7 +3046,7 @@ public final class AppModel {
             }
             lastMessage = ids.count == 1 ? "Moved to Trash" : "Moved \(ids.count) items to Trash"
         } catch {
-            lastMessage = "Clip couldn't move the selected files to Trash."
+            lastMessage = "clipx couldn't move the selected files to Trash."
         }
     }
 
@@ -3059,7 +3065,7 @@ public final class AppModel {
             }
             lastMessage = ids.count == 1 ? "Restored from Trash" : "Restored \(ids.count) items"
         } catch {
-            lastMessage = "Clip couldn't restore the files. They may have been removed from Trash."
+            lastMessage = "clipx couldn't restore the files. They may have been removed from Trash."
         }
     }
 

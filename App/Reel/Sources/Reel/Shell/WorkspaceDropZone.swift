@@ -47,7 +47,7 @@ struct WorkspaceDropZone: View {
 
     private var detail: String {
         switch workspace {
-        case .inbox: "Video, images, PDFs, text — anything Clip opens"
+        case .inbox: "Video, images, PDFs, text — anything clipx opens"
         case .video: "MOV, MP4, M4V, WebM, MKV"
         case .photo: "PNG, JPEG, HEIC, TIFF, WebP"
         case .pdf: "PDF"

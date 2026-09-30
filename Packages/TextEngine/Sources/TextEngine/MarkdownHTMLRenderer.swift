@@ -3,7 +3,7 @@ import Markdown
 
 /// The destination controls how relative images are represented in rendered HTML.
 public enum MarkdownRenderDestination: Sendable {
-    /// Relative images use Clip's scoped WebKit URL scheme.
+    /// Relative images use clipx's scoped WebKit URL scheme.
     case preview
     /// Relative images are embedded so the exported document remains self-contained.
     case export(baseDirectory: URL?)

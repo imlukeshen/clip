@@ -43,7 +43,7 @@ extension SyncTeXError: LocalizedError {
         switch self {
         case .unreadable: "The SyncTeX map could not be read."
         case .invalidArchive: "The SyncTeX map is not a valid gzip stream."
-        case .expandedDataTooLarge: "The SyncTeX map exceeds Clip's safety limit."
+        case .expandedDataTooLarge: "The SyncTeX map exceeds clipx's safety limit."
         case .malformed: "The SyncTeX map is malformed."
         }
     }

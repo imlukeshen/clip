@@ -392,7 +392,7 @@ struct CodeEditor: NSViewRepresentable {
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
             // Carry the editor's explicit foreground and font into programmatic
             // updates. An unstyled attributed replacement defaults to black,
-            // which is effectively invisible in Clip's dark editor.
+            // which is effectively invisible in clipx's dark editor.
             let replacementAttributes =
                 textView.sourceTypingAttributes.isEmpty
                 ? textView.typingAttributes : textView.sourceTypingAttributes
@@ -961,7 +961,7 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         /// NSTextView may reset typing attributes while SwiftUI reparents the
-        /// split view. Paint inserted characters with Clip's explicit base
+        /// split view. Paint inserted characters with clipx's explicit base
         /// style synchronously; syntax colors can then layer on asynchronously.
         private func applyVisibleBaseStyle(
             in requestedRange: NSRange?,

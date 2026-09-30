@@ -5,7 +5,7 @@
 
 ## Context
 
-The text editor needs responsive, incremental syntax highlighting while Clip is
+The text editor needs responsive, incremental syntax highlighting while clipx is
 offline. Regular expressions alone cannot reliably represent nested syntax, and
 downloading grammars at runtime would make behavior nondeterministic and expose
 document metadata to network infrastructure.
@@ -17,9 +17,9 @@ guarantee.
 
 ## Decision
 
-Clip uses SwiftTreeSitter 0.25.0 and exactly the 19 grammars named by the text
+clipx uses SwiftTreeSitter 0.25.0 and exactly the 19 grammars named by the text
 editor plan. Every repository is pinned to an immutable revision. For Swift,
-SQL, and LaTeX, Clip pins the upstream revisions that contain generated parser
+SQL, and LaTeX, clipx pins the upstream revisions that contain generated parser
 sources; for CSS, JavaScript, Python, and YAML, it pins the last upstream Swift
 manifest that explicitly includes the required external scanner.
 

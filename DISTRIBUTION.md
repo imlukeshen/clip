@@ -1,16 +1,16 @@
 # Distribution
 
-Clip has two generated macOS release channels:
+clipx has two generated macOS release channels:
 
-- `Clip` / `Release` is an arm64 Developer ID build with the hardened runtime
+- `clipx` / `Release` is an arm64 Developer ID build with the hardened runtime
   and no App Sandbox. It is exported into a DMG, submitted with `notarytool`,
   and stapled before publication.
-- `Clip-AppStore` / `AppStoreRelease` is an arm64 Apple Distribution build with
+- `clipx-AppStore` / `AppStoreRelease` is an arm64 Apple Distribution build with
   App Sandbox, user-selected file access, app-scoped bookmarks, and outbound
   network access. Its export destination is App Store Connect upload.
 
 The direct-download build detects an existing LibreOffice installation and can
-write DOCX, XLSX, and PPTX through it. Clip never bundles, downloads, or installs
+write DOCX, XLSX, and PPTX through it. clipx never bundles, downloads, or installs
 LibreOffice. The sandboxed Mac App Store build never exposes those external-tool
 conversion routes, even when LibreOffice is installed on the Mac. App Store
 listing copy must state that Office files can be read, while Office-format output

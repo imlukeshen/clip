@@ -55,7 +55,7 @@ final class ClipboardPanelController {
             ) : NSWorkspace.shared.frontmostApplication
         // A nonactivating panel normally preserves focus, but clicking one of
         // its SwiftUI buttons can still disturb AppKit's current responder.
-        // Remember Clip's editor now so the selected history item returns to
+        // Remember clipx's editor now so the selected history item returns to
         // the exact field the user was editing.
         clipPasteResponder = isClipTarget ? NSApp.keyWindow?.firstResponder : nil
 
@@ -63,7 +63,7 @@ final class ClipboardPanelController {
         self.panel = panel
         panel.contentView = NSHostingView(rootView: content)
         position(panel)
-        // Order front without activating Clip, so the app the user copied from
+        // Order front without activating clipx, so the app the user copied from
         // keeps focus and their paste goes there.
         panel.orderFrontRegardless()
         registerEscapeShortcut()
@@ -134,7 +134,7 @@ final class ClipboardPanelController {
         keyUp.postToPid(target.processIdentifier)
     }
 
-    /// Preserves Clip's paste context: text goes through the active responder,
+    /// Preserves clipx's paste context: text goes through the active responder,
     /// while media goes through the open timeline's normal import path.
     private func performClipPasteCommand(to responder: NSResponder?) {
         if let responder,

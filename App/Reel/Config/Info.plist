@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Clip</string>
+	<string>clipx</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -23,8 +23,8 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>Clip watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.</string>
+	<string>clipx watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clip uses on-device speech recognition to generate captions for your clips.</string>
+	<string>clipx uses on-device speech recognition to generate captions for your clips.</string>
 </dict>
 </plist>

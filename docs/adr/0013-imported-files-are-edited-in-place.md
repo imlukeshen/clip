@@ -6,12 +6,12 @@
 
 ## Context
 
-Clip copied every import into `Media/` and froze it at `chmod 444` (invariant
+clipx copied every import into `Media/` and froze it at `chmod 444` (invariant
 I5). Editing produced overlays that referenced those frozen bytes, and the only
 way to get an edited file was Export, which wrote somewhere new.
 
 That model is safe but does not match what people expect of a document editor.
-A file opened from the Desktop should save back to the Desktop. Instead Clip
+A file opened from the Desktop should save back to the Desktop. Instead clipx
 grew a second copy inside the library, left the original untouched and stale,
 and gave the user two files where they had one. The library folder became a
 place things disappeared into rather than a place they were organized.
@@ -30,7 +30,7 @@ carries `externalBookmarkKey`; when it is set, the asset's location resolves
 through `BookmarkStore` instead of the library root, and library path safety
 does not apply because the file was never meant to live inside the library.
 
-**Owned** covers everything Clip creates: notes, projects and documents made in
+**Owned** covers everything clipx creates: notes, projects and documents made in
 the app, plus anything explicitly imported by copy. These live in the library
 folder as ordinary visible files and folders, so the tree a user builds in the
 app is the tree they see in Finder.

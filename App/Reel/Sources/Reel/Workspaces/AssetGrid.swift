@@ -63,7 +63,7 @@ struct AssetGrid: View {
                 .disabled(renameValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
             _ in
-            Text("If you leave off the extension, Clip keeps the current one.")
+            Text("If you leave off the extension, clipx keeps the current one.")
         }
     }
 

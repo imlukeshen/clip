@@ -1,4 +1,4 @@
-# Clip — Phase T: Text Editor & LaTeX
+# clipx — Phase T: Text Editor & LaTeX
 
 > **Delivery status:** T0–T7 are complete and validated. The editor supports
 > native typing and undo, syntax-aware editing, offline Markdown preview, confined

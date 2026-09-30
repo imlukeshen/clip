@@ -7,7 +7,7 @@ import LibraryStore
 /// Files that appear inside the library — a drag onto the window, a copy into
 /// `Media/Inbox` — are imports, and go through the ingest pipeline. Files the
 /// system writes when you take a screenshot are not: they go to the capture
-/// history, which expires, so using Clip does not mean everything you screenshot
+/// history, which expires, so using clipx does not mean everything you screenshot
 /// becomes a permanent asset.
 public actor IngestCoordinator {
     private let pipeline: IngestPipeline
@@ -53,7 +53,7 @@ public actor IngestCoordinator {
         guard tasks.isEmpty else { return activeInboxes.map(\.directoryURL) }
         guard let primaryInbox = libraryInboxes.first else { return [] }
         // The library's own inbox is the one that has to work; a screenshot
-        // folder Clip cannot reach costs the history, not importing.
+        // folder clipx cannot reach costs the history, not importing.
         try await primaryInbox.start()
         var started = [primaryInbox]
         beginImporting(primaryInbox)

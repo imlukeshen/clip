@@ -2,7 +2,7 @@ import AppKit
 import DesignSystem
 import SwiftUI
 
-/// Gives Clip's custom title bar the double-click behaviour the system one has.
+/// Gives clipx's custom title bar the double-click behaviour the system one has.
 ///
 /// The window is `.hiddenTitleBar`, so this strip is ordinary content and the
 /// gesture never reaches AppKit on its own. Controls inside the bar keep their

@@ -2,7 +2,7 @@ import CoreModel
 import Foundation
 import GRDB
 
-/// Owns Clip's durable file library and its disposable SQLite index.
+/// Owns clipx's durable file library and its disposable SQLite index.
 public actor LibraryStore {
     private let root: URL
     let database: DatabaseQueue
@@ -202,7 +202,7 @@ public actor LibraryStore {
         }
     }
 
-    /// Atomically updates indexed paths after a Clip-owned filesystem move.
+    /// Atomically updates indexed paths after a clipx-owned filesystem move.
     public func updateLocations(_ records: [AssetRecord]) async throws {
         guard !records.isEmpty else { return }
         var originals: [AssetRecord] = []

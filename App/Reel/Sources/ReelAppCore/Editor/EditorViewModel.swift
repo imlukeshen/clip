@@ -1432,7 +1432,7 @@ public final class EditorViewModel {
     }
 
     /// Hands one or more OCR regions to the existing destructive video effect path.
-    /// Regions use Clip's top-left normalized canvas coordinates.
+    /// Regions use clipx's top-left normalized canvas coordinates.
     public func redactCurrentRegions(_ regions: [NormalizedRect]) {
         guard let item = document.item(at: playhead)?.item else {
             notice = "Move the playhead over a clip before adding a redaction."

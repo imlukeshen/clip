@@ -77,7 +77,7 @@ struct TextInspector: View {
                                 Text("Text context")
                                     .font(theme.type.label.font)
                                 Text(
-                                    "Ask Clip to inspect LaTeX errors, format source, search the library, or prepare an export."
+                                    "Ask clipx to inspect LaTeX errors, format source, search the library, or prepare an export."
                                 )
                                 .font(theme.type.caption.font)
                                 .foregroundStyle(theme.palette.textTertiary)

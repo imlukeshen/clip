@@ -15,7 +15,7 @@ public struct MarkdownBlockID: RawRepresentable, Sendable, Hashable, Codable {
     }
 }
 
-/// Semantic block types understood by Clip's Markdown document engine.
+/// Semantic block types understood by clipx's Markdown document engine.
 public enum MarkdownBlockKind: Sendable, Hashable {
     case paragraph
     case heading(level: Int)
@@ -234,7 +234,7 @@ extension MarkdownDocumentError: LocalizedError {
 
 /// Lossless block parsing, stable-ID reconciliation, and atomic transactions.
 ///
-/// This is original Clip code based on public block-editor semantics. It keeps
+/// This is original clipx code based on public block-editor semantics. It keeps
 /// exact source in every block so unsupported Markdown is never discarded.
 public enum MarkdownBlockDocumentEngine {
     private struct SourceReplacement {
@@ -901,7 +901,7 @@ public enum MarkdownBlockDocumentEngine {
         collector.visit(Document(parsing: source))
         var spans = collector.spans
 
-        // Math is a Clip extension rather than CommonMark. Keep it out of code
+        // Math is a clipx extension rather than CommonMark. Keep it out of code
         // and links, where dollar signs are literal content or destinations.
         let protectedRanges = spans.compactMap { span -> [NSRange]? in
             switch span.kind {

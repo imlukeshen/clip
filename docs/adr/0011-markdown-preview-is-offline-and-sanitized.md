@@ -16,7 +16,7 @@ output do not drift.
 
 `TextEngine` owns one safe Markdown-to-HTML renderer based on Swift Markdown.
 It never emits document-authored HTML or script. The generated page uses a
-deny-by-default content security policy and only runs Clip's bundled KaTeX and
+deny-by-default content security policy and only runs clipx's bundled KaTeX and
 scroll-synchronization code.
 
 The preview uses a non-persistent `WKWebView`. A content rule list and navigation
@@ -36,5 +36,5 @@ and use the same HTML renderer through ConvertKit.
 
 ## Revisit when
 
-Revisit if Clip adopts a separately audited HTML sanitizer, needs a user-approved
+Revisit if clipx adopts a separately audited HTML sanitizer, needs a user-approved
 remote-resource mode, or can safely isolate SVG rendering into decoded pixels.

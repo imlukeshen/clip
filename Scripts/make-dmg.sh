@@ -26,18 +26,18 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-readonly DMG_NAME="Clip-$VERSION.dmg"
+readonly DMG_NAME="clipx-$VERSION.dmg"
 readonly DMG="$BUILD_DIR/$DMG_NAME"
 
 echo "==> Generating the Xcode project"
 make generate
 
-echo "==> Building Clip $VERSION (Release)"
+echo "==> Building clipx $VERSION (Release)"
 rm -rf "$STAGE_DIR" "$DMG"
 mkdir -p "$STAGE_DIR"
 xcodebuild build \
-    -project Clip.xcodeproj \
-    -scheme Clip \
+    -project clipx.xcodeproj \
+    -scheme clipx \
     -configuration Release \
     -destination 'generic/platform=macOS' \
     -derivedDataPath "$DERIVED_DIR" \
@@ -46,7 +46,7 @@ xcodebuild build \
     MARKETING_VERSION="$VERSION" \
     -quiet
 
-readonly APP="$DERIVED_DIR/Build/Products/Release/Clip.app"
+readonly APP="$DERIVED_DIR/Build/Products/Release/clipx.app"
 if [[ ! -d "$APP" ]]; then
     echo "Build did not produce $APP" >&2
     exit 1
@@ -58,12 +58,12 @@ codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
 echo "==> Staging the installer"
-cp -R "$APP" "$STAGE_DIR/Clip.app"
+cp -R "$APP" "$STAGE_DIR/clipx.app"
 ln -s /Applications "$STAGE_DIR/Applications"
 
 echo "==> Creating $DMG_NAME"
 hdiutil create \
-    -volname "Clip $VERSION" \
+    -volname "clipx $VERSION" \
     -srcfolder "$STAGE_DIR" \
     -ov \
     -format UDZO \
@@ -76,6 +76,6 @@ echo "Built $DMG"
 echo "       $(cd "$BUILD_DIR" && cat "$DMG_NAME.sha256")"
 echo
 echo "This DMG is ad-hoc signed, not notarized. On another Mac, Gatekeeper"
-echo "blocks the first launch: open Clip from the Finder context menu and"
-echo "choose Open, or run 'xattr -dr com.apple.quarantine /Applications/Clip.app'."
+echo "blocks the first launch: open clipx from the Finder context menu and"
+echo "choose Open, or run 'xattr -dr com.apple.quarantine /Applications/clipx.app'."
 echo "Use 'make release' with Developer ID credentials for a notarized build."

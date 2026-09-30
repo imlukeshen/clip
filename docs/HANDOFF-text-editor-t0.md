@@ -25,7 +25,7 @@ Plan of record: `/Users/luke.shen/.claude/plans/virtual-leaping-tiger.md` (miles
 ## First thing to do on the Xcode machine
 
 ```bash
-make generate          # regenerate Clip.xcodeproj (gitignored)
+make generate          # regenerate clipx.xcodeproj (gitignored)
 make run               # xcodebuild + launch — WILL FAIL until the views below exist
 ```
 

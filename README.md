@@ -1,14 +1,14 @@
-# Clip
+# clipx
 
 A local-first screen demo editor for macOS.
 
-Clip takes the recordings and screenshots the system already makes, stitches
+clipx takes the recordings and screenshots the system already makes, stitches
 them on a timeline, edits them non-destructively, converts them between
 formats, and lets an AI assistant drive the same editor you do. Everything runs
 on your machine: your library is a folder you choose, nothing is uploaded, and
 the only network traffic is what you explicitly allow.
 
-There is no recorder inside Clip. It ingests what `screencapture` and the system
+There is no recorder inside clipx. It ingests what `screencapture` and the system
 screenshot tools produce, which is why it works on a full macOS version more
 than a bundled recorder would reach.
 
@@ -35,19 +35,19 @@ than a bundled recorder would reach.
 
 ## Install
 
-Download the latest `Clip-<version>.dmg` from
-[Releases](https://github.com/imlukeshen/clip/releases), open it, and drag Clip
+Download the latest `clipx-<version>.dmg` from
+[Releases](https://github.com/imlukeshen/clip/releases), open it, and drag clipx
 to Applications.
 
-Clip needs macOS 14 or later on Apple silicon. The bundled FFmpeg framework is
+clipx needs macOS 14 or later on Apple silicon. The bundled FFmpeg framework is
 arm64-only, so there is no Intel build.
 
 **On first launch:** if the download is an unsigned build, macOS refuses to open
-it and offers only Move to Trash. Right-click Clip in Applications and choose
+it and offers only Move to Trash. Right-click clipx in Applications and choose
 **Open**, then confirm. You only need to do this once. Releases built with
 Developer ID credentials are notarized and open normally.
 
-Clip asks for a library folder on first launch. Pick somewhere writable; it
+clipx asks for a library folder on first launch. Pick somewhere writable; it
 creates `Media`, `Projects`, `Exports`, and a hidden `.reel` cache inside.
 
 ## Build from source
@@ -64,8 +64,8 @@ make xcode
 ```
 
 Re-run `make xcode` after pulling changes that add, remove, or rename Swift
-files — `Clip.xcodeproj` is generated and deliberately not committed, so an
-open project will not discover them. Keep only `Clip.xcodeproj` open: the
+files — `clipx.xcodeproj` is generated and deliberately not committed, so an
+open project will not discover them. Keep only `clipx.xcodeproj` open: the
 pre-rename `Reel.xcodeproj` and the individual package workspaces claim the same
 local packages, and Xcode rejects the duplicate ownership.
 
@@ -75,7 +75,7 @@ To build an installer locally:
 make dmg
 ```
 
-That produces an ad-hoc signed `ReleaseBuild/unsigned/Clip-<version>.dmg` with
+That produces an ad-hoc signed `ReleaseBuild/unsigned/clipx-<version>.dmg` with
 no Apple Developer account required. `make release` produces the signed and
 notarized channel and needs Developer ID and App Store Connect credentials; see
 [`DISTRIBUTION.md`](DISTRIBUTION.md).
@@ -101,7 +101,7 @@ Start with [`CLAUDE.md`](CLAUDE.md) for the invariants that matter, then
 
 ## Project status
 
-Clip is built milestone-by-milestone against the design in `docs/`. M0–M9 are
+clipx is built milestone-by-milestone against the design in `docs/`. M0–M9 are
 complete: the model foundation and patch/undo engine, library and index, ingest,
 shell and workspaces, conversion, composition and playback, effects and export,
 the event track, the AI layer, and both distribution channels.

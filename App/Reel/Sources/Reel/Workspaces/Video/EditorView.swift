@@ -1267,7 +1267,7 @@ struct EditorInspector: View {
             SectionLabel("Project context")
             Text("\(editor.timelineMediaCount) items · \(durationText)")
                 .foregroundStyle(theme.palette.textSecondary)
-            Text("Ask Clip to trim, split, zoom, restyle, or caption this edit.")
+            Text("Ask clipx to trim, split, zoom, restyle, or caption this edit.")
                 .foregroundStyle(theme.palette.textTertiary)
         }
         .font(theme.type.caption.font)

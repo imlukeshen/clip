@@ -25,7 +25,7 @@ final class WorkspaceTabTests: XCTestCase {
         ]
         XCTAssertTrue(
             app.buttons["sidebar-route-all-media"].waitForExistence(timeout: 10),
-            "Clip did not expose its sidebar navigation"
+            "clipx did not expose its sidebar navigation"
         )
 
         for iteration in 0..<50 {

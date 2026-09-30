@@ -150,7 +150,7 @@ extension TeXEngineError: LocalizedError {
         case .invalidMainFile:
             "The LaTeX main file is outside its project folder or is unavailable."
         case .bibliographyToolUnavailable(let tool):
-            "\(tool) is not available in this build. Install MacTeX and use Clip's direct build."
+            "\(tool) is not available in this build. Install MacTeX and use clipx's direct build."
         case .unsafeProjectEntry(let path):
             "The project entry is unsafe and was not compiled: \(path)"
         case .unsafeSource(let reason):
@@ -168,9 +168,9 @@ extension TeXEngineError: LocalizedError {
         case .missingOutput:
             "The TeX engine finished without producing a PDF."
         case .outputTooLarge(let limit):
-            "The compiled PDF exceeds Clip's \(limit / 1_024 / 1_024) MB safety limit."
+            "The compiled PDF exceeds clipx's \(limit / 1_024 / 1_024) MB safety limit."
         case .logTooLarge(let limit):
-            "The LaTeX build log exceeds Clip's \(limit / 1_024) KB safety limit."
+            "The LaTeX build log exceeds clipx's \(limit / 1_024) KB safety limit."
         }
     }
 }

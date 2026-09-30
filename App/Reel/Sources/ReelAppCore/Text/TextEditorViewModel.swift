@@ -869,7 +869,7 @@ public final class TextEditorViewModel {
 
     /// Reports that a paste exceeded the hard in-app size limit.
     public func reportPasteRefused() {
-        notice = "Pastes over 20 MB cannot be opened in Clip."
+        notice = "Pastes over 20 MB cannot be opened in clipx."
     }
 
     /// Detects a high-confidence language when content is pasted into an empty buffer.
@@ -972,7 +972,7 @@ public final class TextEditorViewModel {
                 cancelTeXCompilation(resetState: true)
             }
         } catch {
-            notice = "Clip could not update the detected language."
+            notice = "clipx could not update the detected language."
         }
     }
 
@@ -1164,7 +1164,7 @@ public final class TextEditorViewModel {
                 sourceSnapshot: sourceSnapshot
             )
         } catch {
-            texCompilationState = .failed("Clip could not prepare the LaTeX source workspace.")
+            texCompilationState = .failed("clipx could not prepare the LaTeX source workspace.")
             return
         }
         let overrides: [String: Data] = Dictionary(

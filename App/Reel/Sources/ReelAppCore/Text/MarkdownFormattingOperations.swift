@@ -2,7 +2,7 @@ import CoreModel
 import Foundation
 import TextEngine
 
-/// Selection-aware Markdown commands used by Clip's inline writing canvas.
+/// Selection-aware Markdown commands used by clipx's inline writing canvas.
 public enum MarkdownFormattingAction: Sendable, Equatable, Hashable {
     case body
     case heading1

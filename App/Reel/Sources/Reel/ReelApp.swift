@@ -43,7 +43,7 @@ struct ClipApp: App {
     }
 
     var body: some Scene {
-        Window("Clip", id: "main") {
+        Window("clipx", id: "main") {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
                 .onAppear { appDelegate.install(model: model) }

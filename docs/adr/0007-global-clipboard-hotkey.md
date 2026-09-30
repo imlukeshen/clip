@@ -4,16 +4,16 @@ Status: Accepted · Date: 2026-08-03
 
 ## Context
 
-Clip stages every screenshot and recording into a capture history and, as of the
+clipx stages every screenshot and recording into a capture history and, as of the
 clipboard-manager work, records everything the user copies system-wide (text,
 images, file lists). To be a real clipboard manager — the Maccy comparison the
 product is measured against — the history has to be reachable from anywhere, not
-only when Clip is the frontmost app.
+only when clipx is the frontmost app.
 
 Two things stood in the way:
 
 1. The existing Capture-menu shortcut is a SwiftUI `Commands` key equivalent. It
-   only fires when Clip is frontmost, and only opens an in-window sheet.
+   only fires when clipx is frontmost, and only opens an in-window sheet.
 2. `docs/adr/0006` forbids hardcoded keyboard shortcuts in the UI — shortcuts are
    read from `com.apple.symbolichotkeys` or not shown — and CI greps for literal
    modifier glyphs (`⌘⇧⌃⌥`) outside `DesignSystem`. A global clipboard shortcut
@@ -44,8 +44,8 @@ their next paste targets the app they were already in.
 
 **The Carbon hotkey is the single owner of the shortcut.** Because a Carbon
 hotkey intercepts the key event ahead of the responder chain, it shadows the
-identical menu key-equivalent when Clip is frontmost rather than racing it. The
-delegate routes by focus: in-window sheet when Clip is active, floating panel
+identical menu key-equivalent when clipx is frontmost rather than racing it. The
+delegate routes by focus: in-window sheet when clipx is active, floating panel
 when it is not. The menu item keeps the shortcut as a visible hint and as the
 fallback path if registration ever fails.
 
@@ -62,7 +62,7 @@ avoids — so auto-paste is out of scope.
   ADR-0006 system-settings model; making it remappable later is a known follow-up.
 - If another app already holds Command-Shift-C system-wide, registration fails and
   `GlobalHotKey.register` throws `CaptureError.hotKeyUnavailable`; the delegate
-  logs it and the in-window menu shortcut still works when Clip is frontmost.
+  logs it and the in-window menu shortcut still works when clipx is frontmost.
 - Ownership of the hotkey and panel lives on an `NSApplicationDelegate`
   (`ClipAppDelegate`) wired through `@NSApplicationDelegateAdaptor`, since neither
   a process-lifetime hotkey nor an over-other-apps panel fits the SwiftUI `Scene`

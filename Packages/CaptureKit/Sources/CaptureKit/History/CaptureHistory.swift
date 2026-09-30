@@ -3,7 +3,7 @@ import Foundation
 
 /// The capped, on-disk staging area for system captures.
 ///
-/// Clip copies captures here instead of importing them into the library, so a
+/// clipx copies captures here instead of importing them into the library, so a
 /// screenshot taken while the app happens to be open does not silently become a
 /// permanent asset. Two rules make that safe to rely on: nothing outside
 /// `directory` is ever deleted, so the file the system wrote stays exactly where
@@ -77,7 +77,7 @@ public actor CaptureHistory {
     ///
     /// The source is read, never moved: the system already wrote it wherever the
     /// user's screenshot preference points, and taking it from there would be a
-    /// surprise that Clip could not undo.
+    /// surprise that clipx could not undo.
     @discardableResult
     public func adopt(_ source: URL, capturedAt: Date = Date()) throws -> CaptureHistoryItem {
         let standardized = source.standardizedFileURL
@@ -168,7 +168,7 @@ public actor CaptureHistory {
 
     /// Records a set of copied file locations.
     ///
-    /// Only the paths are stored — Clip does not copy the files themselves — so
+    /// Only the paths are stored — clipx does not copy the files themselves — so
     /// the entry stays small and reading the originals stays the user's choice.
     @discardableResult
     public func record(fileURLs: [URL], capturedAt: Date = Date()) throws -> CaptureHistoryItem {

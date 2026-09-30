@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 
-// Draws Clip's app icon at every size the asset catalogue asks for.
+// Draws clipx's app icon at every size the asset catalogue asks for.
 //
 // The icon is generated rather than hand-drawn so it has a reviewable source:
 // the shape, the palette, and the optical adjustments below are the design, and

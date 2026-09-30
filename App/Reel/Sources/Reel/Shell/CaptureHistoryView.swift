@@ -34,7 +34,7 @@ struct CaptureHistoryView: View {
             header
             Divider().overlay(theme.palette.line)
             if model.captureHistory.isEmpty {
-                EmptyState(headline: "Nothing copied while Clip is open")
+                EmptyState(headline: "Nothing copied while clipx is open")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
@@ -55,7 +55,7 @@ struct CaptureHistoryView: View {
     private var header: some View {
         HStack(spacing: theme.metrics.spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Clip Clipboard")
+                Text("clipx Clipboard")
                     .font(theme.type.title.font)
                 Text(onPaste == nil ? "Choose an item to copy" : "Choose an item to paste")
                     .font(theme.type.micro.font)

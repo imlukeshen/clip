@@ -298,7 +298,7 @@ public enum RasterBlendMode: String, Codable, Sendable, Equatable, CaseIterable 
 
 /// A non-destructive bitmap placed above the source image.
 ///
-/// `frame` uses Clip's top-left normalized canvas coordinate system. The URL points at a
+/// `frame` uses clipx's top-left normalized canvas coordinate system. The URL points at a
 /// durable editor-owned copy rather than the transient file selected or pasted by the user.
 /// Keeping that source reference in the document makes the same ordered layer stack drive
 /// previews, reopening, undo/redo, and flattened exports.

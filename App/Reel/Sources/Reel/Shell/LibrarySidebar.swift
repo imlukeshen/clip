@@ -234,7 +234,7 @@ struct LibrarySidebar: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.palette.textTertiary)
                     .frame(width: 16)
-                Text("Clip")
+                Text("clipx")
                     .font(theme.type.label.font)
                     .foregroundStyle(theme.palette.textTertiary)
                     .lineLimit(1)
@@ -246,7 +246,7 @@ struct LibrarySidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(ReelPlainButtonStyle())
-        .help("Reveal Clip library in Finder")
+        .help("Reveal clipx library in Finder")
         .accessibilityIdentifier("sidebar-library-root")
     }
 

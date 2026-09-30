@@ -191,7 +191,7 @@ public final class ImageEditorViewModel {
     public func redo() { undoManager.redo() }
 
     /// Adds OCR-derived regions through the same undoable layer path as a manual redaction.
-    /// Regions use Clip's top-left normalized canvas coordinates.
+    /// Regions use clipx's top-left normalized canvas coordinates.
     public func addRedaction(regions: [NormalizedRect]) {
         let rects = regions.compactMap { region -> CGRect? in
             let rect = CGRect(
@@ -1250,9 +1250,12 @@ public final class ImageEditorViewModel {
         let root =
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
+        // Through the shared branded-folder lookup, not a literal name: this
+        // directory holds layer bitmaps that existing documents still point at,
+        // so a rename that ignored the earlier names would silently empty every
+        // photo edit made before it.
         return
-            root
-            .appendingPathComponent("Clip", isDirectory: true)
+            AppModel.preferredAppDirectory(in: root)
             .appendingPathComponent("Image Layers", isDirectory: true)
             .appendingPathComponent(documentID.rawValue, isDirectory: true)
     }

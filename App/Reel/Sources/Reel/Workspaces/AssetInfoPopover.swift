@@ -44,7 +44,7 @@ struct AssetInfoPopover: View {
 
     private func heading(title: String, subtitle: String) -> some View {
         VStack(spacing: 2) {
-            // One line, truncated in the middle: Clip's generated names are long
+            // One line, truncated in the middle: clipx's generated names are long
             // enough that wrapping them leaves a ragged orphan, and the full name
             // is spelled out in the Where field below.
             Text(title)

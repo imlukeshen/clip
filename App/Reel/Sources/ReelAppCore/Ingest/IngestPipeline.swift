@@ -45,7 +45,7 @@ public actor IngestPipeline {
 
     /// Imports a candidate while retaining whether this call inserted it.
     ///
-    /// The library inbox watcher needs this distinction because Clip-owned
+    /// The library inbox watcher needs this distinction because clipx-owned
     /// moves (such as a rename) appear as new filesystem URLs. Republishing a
     /// duplicate as a fresh capture would unexpectedly navigate back into an
     /// editor even though no new media arrived.
