@@ -27,6 +27,7 @@ struct TextEditorWorkspace: View {
     @State private var texForwardSearch: TeXForwardSearchRequest?
     @State private var showsTeXOutput = false
     @State private var texOutputTab: TeXOutputTab = .problems
+    @State private var texOutputHeight = TeXOutputLayout.restoredHeight()
     @State private var selectedRange = NSRange(location: 0, length: 0)
     @State private var markdownDocument: MarkdownDocumentSnapshot?
     @State private var markdownDocumentIdentity: CodeEditorDocumentIdentity?
@@ -52,11 +53,15 @@ struct TextEditorWorkspace: View {
                 }
                 editorSurface
                 if editor.language == .latex, showsTeXOutput {
-                    Divider().overlay(theme.palette.line)
+                    TeXOutputResizeDivider(
+                        height: $texOutputHeight,
+                        displayedHeight: texOutputHeight
+                    )
                     TeXDiagnosticsPanel(
                         diagnostics: editor.texDiagnostics,
                         log: editor.texLog,
                         selectedTab: $texOutputTab,
+                        height: texOutputHeight,
                         onSelectDiagnostic: navigateToDiagnostic,
                         onClose: { showsTeXOutput = false }
                     )
@@ -78,19 +83,23 @@ struct TextEditorWorkspace: View {
             }
         }
         .background(theme.palette.surfaceBase)
+        .background {
+            // Zero opacity rather than hidden: a removed view registers no key
+            // equivalent, and these must work while the inspector is collapsed.
+            ZStack {
+                Button("Increase editor text") { editor.adjustFontSize(by: 1) }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Increase editor text") { editor.adjustFontSize(by: 1) }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("Decrease editor text") { editor.adjustFontSize(by: -1) }
+                    .keyboardShortcut("-", modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
         .onChange(of: editor.hasExternalConflict, initial: true) { _, hasConflict in
             if hasConflict { showsExternalConflictAlert = true }
-        }
-        .onChange(of: editor.texDiagnostics) { _, diagnostics in
-            guard !diagnostics.isEmpty else { return }
-            texOutputTab = .problems
-            showsTeXOutput = true
-        }
-        .onChange(of: editor.texCompilationState) { _, state in
-            if case .failed = state, editor.texDiagnostics.isEmpty, !editor.texLog.isEmpty {
-                texOutputTab = .log
-                showsTeXOutput = true
-            }
         }
         .alert("File Changed on Disk", isPresented: $showsExternalConflictAlert) {
             Button("Keep Mine", action: editor.keepCurrentVersion)
@@ -186,7 +195,7 @@ struct TextEditorWorkspace: View {
                 forwardSearch: texForwardSearch,
                 onInverseSearch: runInverseSearch
             )
-            .frame(minWidth: latexPaneMinimumWidth)
+            .frame(minWidth: latexPaneMinimumWidth, idealWidth: latexPreviewIdealWidth)
         }
     }
 
@@ -196,6 +205,15 @@ struct TextEditorWorkspace: View {
     private var latexPaneMinimumWidth: CGFloat {
         guard editor.language == .latex else { return 0 }
         return editor.document.files.count > 1 ? 300 : 340
+    }
+
+    /// Width the preview opens at.
+    ///
+    /// The source pane is flexible and absorbs any slack, so without an ideal
+    /// the preview sat at its minimum and a rendered page arrived too small to
+    /// read before being dragged wider by hand.
+    private var latexPreviewIdealWidth: CGFloat {
+        editor.document.files.count > 1 ? 520 : 620
     }
 
     private var editorSurfaceAccessibilityIdentifier: String {
@@ -285,7 +303,7 @@ struct TextEditorWorkspace: View {
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
                 .disabled(model.textEditorExportTargets.isEmpty)
                 .help("Export through Clip's conversion queue")
@@ -427,7 +445,7 @@ struct TextEditorWorkspace: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(ReelMenuStyle())
         .fixedSize()
         .help(
             editor.activeFile?.languageIsExplicit == false
@@ -548,7 +566,7 @@ struct TextEditorWorkspace: View {
                     RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
                 )
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help("Turn the current line into body text or a heading")
             .accessibilityLabel(blockStyle.displayName)
@@ -654,7 +672,7 @@ struct TextEditorWorkspace: View {
                 Image(systemName: "plus")
                     .frame(width: 28, height: 28)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .help("Insert code, a table, image, footnote, math, or divider")
             .accessibilityLabel("Insert Markdown block")
@@ -746,7 +764,7 @@ struct TextEditorWorkspace: View {
             Image(systemName: "doc.on.clipboard")
                 .frame(width: 28, height: 28)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(ReelMenuStyle())
         .menuIndicator(.hidden)
         .disabled(selectedRange.length == 0 && editor.text.isEmpty)
         .help("Copy snippets or export this file")

@@ -93,9 +93,10 @@ public final class TextEditorViewModel {
                 flushContentAutosave()
                 return
             }
-            rebuildTeXProjectAnalysis()
+            scheduleTeXProjectAnalysis()
             scheduleContentAutosave()
             scheduleLanguageDetection()
+            scheduleTeXAutoCompile()
         }
     }
     /// The file currently shown in the editor.
@@ -158,6 +159,13 @@ public final class TextEditorViewModel {
     private var contentTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
     private var languageDetectionTask: Task<Void, Never>?
+    private var texAutoCompileTask: Task<Void, Never>?
+    private var texProjectAnalysisTask: Task<Void, Never>?
+
+    /// Quiet period after the last keystroke before a background rebuild.
+    private static let texAutoCompileDelay = Duration.milliseconds(1_500)
+    /// How many quiet periods to wait out an in-flight compile before giving up.
+    private static let texAutoCompileRetryLimit = 20
     private var externalReloadTask: Task<Void, Never>?
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
@@ -275,9 +283,30 @@ public final class TextEditorViewModel {
     }
 
     /// Starts editor-owned background work.
+    /// Bounds shared by the inspector stepper and the zoom shortcuts.
+    public static let minimumFontSize = 10.0
+    public static let maximumFontSize = 28.0
+
+    /// Steps the editor font size, clamped to the supported range.
+    public func adjustFontSize(by delta: Double) {
+        var updated = settings
+        let size = min(
+            max(updated.fontSize + delta, Self.minimumFontSize),
+            Self.maximumFontSize
+        )
+        guard size != updated.fontSize else { return }
+        updated.fontSize = size
+        updateSettings(updated)
+    }
+
     public func start() {
         isStopped = false
         startFileMonitor()
+        // Opening a LaTeX file with no PDF yet should show a preview without
+        // being asked; typing keeps it current from there.
+        if language == .latex, texPDFURL == nil {
+            scheduleTeXAutoCompile()
+        }
     }
 
     /// Stops background work and flushes any dirty content before closing.
@@ -287,6 +316,8 @@ public final class TextEditorViewModel {
         contentTask?.cancel()
         cleanupTask?.cancel()
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         externalReloadTask?.cancel()
         cancelTeXCompilation(resetState: true)
         fileMonitor?.cancel()
@@ -423,6 +454,8 @@ public final class TextEditorViewModel {
             activeFile.language != language || !activeFile.languageIsExplicit
         else { return }
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         undoManager.beginUndoGrouping()
         defer { undoManager.endUndoGrouping() }
         perform(
@@ -452,6 +485,8 @@ public final class TextEditorViewModel {
     public func enableAutomaticLanguageDetection() {
         guard let activeFile else { return }
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         let detected = detectedLanguage(for: text, file: activeFile)
         applyDetectedLanguage(detected, forceMetadataUpdate: true)
         notice = "Language detection is automatic."
@@ -633,6 +668,41 @@ public final class TextEditorViewModel {
     }
 
     /// Requests a build, showing the package-network decision before first use.
+    /// Rebuilds the PDF a short while after typing stops.
+    ///
+    /// Deliberately quieter than the explicit build button: it never raises the
+    /// package-consent prompt, because a background rebuild must not put a
+    /// network question in front of someone who was only typing, and it waits
+    /// for an in-flight compile rather than queueing a second one. An explicit
+    /// Command-B still works while this is pending.
+    private func scheduleTeXAutoCompile() {
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
+        guard language == .latex, !isStopped else { return }
+        // Consent and cache state are the user's to resolve explicitly.
+        guard texPackageAccess != nil, !isTeXPackageCacheResetting else { return }
+        let fileID = activeFileID
+        let contents = text
+        texAutoCompileTask = Task { [weak self] in
+            for _ in 0..<Self.texAutoCompileRetryLimit {
+                do {
+                    try await Task.sleep(for: Self.texAutoCompileDelay)
+                } catch {
+                    return
+                }
+                guard let self, !self.isStopped, self.activeFileID == fileID,
+                    self.text == contents, self.language == .latex,
+                    self.texPackageAccess != nil, !self.isTeXPackageCacheResetting
+                else { return }
+                // Let the running build finish; its result already reflects
+                // older text, so wait rather than cancel and restart.
+                if self.texCompilationState == .compiling { continue }
+                self.beginTeXCompilation()
+                return
+            }
+        }
+    }
+
     public func requestTeXCompile() {
         guard language == .latex else { return }
         guard !isTeXPackageCacheResetting else {
@@ -818,6 +888,8 @@ public final class TextEditorViewModel {
     /// meaningful language signal.
     private func scheduleLanguageDetection() {
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         guard let activeFile, !activeFile.languageIsExplicit else { return }
         // A populated Markdown document owns per-block language decisions.
         // File-level detection must never tear down and recreate its live editor
@@ -1463,7 +1535,36 @@ public final class TextEditorViewModel {
         return NSRange(location: start, length: location - start)
     }
 
+    /// Quiet period before re-reading the project structure while typing.
+    private static let texProjectAnalysisDelay = Duration.milliseconds(250)
+
+    /// Re-reads the project structure shortly after typing stops.
+    ///
+    /// The analysis parses every file in the project for `\input` and
+    /// `\include` and re-infers the main file, so running it from `text`'s
+    /// observer made each keystroke cost a pass over the whole project. Every
+    /// other structural caller stays synchronous: those are rare events where
+    /// the result is needed immediately.
+    private func scheduleTeXProjectAnalysis() {
+        texProjectAnalysisTask?.cancel()
+        guard !isStopped else { return }
+        let fileID = activeFileID
+        let contents = text
+        texProjectAnalysisTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.texProjectAnalysisDelay)
+            } catch {
+                return
+            }
+            guard let self, !self.isStopped, self.activeFileID == fileID, self.text == contents
+            else { return }
+            self.rebuildTeXProjectAnalysis()
+        }
+    }
+
     private func rebuildTeXProjectAnalysis() {
+        // A structural rebuild supersedes anything the debounce has queued.
+        texProjectAnalysisTask?.cancel()
         let sources = Dictionary(
             uniqueKeysWithValues: document.files.compactMap { file in
                 textBuffers[file.id].map { (file.relativePath, $0) }

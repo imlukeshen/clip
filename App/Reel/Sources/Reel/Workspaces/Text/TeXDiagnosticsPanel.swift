@@ -12,6 +12,8 @@ struct TeXDiagnosticsPanel: View {
     let diagnostics: [TeXDiagnostic]
     let log: String
     @Binding var selectedTab: TeXOutputTab
+    /// Supplied by the workspace so the panel can be dragged taller or shorter.
+    let height: Double
     let onSelectDiagnostic: (TeXDiagnostic) -> Void
     let onClose: () -> Void
 
@@ -52,7 +54,7 @@ struct TeXDiagnosticsPanel: View {
                 rawLog
             }
         }
-        .frame(minHeight: 150, idealHeight: 210, maxHeight: 280)
+        .frame(height: height)
         .background(theme.palette.surfaceSunken)
         .accessibilityIdentifier("latex-build-output")
     }
