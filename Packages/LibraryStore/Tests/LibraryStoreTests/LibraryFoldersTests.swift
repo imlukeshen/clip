@@ -210,3 +210,55 @@ private struct FolderTestTrashManager: FileTrashManaging {
         #expect(moved.first?.relativePath == "Media/Organized/Renamed \(index).\(item.1)")
     }
 }
+
+@Test("A folder that vanished does not take the tree with it")
+func missingFolderDoesNotBreakTheTree() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clip-folders-missing-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    let folders = LibraryFolders(root: root, library: store)
+    _ = try await folders.createFolder(named: "Keep", in: "")
+    let doomed = try await folders.createFolder(named: "Doomed", in: "")
+
+    // Expanded, then deleted behind the app's back. Expansion is persisted, so
+    // this state survives relaunches and used to leave the sidebar empty.
+    try FileManager.default.removeItem(
+        at: LibraryLayout.media(in: root).appendingPathComponent(doomed)
+    )
+
+    let tree = try await folders.tree(expanding: ["", doomed])
+    let names = (tree.children ?? []).map(\.name)
+    #expect(names.contains("Keep"))
+    #expect(!names.contains("Doomed"))
+}
+
+@Test("A collapsed folder still reports that it has children")
+func collapsedFolderKnowsItHasChildren() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("clip-folders-collapsed-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    let folders = LibraryFolders(root: root, library: store)
+    let parent = try await folders.createFolder(named: "Parent", in: "")
+    _ = try await folders.createFolder(named: "Child", in: parent)
+    _ = try await folders.createFolder(named: "Empty", in: "")
+
+    // Only the root is expanded, so Parent's children are deliberately unloaded.
+    let tree = try await folders.tree(expanding: [""])
+    let children = try #require(tree.children)
+    let node = try #require(children.first { $0.name == "Parent" })
+    let empty = try #require(children.first { $0.name == "Empty" })
+
+    #expect(node.children == nil, "collapsed folders should not load children")
+    // The disclosure control depends on this: without it a collapsed folder
+    // loses the only way to expand it again.
+    #expect(node.hasChildren)
+    #expect(!empty.hasChildren)
+}

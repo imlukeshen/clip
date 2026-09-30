@@ -2903,7 +2903,12 @@ public final class AppModel {
 
     private func refreshFolderTree() async {
         guard let runtime else { return }
-        folderTree = try? await runtime.folderTree(expanding: expandedFolders)
+        // Keep the tree that is on screen if a refresh fails. Replacing it with
+        // nil leaves the sidebar showing a spinner with no way back, and the
+        // expansion state that caused the failure is persisted.
+        if let tree = try? await runtime.folderTree(expanding: expandedFolders) {
+            folderTree = tree
+        }
         folderDestinations = [""] + ((try? await runtime.folderDestinations()) ?? ["Inbox"])
     }
 
