@@ -171,6 +171,7 @@ struct ImageEditorView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: EditorChromeMetrics.headerHeight)
+        .titlebarDoubleClick()
         .background(theme.palette.surfacePanel)
     }
 

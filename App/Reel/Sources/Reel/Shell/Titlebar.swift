@@ -75,8 +75,8 @@ struct Titlebar: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 42)
-        .background(theme.palette.surfaceBase)
         .titlebarDoubleClick()
+        .background(theme.palette.surfaceBase)
         .onChange(of: model.searchFocusRequest) { _, _ in
             if isBrowsing { isSearchFocused = true }
         }
