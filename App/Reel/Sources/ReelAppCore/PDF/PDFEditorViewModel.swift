@@ -606,7 +606,28 @@ public final class PDFEditorViewModel {
         }
     }
 
-    public func selectLayer(_ id: PDFLayerID?) { selectedLayerID = id }
+    public func selectLayer(_ id: PDFLayerID?) {
+        selectedLayerID = id
+        selectedMarkRegion = nil
+    }
+
+    /// Which region of the selected mark was clicked, when it holds several.
+    public private(set) var selectedMarkRegion: Int?
+
+    public func selectMark(_ hit: PDFMarkHit) {
+        selectedLayerID = hit.layerID
+        selectedMarkRegion = hit.regionIndex
+    }
+
+    /// The regions of the selected mark, for the view to outline.
+    public var selectedMarkRegions: [CGRect] {
+        guard let selectedLayer else { return [] }
+        let regions = PDFMarkHitTest.regions(of: selectedLayer)
+        guard let index = selectedMarkRegion, regions.indices.contains(index) else {
+            return regions
+        }
+        return [regions[index]]
+    }
 
     public func selectSourceTextBlock(_ objectIndex: Int?) {
         selectedSourceTextBlockID = objectIndex
@@ -814,14 +835,50 @@ public final class PDFEditorViewModel {
         resolveFontIfNeeded(for: selectedLayerID, force: true)
     }
 
+    /// A patch that drops just the clicked region, or nil when the whole layer
+    /// should go — a mark with one region left, or anything that is not a mark.
+    private func removalOfSelectedRegion() -> PDFPatch? {
+        guard let selectedLayerID, let index = selectedMarkRegion, var page = selectedPage,
+            let position = page.layers.firstIndex(where: { $0.id == selectedLayerID })
+        else { return nil }
+
+        switch page.layers[position] {
+        case .redaction(var redaction) where redaction.regions.count > 1:
+            guard redaction.regions.indices.contains(index) else { return nil }
+            redaction.regions.remove(at: index)
+            page.layers[position] = .redaction(redaction)
+        case .highlight(var highlight) where highlight.regions.count > 1:
+            guard highlight.regions.indices.contains(index) else { return nil }
+            highlight.regions.remove(at: index)
+            page.layers[position] = .highlight(highlight)
+        case .redaction, .highlight, .text:
+            return nil
+        }
+        return .updatePage(page)
+    }
+
     public func removeSelectedLayer() {
         guard let selectedLayerID else { return }
+        // A mark holding several regions loses only the one that was clicked.
+        // Batch redactions made before each match became its own layer are a
+        // single layer carrying every match on the page, and removing the layer
+        // to undo one of them took back all the others with it.
+        if let patch = removalOfSelectedRegion() {
+            do {
+                try perform(patch, actionName: "Delete Redaction")
+                selectedMarkRegion = nil
+            } catch {
+                notice = "The PDF edit could not be deleted."
+            }
+            return
+        }
         do {
             try perform(
                 .removeLayer(selectedLayerID, from: selectedPageID),
                 actionName: "Delete PDF Edit"
             )
             self.selectedLayerID = nil
+            selectedMarkRegion = nil
             selectedSourceTextBlockID = nil
         } catch {
             notice = "The PDF edit could not be deleted."
@@ -1048,7 +1105,15 @@ public final class PDFEditorViewModel {
         var patches: [PDFPatch] = []
         for (pageID, matches) in byPage.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             guard var page = document.page(pageID) else { continue }
-            page.layers.append(.redaction(PDFRedactionLayer(regions: matches.map(\.rect))))
+            // One layer per match, not one layer holding every match. A layer is
+            // the unit of selection and deletion, so batching them made the
+            // whole run all-or-nothing: a redaction that landed somewhere
+            // unwanted could only be removed by taking back the others too.
+            // They are still appended in one patch, so the run remains a single
+            // undo.
+            for match in matches {
+                page.layers.append(.redaction(PDFRedactionLayer(regions: [match.rect])))
+            }
             patches.append(.updatePage(page))
         }
         guard !patches.isEmpty else { return }

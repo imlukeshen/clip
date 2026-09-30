@@ -499,6 +499,7 @@ private struct PDFEditorView: View {
                             handlePageTap(value.location, in: size)
                         }
                 )
+            selectedMarkOutline(in: frame)
             if editor.showsFindBar {
                 findHighlights(in: frame)
             }
@@ -533,6 +534,17 @@ private struct PDFEditorView: View {
             )
             return
         }
+        // Marks first, and topmost first: a redaction sits over the text it
+        // hides, so a click inside one is aimed at the redaction rather than at
+        // the paragraph underneath. Without this they could not be selected at
+        // all, and Delete had nothing to remove.
+        if editor.activeTool == .select,
+            let hit = markHit(at: normalized(point, in: size))
+        {
+            editor.selectSourceTextBlock(nil)
+            editor.selectMark(hit)
+            return
+        }
         // Clicking type puts the caret where it was aimed, in the whole
         // paragraph; clicking away from text dismisses instead of opening an
         // empty editor. Editing waits for the page index so a click resolves
@@ -548,6 +560,47 @@ private struct PDFEditorView: View {
         }
         editor.selectSourceTextBlock(nil)
         editor.selectLayer(nil)
+    }
+
+    /// The topmost redaction or highlight under a point, in display space.
+    ///
+    /// Compared after `displayBounds` so the hit follows a rotated page, and
+    /// given a small margin because these are often only a few points tall and
+    /// a thin strip is hard to hit exactly.
+    private func markHit(at point: CGPoint) -> PDFMarkHit? {
+        PDFMarkHitTest.topmost(
+            at: point,
+            in: editor.selectedPage?.layers ?? [],
+            rotation: editor.selectedPage?.rotation ?? .degrees0
+        )
+    }
+
+    private func markRegions(of layer: PDFLayer) -> [CGRect] {
+        PDFMarkHitTest.regions(of: layer)
+    }
+
+    /// Outlines the selected mark, so a click that landed is visible before
+    /// Delete is pressed.
+    @ViewBuilder private func selectedMarkOutline(in frame: CGRect) -> some View {
+        let rotation = editor.selectedPage?.rotation ?? .degrees0
+        if editor.selectedLayer != nil {
+            // Only the clicked region, so a batch redaction does not look as
+            // though Delete is about to take the whole page with it.
+            ForEach(Array(editor.selectedMarkRegions.enumerated()), id: \.offset) { _, region in
+                let bounds = displayBounds(region, rotation: rotation)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .strokeBorder(theme.palette.accent, lineWidth: 1.5)
+                    .frame(
+                        width: max(bounds.width * frame.width, 6) + 4,
+                        height: max(bounds.height * frame.height, 6) + 4
+                    )
+                    .position(
+                        x: frame.minX + bounds.midX * frame.width,
+                        y: frame.minY + bounds.midY * frame.height
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     /// Text layers the user placed, which can be dragged around the page.
@@ -858,31 +911,7 @@ private struct PDFEditorView: View {
     }
 
     private func displayBounds(_ rect: CGRect, rotation: PDFPageRotation) -> CGRect {
-        switch rotation {
-        case .degrees0:
-            return rect
-        case .degrees90:
-            return CGRect(
-                x: 1 - rect.maxY,
-                y: rect.minX,
-                width: rect.height,
-                height: rect.width
-            )
-        case .degrees180:
-            return CGRect(
-                x: 1 - rect.maxX,
-                y: 1 - rect.maxY,
-                width: rect.width,
-                height: rect.height
-            )
-        case .degrees270:
-            return CGRect(
-                x: rect.minY,
-                y: 1 - rect.maxX,
-                width: rect.height,
-                height: rect.width
-            )
-        }
+        PDFMarkHitTest.displayBounds(rect, rotation: rotation)
     }
 
     private func editGesture(in frame: CGRect) -> some Gesture {

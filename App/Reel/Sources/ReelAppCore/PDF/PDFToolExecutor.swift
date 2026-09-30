@@ -126,14 +126,18 @@ public struct PDFToolExecutor: Sendable {
                     message: "Nothing was redacted: \"\(arguments.text)\" was not found in "
                         + Self.scope(arguments.pageID, in: context) + ".")
             }
-            // One redaction layer per page, holding every match on it, so the
-            // whole request is a single undo rather than one per occurrence.
+            // One layer per match. A layer is the unit of selection and
+            // deletion, so one layer holding every match made the run
+            // all-or-nothing: an occurrence redacted by mistake could only be
+            // removed by taking back the rest. Each page is still one patch, so
+            // the request remains a single undo.
             let byPage = Dictionary(grouping: matches, by: \.pageID)
             var patches: [PDFPatch] = []
             for (pageID, pageMatches) in byPage.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
                 guard var page = context.document.page(pageID) else { continue }
-                page.layers.append(
-                    .redaction(PDFRedactionLayer(regions: pageMatches.map(\.rect))))
+                for match in pageMatches {
+                    page.layers.append(.redaction(PDFRedactionLayer(regions: [match.rect])))
+                }
                 patches.append(.updatePage(page))
             }
             let count = matches.count

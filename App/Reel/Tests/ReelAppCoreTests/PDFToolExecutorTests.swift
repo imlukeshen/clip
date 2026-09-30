@@ -1,5 +1,6 @@
 import AIKit
 import CoreModel
+import Foundation
 import Testing
 
 @testable import ReelAppCore
@@ -64,6 +65,50 @@ struct PDFToolExecutorTests {
             context: context
         )
         #expect(await requested.value == .some(document.pages[0].id))
+    }
+
+    @Test("Redacting several occurrences leaves each one separately removable")
+    func redactTextMakesOneLayerPerMatch() async throws {
+        let document = try fixtureDocument()
+        let page = document.pages[0]
+        var context = PDFToolExecutionContext(document: document, selectedPageID: page.id)
+        context.locatingText = { _, _, _ in
+            [0.2, 0.4, 0.6].map {
+                PDFTextMatch(
+                    pageID: page.id,
+                    rect: CGRect(x: $0, y: 0.5, width: 0.05, height: 0.01),
+                    snippet: "jiawei"
+                )
+            }
+        }
+        let result = try await PDFToolExecutor(
+            recognizer: { _, _ in "" },
+            markdownConverter: { _ in "" }
+        ).execute(
+            ToolInvocation(
+                callID: "call",
+                name: "pdf.redactText",
+                arguments: .object(["text": .string("jiawei")])
+            ),
+            context: context
+        )
+
+        // One patch, so the run is a single undo.
+        #expect(result.patches.count == 1)
+        guard case .updatePage(let updated)? = result.patches.first else {
+            Issue.record("expected a page update")
+            return
+        }
+        let added = updated.layers.compactMap { layer -> PDFRedactionLayer? in
+            guard case .redaction(let redaction) = layer else { return nil }
+            return redaction
+        }
+        // Three layers, not one holding three regions: a layer is the unit of
+        // selection, so batching them would make an unwanted occurrence
+        // removable only by taking back the others.
+        #expect(added.count == 3)
+        #expect(added.allSatisfy { $0.regions.count == 1 })
+        #expect(Set(added.map(\.id)).count == 3)
     }
 
     @Test("All PDF commands execute through the shared patch path")
