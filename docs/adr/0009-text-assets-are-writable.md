@@ -19,9 +19,16 @@ imported with user-write permission and saved only through
 `LibraryStore.saveTextContents`. That method writes atomically, refreshes the
 content hash and byte size, and emits the normal library change notification.
 
-Image, audio, video, and PDF source assets remain read-only. Scratch buffers are
-not assets and live under `.reel/scratch/` until a later save/import flow makes
-them library files.
+Image, audio, video, and PDF source assets remain read-only.
+
+**Amended 2026-09-30:** a new scratch file is a text asset from the start. "New
+scratch" creates `Untitled.txt` in `Media/Inbox/`, so it can be filed, found,
+and moved to the Trash like any other file. While it keeps a clipx-given
+`Untitled` name, its extension follows the detected language. Because two text
+assets can now hold equal bytes (two empty files, or one saved to match
+another), the library index no longer requires unique content hashes for text;
+imports still deduplicate by hash. Buffers made before this change stay under
+`.reel/scratch/`, listed separately, until the user trashes them.
 
 ## Consequences
 

@@ -7,6 +7,17 @@ import Testing
 @MainActor
 @Suite("File names follow their language")
 struct TextFileNamingTests {
+    @Test("Only names clipx gave a new file count as untitled")
+    func untitledLibraryNames() {
+        #expect(AppModel.isUntitledFileName("Untitled.txt"))
+        #expect(AppModel.isUntitledFileName("Untitled 2.py"))
+        #expect(AppModel.isUntitledFileName("untitled.go"))
+        #expect(!AppModel.isUntitledFileName("Untitled 1.txt"))
+        #expect(!AppModel.isUntitledFileName("Untitled notes.txt"))
+        #expect(!AppModel.isUntitledFileName("solver.py"))
+        #expect(!AppModel.isUntitledFileName("Untitled.v1"))
+    }
+
     @Test("Choosing a language renames a scratch file to match")
     func choosingLanguageRenames() throws {
         let editor = try makeScratch(named: "Untitled.txt", language: .plainText)

@@ -1116,6 +1116,37 @@ public final class AppModel {
         }
     }
 
+    /// Keeps a still-untitled file's extension in step with the language
+    /// detected as the user types, so a new scratch file holding Go becomes
+    /// `Untitled.go`. A name the user chose is never touched, and neither is a
+    /// rename that would collide with another file in the same folder.
+    private func matchUntitledFileName(_ assetID: AssetID, to language: LanguageID) {
+        guard let asset = assets.first(where: { $0.id == assetID }),
+            Self.isUntitledFileName(asset.displayName)
+        else { return }
+        let matching = LanguageDetector.fileName(asset.displayName, matching: language)
+        let folder = (asset.relativePath as NSString).deletingLastPathComponent
+        let isTaken = assets.contains {
+            $0.id != assetID
+                && ($0.relativePath as NSString).deletingLastPathComponent == folder
+                && ($0.relativePath as NSString).lastPathComponent
+                    .caseInsensitiveCompare(matching) == .orderedSame
+        }
+        guard matching != asset.displayName, !isTaken else { return }
+        scheduleAssetRename(assetID, to: matching, registersUndoOnSuccess: false)
+    }
+
+    /// `Untitled.txt`, `Untitled 2.py`, and the like: names clipx gave a new
+    /// file, which the user has not replaced with one of their own.
+    static func isUntitledFileName(_ name: String) -> Bool {
+        let fileExtension = (name as NSString).pathExtension
+        guard LanguageDetector.language(forExtension: fileExtension) != nil else { return false }
+        let stem = (name as NSString).deletingPathExtension.lowercased()
+        if stem == "untitled" { return true }
+        guard stem.hasPrefix("untitled ") else { return false }
+        return Int(stem.dropFirst("untitled ".count)).map { $0 >= 2 } == true
+    }
+
     /// Makes the open text file's name match a language the user just chose,
     /// so a library file set to Go becomes `name.go` on disk as well.
     ///
@@ -2402,32 +2433,27 @@ public final class AppModel {
             guard Int64(contents.utf8.count) <= TextFileLoader.maximumByteSize else {
                 throw ToolExecutorError.invalidArguments("Initial text exceeds the 20 MB limit")
             }
-            var buffer = try await runtime.createScratchTextBuffer()
-            var document = buffer.document
-            guard let fileID = document.files.first?.id else {
-                throw ToolExecutorError.textUnavailable
-            }
-            let safeName = try validatedTextFileName(name ?? "Untitled.txt")
-            _ = try document.apply(.renameFile(fileID, safeName))
+            let proposedName = try validatedTextFileName(name ?? "Untitled.txt")
             let language =
                 rawLanguage.map(normalizedLanguage)
-                ?? LanguageDetector.detect(path: safeName, contents: contents)
-            _ = try document.apply(
-                .setLanguage(fileID, language, explicit: rawLanguage != nil)
+                ?? LanguageDetector.detect(path: proposedName, contents: contents)
+            // The library only holds text files it can recognise by extension,
+            // so a bare "notes" becomes "notes.txt" (or "notes.py", and so on).
+            let safeName =
+                LanguageDetector.language(
+                    forExtension: (proposedName as NSString).pathExtension
+                ) == nil
+                ? LanguageDetector.fileName(proposedName, matching: language)
+                : proposedName
+            let record = try await runtime.createTextFile(
+                named: safeName,
+                contents: Data(contents.utf8)
             )
-            try await runtime.saveScratchTextDocument(document)
-            try await runtime.saveScratchTextContents(Data(contents.utf8), for: document.id)
-            buffer = ScratchTextBuffer(
-                document: document,
-                contents: LoadedTextFile(
-                    text: contents,
-                    encoding: .utf8,
-                    lineEnding: TextFileLoader.lineEnding(in: contents)
-                )
-            )
-            openScratchTextEditor(buffer, runtime: runtime)
-            await refreshScratchBuffers()
-            return "Created \(safeName) as \(language.rawValue)."
+            await refreshAssets()
+            await loadTextEditor(record, runtime: runtime)
+            guard let opened = self.textEditor else { throw ToolExecutorError.textUnavailable }
+            if rawLanguage != nil { opened.setLanguage(language) }
+            return "Created \(record.displayName) as \(language.rawValue)."
         case .setLanguage(let rawLanguage):
             guard let textEditor else { throw ToolExecutorError.textUnavailable }
             let language = normalizedLanguage(rawLanguage)
@@ -2745,75 +2771,83 @@ public final class AppModel {
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .text }),
             let runtime
         else { return }
-        Task {
-            do {
-                let sourceURL = try await runtime.url(for: assetID)
-                if ["tex", "latex", "sty", "cls", "bib"].contains(
-                    sourceURL.pathExtension.lowercased()
-                ) {
-                    try await openTeXProjectEditor(
-                        sourceURL: sourceURL,
-                        runtime: runtime
-                    )
-                    return
-                }
-                let loaded = try await runtime.loadTextContents(for: assetID)
-                let document =
-                    try await runtime.textDocument(for: assetID)
-                    ?? TextDocument(
-                        files: [
-                            TextFile(
-                                assetID: assetID,
-                                relativePath: asset.displayName,
-                                language: LanguageDetector.detect(
-                                    path: asset.displayName,
-                                    contents: loaded.text
-                                ),
-                                encoding: loaded.encoding,
-                                lineEnding: loaded.lineEnding,
-                                byteOrderMark: loaded.byteOrderMark
-                            )
-                        ]
-                    )
-                let textEditor = TextEditorViewModel(
-                    document: document,
-                    text: loaded.text,
+        Task { await loadTextEditor(asset, runtime: runtime) }
+    }
+
+    /// Opens a library text file, reporting any failure in the status line.
+    private func loadTextEditor(_ asset: AssetRecord, runtime: AppRuntime) async {
+        let assetID = asset.id
+        do {
+            let sourceURL = try await runtime.url(for: assetID)
+            if ["tex", "latex", "sty", "cls", "bib"].contains(
+                sourceURL.pathExtension.lowercased()
+            ) {
+                try await openTeXProjectEditor(
                     sourceURL: sourceURL,
-                    hashingWith: { SampledFileHasher.hash($0) },
-                    persistingStructure: { document in
-                        try await runtime.saveTextDocument(document, for: assetID)
-                    },
-                    persistingContents: { data, contentHash in
-                        try await runtime.saveTextContents(
-                            data,
-                            for: assetID,
-                            contentHash: contentHash
-                        )
-                    }
+                    runtime: runtime
                 )
-                textEditor.configureTeXEngine(makeTeXEngine())
-                textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
-                self.textEditor = textEditor
-                selectedWorkspace = .text
-                try await runtime.saveTextDocument(document, for: assetID)
-                textEditor.start()
-            } catch let error as TextEngineError {
-                switch error {
-                case .binaryFile:
-                    lastMessage = "This looks like a binary file, so clipx did not open it as text."
-                case .tooLarge:
-                    lastMessage = "This file is larger than 20 MB. Open it in an external editor."
-                case .undecodable:
-                    lastMessage = "clipx could not detect a supported text encoding."
-                case .unreadable:
-                    lastMessage = "The selected text file could not be read."
-                case .unencodable, .invalidScratchBuffer, .runToolchainUnavailable,
-                    .runLaunchFailed, .runTimedOut, .runOutputTooLarge:
-                    lastMessage = "The selected text file could not be opened."
+                return
+            }
+            let loaded = try await runtime.loadTextContents(for: assetID)
+            let document =
+                try await runtime.textDocument(for: assetID)
+                ?? TextDocument(
+                    files: [
+                        TextFile(
+                            assetID: assetID,
+                            relativePath: asset.displayName,
+                            language: LanguageDetector.detect(
+                                path: asset.displayName,
+                                contents: loaded.text
+                            ),
+                            encoding: loaded.encoding,
+                            lineEnding: loaded.lineEnding,
+                            byteOrderMark: loaded.byteOrderMark
+                        )
+                    ]
+                )
+            let textEditor = TextEditorViewModel(
+                document: document,
+                text: loaded.text,
+                sourceURL: sourceURL,
+                hashingWith: { SampledFileHasher.hash($0) },
+                persistingStructure: { document in
+                    try await runtime.saveTextDocument(document, for: assetID)
+                },
+                persistingContents: { data, contentHash in
+                    try await runtime.saveTextContents(
+                        data,
+                        for: assetID,
+                        contentHash: contentHash
+                    )
                 }
-            } catch {
+            )
+            textEditor.configureTeXEngine(makeTeXEngine())
+            textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
+            textEditor.onLibraryLanguageDetected = { [weak self] assetID, language in
+                self?.matchUntitledFileName(assetID, to: language)
+            }
+            self.textEditor = textEditor
+            selectedWorkspace = .text
+            try await runtime.saveTextDocument(document, for: assetID)
+            textEditor.start()
+        } catch let error as TextEngineError {
+            switch error {
+            case .binaryFile:
+                lastMessage = "This looks like a binary file, so clipx did not open it as text."
+            case .tooLarge:
+                lastMessage = "This file is larger than 20 MB. Open it in an external editor."
+            case .undecodable:
+                lastMessage = "clipx could not detect a supported text encoding."
+            case .unreadable:
+                lastMessage = "The selected text file could not be read."
+            case .unencodable, .invalidScratchBuffer, .scratchBufferNotTrashed,
+                .runToolchainUnavailable,
+                .runLaunchFailed, .runTimedOut, .runOutputTooLarge:
                 lastMessage = "The selected text file could not be opened."
             }
+        } catch {
+            lastMessage = "The selected text file could not be opened."
         }
     }
 
@@ -2945,18 +2979,25 @@ public final class AppModel {
         Task { await refreshScratchBuffers() }
     }
 
-    /// Creates, persists, and opens a new unnamed text buffer.
+    /// Creates a new `Untitled.txt` in the library inbox and opens it.
+    ///
+    /// A scratch file is an ordinary text asset from the start, so it shows up
+    /// in the library, can be filed into folders, and moves to the Trash like
+    /// any other file.
     public func createScratchTextEditor() {
         guard textEditor == nil, editor == nil, imageEditor == nil, pdfEditor == nil,
             let runtime
         else { return }
         Task {
             do {
-                let buffer = try await runtime.createScratchTextBuffer()
-                openScratchTextEditor(buffer, runtime: runtime)
-                await refreshScratchBuffers()
+                let record = try await runtime.createTextFile(
+                    named: "Untitled.txt",
+                    contents: Data()
+                )
+                await refreshAssets()
+                await loadTextEditor(record, runtime: runtime)
             } catch {
-                lastMessage = "A new scratch buffer could not be created."
+                lastMessage = "A new text file could not be created."
             }
         }
     }
@@ -2977,6 +3018,26 @@ public final class AppModel {
             } catch {
                 lastMessage = "That scratch buffer could not be opened."
             }
+        }
+    }
+
+    /// Moves a scratch buffer from before scratch files joined the library
+    /// to the Trash.
+    public func trashScratchBuffer(_ id: DocumentID) {
+        guard let runtime else { return }
+        if let textEditor, textEditor.sourceURL == nil, textEditor.document.id == id {
+            closeTextEditor()
+            // An open buffer autosaves, which would write the files straight back.
+            guard self.textEditor == nil else { return }
+        }
+        Task {
+            do {
+                try await runtime.trashScratchTextBuffer(id)
+                lastMessage = "Moved to Trash"
+            } catch {
+                lastMessage = "clipx couldn't move that scratch file to Trash."
+            }
+            await refreshScratchBuffers()
         }
     }
 

@@ -66,7 +66,9 @@ persistent browsing inspector.
   and layer inspector.
 - PDF: library actions lead into thumbnails, tool rail, document canvas, and PDF
   edit inspector.
-- Text: library includes imported text assets and restorable scratch buffers.
+- Text: library includes imported text assets (new scratch files are created as
+  text assets in the Inbox) and legacy scratch buffers, which have a Move to
+  Trash context menu.
   The full-bleed editor uses TextKit 2, a 48-point line-number gutter, document
   header, 26-point status bar, and text settings inspector. Nineteen bundled
   Tree-sitter grammars highlight the visible region plus a 200-line margin;

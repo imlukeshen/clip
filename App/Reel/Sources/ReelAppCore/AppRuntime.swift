@@ -343,6 +343,13 @@ public actor AppRuntime {
         return associated
     }
 
+    /// Creates a new text file in the library inbox and queues it for indexing.
+    public func createTextFile(named name: String, contents: Data) async throws -> AssetRecord {
+        let record = try await pipeline.createTextFile(named: name, contents: contents)
+        await indexPipeline.enqueue(record.id, stages: Self.indexStages(for: record))
+        return record
+    }
+
     /// Materializes a still as a short movie so the existing timeline graph,
     /// compositor, effects, and exporter can edit it exactly like a video clip.
     public func ingestTimelineImage(
@@ -650,14 +657,14 @@ public actor AppRuntime {
         try await scratchTextStore.records()
     }
 
-    /// Creates and immediately persists a new empty scratch buffer.
-    public func createScratchTextBuffer() async throws -> ScratchTextBuffer {
-        try await scratchTextStore.create()
-    }
-
     /// Restores a scratch buffer when both its structure and contents still exist.
     public func scratchTextBuffer(_ id: DocumentID) async throws -> ScratchTextBuffer? {
         try await scratchTextStore.load(id)
+    }
+
+    /// Moves a scratch buffer's files to the Trash.
+    public func trashScratchTextBuffer(_ id: DocumentID) async throws {
+        try await scratchTextStore.trash(id)
     }
 
     /// Persists the structural half of a scratch buffer.

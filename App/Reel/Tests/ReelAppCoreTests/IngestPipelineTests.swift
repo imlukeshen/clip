@@ -54,6 +54,38 @@ import Testing
     #expect(mode.intValue & 0o222 == 0)
 }
 
+@Test func newTextFilesAreDistinctWritableAssetsEvenWhenEmpty() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "reel-new-text-tests-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let library = try await LibraryStore(
+        root: root,
+        bookmarks: BookmarkStore(storageURL: root.appendingPathComponent("bookmarks.json"))
+    )
+    let pipeline = IngestPipeline(
+        library: library,
+        libraryRoot: root,
+        derivatives: FixtureDerivatives()
+    )
+
+    let first = try await pipeline.createTextFile(named: "Untitled.txt", contents: Data())
+    let second = try await pipeline.createTextFile(named: "Untitled.txt", contents: Data())
+
+    #expect(first.id != second.id)
+    #expect(first.kind == .text)
+    #expect(first.displayName == "Untitled.txt")
+    #expect(second.displayName == "Untitled 2.txt")
+    #expect(second.relativePath == "Media/Inbox/Untitled 2.txt")
+    #expect(try await library.assets(kind: .text, limit: 10, offset: 0).count == 2)
+    let url = try await library.url(for: second.id)
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    let mode = try #require(attributes[.posixPermissions] as? NSNumber)
+    #expect(mode.intValue & 0o200 != 0)
+}
+
 private struct FixtureProbe: MediaProbing {
     func probe(_ url: URL) async throws -> MediaProbeResult {
         MediaProbeResult(

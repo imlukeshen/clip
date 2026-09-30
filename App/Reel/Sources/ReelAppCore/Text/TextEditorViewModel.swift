@@ -155,6 +155,10 @@ public final class TextEditorViewModel {
     private var textBuffers: [FileID: String]
     private var dirtyFileIDs: Set<FileID> = []
 
+    /// Told when detection settles a library file's language. The editor never
+    /// renames a library file itself; the owner decides whether the name follows.
+    @ObservationIgnored public var onLibraryLanguageDetected: ((AssetID, LanguageID) -> Void)?
+
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
@@ -985,6 +989,9 @@ public final class TextEditorViewModel {
             persistStructureNow()
             if previous == .latex, detected != .latex {
                 cancelTeXCompilation(resetState: true)
+            }
+            if let assetID = activeFile.assetID {
+                onLibraryLanguageDetected?(assetID, detected)
             }
         } catch {
             notice = "clipx could not update the detected language."
