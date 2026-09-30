@@ -1092,7 +1092,15 @@ public final class AppModel {
     public func renameOpenTextFile(to name: String) {
         guard let textEditor, let activeFile = textEditor.activeFile else { return }
         if let assetID = activeFile.assetID {
-            renameAsset(assetID, to: name)
+            // The extension names the language, as it does for scratch files.
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let (fileName, language) = TextEditorViewModel.nameAndLanguage(
+                forProposedName: trimmed,
+                currentLanguage: activeFile.language
+            )
+            renameAsset(assetID, to: fileName)
+            if language != activeFile.language { textEditor.setLanguage(language) }
             return
         }
 
@@ -1106,6 +1114,20 @@ public final class AppModel {
         } else {
             lastMessage = textEditor.notice ?? "The file could not be renamed."
         }
+    }
+
+    /// Makes the open text file's name match a language the user just chose,
+    /// so a library file set to Go becomes `name.go` on disk as well.
+    ///
+    /// Only explicit choices rename a library file; automatic detection never
+    /// renames anything on disk.
+    public func matchOpenTextFileName(to language: LanguageID) {
+        guard let textEditor, let activeFile = textEditor.activeFile,
+            let assetID = activeFile.assetID,
+            let displayName = assets.first(where: { $0.id == assetID })?.displayName
+        else { return }
+        let matching = LanguageDetector.fileName(displayName, matching: language)
+        if matching != displayName { renameAsset(assetID, to: matching) }
     }
 
     private func relocateOpenEditorSource(
@@ -2785,7 +2807,8 @@ public final class AppModel {
                     lastMessage = "clipx could not detect a supported text encoding."
                 case .unreadable:
                     lastMessage = "The selected text file could not be read."
-                case .unencodable, .invalidScratchBuffer:
+                case .unencodable, .invalidScratchBuffer, .runToolchainUnavailable,
+                    .runLaunchFailed, .runTimedOut, .runOutputTooLarge:
                     lastMessage = "The selected text file could not be opened."
                 }
             } catch {

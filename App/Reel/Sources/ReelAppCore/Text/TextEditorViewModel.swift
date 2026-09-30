@@ -346,36 +346,68 @@ public final class TextEditorViewModel {
     }
 
     /// Gives an unsaved scratch buffer a user-facing filename without turning it
-    /// into a library asset. Finder-style extension preservation keeps `Notes.md`
-    /// as Markdown when the user enters only `Meeting Notes`.
+    /// into a library asset.
+    ///
+    /// The extension always names the language: typing `solver.go` switches the
+    /// buffer to Go, while typing just `solver` keeps the language and adds its
+    /// extension.
     @discardableResult
     public func renameActiveScratchFile(to proposedName: String) -> Bool {
         guard let activeFile, activeFile.assetID == nil, sourceURL == nil else {
             notice = "Only an unsaved scratch file can be renamed here."
             return false
         }
-        guard
-            let name = Self.normalizedScratchFilename(
-                proposedName,
-                preservingExtensionOf: activeFile.relativePath
-            )
-        else {
+        guard let validated = Self.validatedFilename(proposedName) else {
             notice = "Choose a filename without path separators."
             return false
         }
-        guard name != activeFile.relativePath else { return true }
+        let (name, language) = Self.nameAndLanguage(
+            forProposedName: validated,
+            currentLanguage: activeFile.language
+        )
+        guard name != activeFile.relativePath || language != activeFile.language else {
+            return true
+        }
 
         var candidate = document
         do {
-            _ = try candidate.apply(.renameFile(activeFile.id, name))
+            if name != activeFile.relativePath {
+                _ = try candidate.apply(.renameFile(activeFile.id, name))
+            }
         } catch {
             notice = "Another file in this document already uses that name."
             return false
         }
 
-        perform(.renameFile(activeFile.id, name), actionName: "Rename File")
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
+        if name != activeFile.relativePath {
+            perform(.renameFile(activeFile.id, name), actionName: "Rename File")
+        }
+        if language != activeFile.language {
+            languageDetectionTask?.cancel()
+            perform(
+                .setLanguage(activeFile.id, language, explicit: true), actionName: "Rename File")
+            rebuildTeXProjectAnalysis()
+            if language != .latex { cancelTeXCompilation(resetState: true) }
+        }
         reconcileActivePathChange()
         return self.activeFile?.relativePath == name
+    }
+
+    /// The filename and language a typed name implies: a recognised extension
+    /// picks the language, anything else gets the current language's extension.
+    public static func nameAndLanguage(
+        forProposedName name: String,
+        currentLanguage: LanguageID
+    ) -> (name: String, language: LanguageID) {
+        let typedExtension = (name as NSString).pathExtension
+        if !typedExtension.isEmpty,
+            let typedLanguage = LanguageDetector.language(forExtension: typedExtension)
+        {
+            return (name, typedLanguage)
+        }
+        return (LanguageDetector.fileName(name, matching: currentLanguage), currentLanguage)
     }
 
     /// Reconciles the editor after LibraryStore has physically renamed an open
@@ -462,14 +494,7 @@ public final class TextEditorViewModel {
             .setLanguage(activeFileID, language, explicit: true),
             actionName: "Set Language"
         )
-        if sourceURL == nil,
-            Self.isDefaultScratchName(activeFile.relativePath),
-            let pathExtension = Self.preferredScratchExtension(for: language)
-        {
-            let destination =
-                language == .latex
-                ? Self.availableScratchTeXPath(in: document, excluding: activeFileID)
-                : "Untitled.\(pathExtension)"
+        if let destination = scratchPath(for: activeFile, matching: language, in: document) {
             perform(
                 .renameFile(activeFileID, destination),
                 actionName: "Set Language"
@@ -945,27 +970,17 @@ public final class TextEditorViewModel {
             _ = try updatedDocument.apply(
                 .setLanguage(activeFile.id, detected, explicit: false)
             )
-            let promotedScratchToTeX =
-                detected == .latex
-                && sourceURL == nil
-                && Self.isDefaultScratchName(activeFile.relativePath)
-                && activeFile.relativePath.caseInsensitiveCompare("Untitled.tex") != .orderedSame
-            if promotedScratchToTeX {
-                // A default .txt scratch name carries no user intent. Promote it
-                // with the detected language so project analysis can immediately
-                // recognize the buffer as a compilable TeX main file.
-                _ = try updatedDocument.apply(
-                    .renameFile(
-                        activeFile.id,
-                        Self.availableScratchTeXPath(
-                            in: updatedDocument,
-                            excluding: activeFile.id
-                        )
-                    )
-                )
+            // A scratch file's name follows its language, so a buffer detected
+            // as Go becomes `Untitled.go`. A LaTeX one is then immediately
+            // recognisable to project analysis as a compilable main file.
+            // Library files are left alone: detection must never rename
+            // something on disk behind the user's back.
+            let renamedPath = scratchPath(for: activeFile, matching: detected, in: updatedDocument)
+            if let renamedPath {
+                _ = try updatedDocument.apply(.renameFile(activeFile.id, renamedPath))
             }
             document = updatedDocument
-            if promotedScratchToTeX { invalidateTeXBuildIdentity() }
+            if renamedPath != nil { invalidateTeXBuildIdentity() }
             rebuildTeXProjectAnalysis()
             persistStructureNow()
             if previous == .latex, detected != .latex {
@@ -974,6 +989,29 @@ public final class TextEditorViewModel {
         } catch {
             notice = "clipx could not update the detected language."
         }
+    }
+
+    /// The name `file` should take once its language is `language`, or `nil`
+    /// when it keeps its name: it already matches, it is not a scratch file,
+    /// or the matching name is taken.
+    private func scratchPath(
+        for file: TextFile,
+        matching language: LanguageID,
+        in document: TextDocument
+    ) -> String? {
+        guard file.assetID == nil, sourceURLs[file.id] == nil,
+            !file.relativePath.contains("/")
+        else { return nil }
+        let destination =
+            language == .latex && Self.isDefaultScratchName(file.relativePath)
+            ? Self.availableScratchTeXPath(in: document, excluding: file.id)
+            : LanguageDetector.fileName(file.relativePath, matching: language)
+        guard destination != file.relativePath else { return nil }
+        let isTaken = document.files.contains {
+            $0.id != file.id
+                && $0.relativePath.caseInsensitiveCompare(destination) == .orderedSame
+        }
+        return isTaken ? nil : destination
     }
 
     private static func availableScratchTeXPath(
@@ -1743,15 +1781,6 @@ public final class TextEditorViewModel {
         return Int(suffix).map { $0 >= 2 } == true
     }
 
-    private static func preferredScratchExtension(for language: LanguageID) -> String? {
-        switch language {
-        case .markdown: "md"
-        case .latex: "tex"
-        case .plainText: "txt"
-        default: nil
-        }
-    }
-
     private func startFileMonitor() {
         guard fileMonitor == nil, let sourceURL else { return }
         fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
@@ -1766,18 +1795,6 @@ public final class TextEditorViewModel {
         let depth = relativePath.split(separator: "/").count
         for _ in 0..<depth { root.deleteLastPathComponent() }
         return root
-    }
-
-    private static func normalizedScratchFilename(
-        _ proposedName: String,
-        preservingExtensionOf currentPath: String
-    ) -> String? {
-        guard let name = validatedFilename(proposedName) else { return nil }
-        let currentExtension = (currentPath as NSString).pathExtension
-        guard !currentExtension.isEmpty, (name as NSString).pathExtension.isEmpty else {
-            return name
-        }
-        return "\(name).\(currentExtension)"
     }
 
     private static func validatedFilename(_ proposedName: String) -> String? {

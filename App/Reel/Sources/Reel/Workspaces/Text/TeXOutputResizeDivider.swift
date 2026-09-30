@@ -42,7 +42,10 @@ struct TeXOutputResizeDivider: View {
     }
 
     private var drag: some Gesture {
-        DragGesture(minimumDistance: 1)
+        // Measured in window space: the grip moves as the panel resizes, so a
+        // translation measured against the grip itself shifts under the
+        // pointer every frame and the panel jitters.
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
                 let start = heightAtDragStart ?? displayedHeight
                 heightAtDragStart = start
