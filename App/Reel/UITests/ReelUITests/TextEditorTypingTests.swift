@@ -581,7 +581,9 @@ final class TextEditorTypingTests: XCTestCase {
             app.staticTexts["PDF ready"].waitForExistence(timeout: 90),
             "LaTeX did not compile into the PDF preview"
         )
-        XCTAssertTrue(app.staticTexts["clipx PDF"].waitForExistence(timeout: 10))
+        // Matches the text typed into the document above, which is fixture
+        // content rather than the product name.
+        XCTAssertTrue(app.staticTexts["Clip PDF"].waitForExistence(timeout: 10))
         assertVisibleSourceGlyphs(
             in: app.textViews["text-editor"],
             attachmentName: "LaTeX source after build"
