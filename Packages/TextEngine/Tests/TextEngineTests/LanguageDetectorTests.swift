@@ -93,3 +93,26 @@ import Testing
         LanguageDetector.detect(path: "", contents: "[package]\nname = \"clip\"") == .toml
     )
 }
+
+@Test func goProgramIsNotMistakenForSwift() {
+    let source = "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(1)\n}\n"
+    #expect(LanguageDetector.detect(path: "", contents: source) == .go)
+}
+
+@Test func fileNamesFollowTheirLanguage() {
+    #expect(LanguageDetector.fileName("Untitled.txt", matching: .go) == "Untitled.go")
+    #expect(LanguageDetector.fileName("solver", matching: .python) == "solver.py")
+    #expect(LanguageDetector.fileName("solver.py", matching: .python) == "solver.py")
+    #expect(LanguageDetector.fileName("header.h", matching: .c) == "header.h")
+    #expect(LanguageDetector.fileName("config.yml", matching: .yaml) == "config.yml")
+    #expect(LanguageDetector.fileName("notes.md", matching: .rust) == "notes.rs")
+    #expect(LanguageDetector.fileName("v1.2", matching: .python) == "v1.2.py")
+    #expect(LanguageDetector.fileName("script.sh", matching: .plainText) == "script.txt")
+}
+
+@Test func everyLanguageHasAnExtensionThatMapsBackToIt() {
+    for language in LanguageID.treeSitterGrammars + [.plainText] {
+        let ext = LanguageDetector.preferredExtension(for: language)
+        #expect(LanguageDetector.language(forExtension: ext) == language, "\(language.rawValue)")
+    }
+}

@@ -36,6 +36,44 @@ import Testing
     #expect(result.tokens.contains { $0.kind == .keyword })
 }
 
+@Test func pythonKeywordsAndDeclarationsAreHighlighted() async {
+    let source = """
+        @cache
+        def area(shape: Shape) -> float:
+            if shape is None or not shape.ready:
+                raise ValueError("no shape")
+            elif shape.kind == 2:
+                pass
+            return lambda: shape.width ** 2
+
+        class Square:
+            pass
+
+        print(area(Square()))
+        """
+    let result = await SyntaxHighlighter().highlights(
+        in: source,
+        language: .python,
+        visibleRange: NSRange(location: 0, length: (source as NSString).length)
+    )
+    let text = source as NSString
+    func kinds(of word: String) -> Set<SyntaxTokenKind> {
+        let range = text.range(of: word)
+        return Set(result.tokens.filter { NSEqualRanges($0.range, range) }.map(\.kind))
+    }
+
+    #expect(result.quality == .treeSitter)
+    for keyword in ["def", "if", "None", "or", "not", "raise", "elif", "pass", "return", "lambda"] {
+        #expect(kinds(of: keyword).contains(.keyword), "\(keyword) is not a keyword")
+    }
+    #expect(kinds(of: "area").contains(.function))
+    #expect(kinds(of: "Square").contains(.type))
+    #expect(kinds(of: "print").contains(.function))
+    #expect(kinds(of: "**").contains(.operator))
+    #expect(!kinds(of: "shape").contains(.keyword))
+    #expect(!result.tokens.contains { $0.kind == .operator && $0.range.length > 2 })
+}
+
 @Test func highlightingIsBoundedToViewportAndTwoHundredLineMargin() async {
     let source = (0..<1_000).map { "let value\($0) = \($0)\n" }.joined()
     let text = source as NSString
@@ -144,4 +182,82 @@ private func representativeSource(for language: LanguageID) -> String {
     case .xml: "<?xml version=\"1.0\"?><clip ready=\"true\"/>"
     default: "Clip"
     }
+}
+
+@Test func everyProgrammingLanguageColoursItsOwnKeywords() async {
+    let samples: [(LanguageID, String, [String])] = [
+        (
+            .javascript, "const a = this instanceof B; for (const k of a) { delete a.k }",
+            ["const", "this", "instanceof", "of", "delete"]
+        ),
+        (
+            .typescript, "interface A { x: number }\nexport function f(a: A): void { return }",
+            ["interface", "export", "function", "return"]
+        ),
+        (
+            .go,
+            "package main\nfunc f() { for i := range m { go g(i) }; var c chan int; _ = map[string]int{} }",
+            ["package", "func", "range", "go", "chan", "map"]
+        ),
+        (
+            .rust,
+            "use std::io;\npub fn f() { let mut x = 1; loop { break; } unsafe {} }\nimpl S {}",
+            ["use", "pub", "fn", "let", "mut", "loop", "unsafe", "impl"]
+        ),
+        (
+            .c,
+            "#include <stdio.h>\ntypedef unsigned long U;\nint main(void) { return sizeof(U); }",
+            ["#include", "typedef", "unsigned", "return", "sizeof"]
+        ),
+        (
+            .cpp, "template <typename T> class C { public: auto f() { return this; } };",
+            ["template", "typename", "class", "public", "auto", "this"]
+        ),
+        (
+            .java, "public class A { protected synchronized void f() { Object o = null; } }",
+            ["public", "class", "protected", "synchronized", "null"]
+        ),
+        (
+            .bash, "if true; then echo hi; elif false; then :; fi\nfor i in 1; do local x; done",
+            ["if", "then", "elif", "fi", "for", "do", "local", "done"]
+        ),
+        (
+            .sql, "INSERT INTO t (a) VALUES (1);\nCREATE TABLE u (id INTEGER);",
+            ["INSERT", "INTO", "VALUES", "CREATE", "TABLE"]
+        ),
+        (.css, "@media screen { a { color: red } }", ["@media"]),
+    ]
+    for (language, source, words) in samples {
+        let result = await SyntaxHighlighter().highlights(
+            in: source,
+            language: language,
+            visibleRange: NSRange(location: 0, length: (source as NSString).length)
+        )
+        let text = source as NSString
+        for word in words {
+            let range = text.range(of: word)
+            let isKeyword = result.tokens.contains {
+                $0.kind == .keyword && NSIntersectionRange($0.range, range).length == range.length
+            }
+            #expect(isKeyword, "\(language.rawValue): \(word) is not coloured as a keyword")
+        }
+    }
+}
+
+@Test func markupNamesAreTagsAndProperties() async {
+    let source = "<root attr=\"1\"><child/></root>"
+    let result = await SyntaxHighlighter().highlights(
+        in: source,
+        language: .xml,
+        visibleRange: NSRange(location: 0, length: (source as NSString).length)
+    )
+    let text = source as NSString
+    #expect(
+        result.tokens.contains {
+            $0.kind == .tag && NSEqualRanges($0.range, text.range(of: "root"))
+        })
+    #expect(
+        result.tokens.contains {
+            $0.kind == .property && NSEqualRanges($0.range, text.range(of: "attr"))
+        })
 }
