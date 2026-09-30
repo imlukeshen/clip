@@ -140,13 +140,23 @@ struct ClipApp: App {
                 .disabled(AppCommandRouter.availability(of: "edit.delete", in: model) != .available)
             }
             CommandMenu("Assets") {
-                Button(commandTitle("asset.search")) {
-                    AppCommandRouter.run("asset.search", in: model)
+                // One item, not two sharing Command-F. AppKit gives the
+                // shortcut to the first matching menu item and stops there, so a
+                // disabled first item swallows the key rather than letting an
+                // enabled second one have it — which is why Find did nothing in
+                // the PDF editor. Branching inside the action keeps one binding.
+                Button(model.pdfEditor != nil ? "Find in PDF…" : commandTitle("asset.search")) {
+                    if let pdfEditor = model.pdfEditor {
+                        pdfEditor.presentFindBar()
+                    } else {
+                        AppCommandRouter.run("asset.search", in: model)
+                    }
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(
-                    model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
-                        || model.textEditor != nil
+                    model.pdfEditor == nil
+                        && (model.editor != nil || model.imageEditor != nil
+                            || model.textEditor != nil)
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {

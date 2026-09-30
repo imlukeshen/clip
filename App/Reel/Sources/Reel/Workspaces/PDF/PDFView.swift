@@ -62,6 +62,7 @@ private struct PDFEditorView: View {
     @State private var inlineCaretOffset: Int?
     @State private var zoomLevel = CanvasZoom.fit
     @FocusState private var isInlineTextFocused: Bool
+    @FocusState private var isFindFieldFocused: Bool
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -331,6 +332,23 @@ private struct PDFEditorView: View {
                         zoomControls(scroller: scroller)
                             .padding(.bottom, 14)
                     }
+                    .overlay(alignment: .top) {
+                        if editor.showsFindBar {
+                            findBar
+                                .padding(.top, 12)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.16), value: editor.showsFindBar)
+                    // Focus the field as it opens, and again when Command-F is
+                    // pressed while it is already showing — which is how a find
+                    // bar is expected to behave.
+                    .onChange(of: editor.showsFindBar) { _, shows in
+                        isFindFieldFocused = shows
+                    }
+                    .onChange(of: editor.findBarFocusRequests) {
+                        isFindFieldFocused = true
+                    }
                 }
             } else {
                 ZStack {
@@ -343,6 +361,12 @@ private struct PDFEditorView: View {
             if !focused { commitParagraphEdit() }
         }
         .onExitCommand {
+            // Escape closes the find bar before anything else, which is what it
+            // does in every other find bar on the system.
+            if editor.showsFindBar {
+                editor.showsFindBar = false
+                return
+            }
             cancelParagraphEdit()
         }
         .onDeleteCommand {
@@ -366,6 +390,99 @@ private struct PDFEditorView: View {
         }
     }
 
+    /// Find bar, matching the composer and zoom controls that float over the page.
+    private var findBar: some View {
+        HStack(spacing: theme.metrics.spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            TextField("Find in document", text: $editor.findQuery)
+                .textFieldStyle(.plain)
+                .font(theme.type.body.font)
+                .frame(width: 180)
+                .focused($isFindFieldFocused)
+                .onSubmit { editor.stepFind(by: 1) }
+                .onChange(of: editor.findQuery) { editor.runFind() }
+                .accessibilityIdentifier("pdf-find-field")
+
+            if editor.isFinding {
+                ProgressView().controlSize(.small)
+            } else {
+                Text(
+                    editor.findMatches.isEmpty
+                        ? "None" : "\(editor.findIndex + 1) of \(editor.findMatches.count)"
+                )
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .frame(minWidth: 56, alignment: .trailing)
+                .monospacedDigit()
+            }
+
+            Button {
+                editor.stepFind(by: -1)
+            } label: {
+                Image(systemName: "chevron.up").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(editor.findMatches.isEmpty)
+            Button {
+                editor.stepFind(by: 1)
+            } label: {
+                Image(systemName: "chevron.down").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(editor.findMatches.isEmpty)
+
+            Divider().frame(height: 18)
+            Button("Redact All") { editor.redactFindMatches() }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.findMatches.isEmpty)
+            Button {
+                editor.showsFindBar = false
+            } label: {
+                Image(systemName: "xmark").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+        }
+        .padding(.horizontal, theme.metrics.spacing.md)
+        .padding(.vertical, theme.metrics.spacing.sm)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+    }
+
+    /// Draws every match on this page, with the stepped-to one emphasized.
+    @ViewBuilder private func findHighlights(in frame: CGRect) -> some View {
+        let current = editor.currentFindMatch
+        ForEach(Array(editor.findMatchesOnSelectedPage.enumerated()), id: \.offset) { _, match in
+            let isCurrent = match == current
+            Rectangle()
+                .fill(theme.palette.accent.opacity(isCurrent ? 0.38 : 0.18))
+                .overlay {
+                    Rectangle()
+                        .strokeBorder(
+                            theme.palette.accent.opacity(isCurrent ? 0.9 : 0.4),
+                            lineWidth: isCurrent ? 1.5 : 0.5
+                        )
+                }
+                .frame(
+                    width: max(match.rect.width * frame.width, 2),
+                    height: max(match.rect.height * frame.height, 2)
+                )
+                .position(
+                    x: frame.minX + (match.rect.midX * frame.width),
+                    y: frame.minY + (match.rect.midY * frame.height)
+                )
+                .allowsHitTesting(false)
+        }
+    }
+
     private func pageCanvas(_ image: CGImage, size: CGSize) -> some View {
         let frame = CGRect(origin: .zero, size: size)
         return ZStack {
@@ -382,6 +499,9 @@ private struct PDFEditorView: View {
                             handlePageTap(value.location, in: size)
                         }
                 )
+            if editor.showsFindBar {
+                findHighlights(in: frame)
+            }
             if let region = dragPreviewRect(in: frame) {
                 dragPreview(region)
             }

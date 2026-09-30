@@ -6,10 +6,18 @@ import Foundation
 public struct PDFToolExecutionContext: Sendable {
     public var document: PDFEditDocument
     public var selectedPageID: PDFPageID
+    /// Resolves a string to the rectangles it occupies, so the assistant can
+    /// redact something it was named rather than something it was measured.
+    public var locatingText: PDFTextLocating
 
-    public init(document: PDFEditDocument, selectedPageID: PDFPageID) {
+    public init(
+        document: PDFEditDocument,
+        selectedPageID: PDFPageID,
+        locatingText: @escaping PDFTextLocating = { _, _, _ in [] }
+    ) {
         self.document = document
         self.selectedPageID = selectedPageID
+        self.locatingText = locatingText
     }
 }
 
@@ -92,6 +100,47 @@ public struct PDFToolExecutor: Sendable {
                 to: pageID,
                 context: context,
                 message: "Prepared a PDF redaction."
+            )
+
+        case "pdf.findText":
+            let arguments = try invocation.arguments.decode(FindArguments.self)
+            let matches = try await context.locatingText(
+                context.document, arguments.text, Self.searchPage(arguments.pageID, in: context))
+            guard !matches.isEmpty else {
+                return PDFToolResult(
+                    message: "No occurrence of \"\(arguments.text)\" in "
+                        + Self.scope(arguments.pageID, in: context) + ".")
+            }
+            return PDFToolResult(message: Self.describe(matches), value: Self.describe(matches))
+
+        case "pdf.redactText":
+            let arguments = try invocation.arguments.decode(FindArguments.self)
+            let matches = try await context.locatingText(
+                context.document, arguments.text, Self.searchPage(arguments.pageID, in: context))
+            guard !matches.isEmpty else {
+                // Says where it looked. "Not in this document" was true of the
+                // pages actually searched and false of the document, which is
+                // the kind of answer that sends everyone hunting in the wrong
+                // place.
+                return PDFToolResult(
+                    message: "Nothing was redacted: \"\(arguments.text)\" was not found in "
+                        + Self.scope(arguments.pageID, in: context) + ".")
+            }
+            // One redaction layer per page, holding every match on it, so the
+            // whole request is a single undo rather than one per occurrence.
+            let byPage = Dictionary(grouping: matches, by: \.pageID)
+            var patches: [PDFPatch] = []
+            for (pageID, pageMatches) in byPage.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+                guard var page = context.document.page(pageID) else { continue }
+                page.layers.append(
+                    .redaction(PDFRedactionLayer(regions: pageMatches.map(\.rect))))
+                patches.append(.updatePage(page))
+            }
+            let count = matches.count
+            return PDFToolResult(
+                message:
+                    "Prepared \(count) redaction\(count == 1 ? "" : "s") of \"\(arguments.text)\".",
+                patches: patches
             )
 
         case "pdf.rotatePage":
@@ -182,7 +231,59 @@ private struct RectArguments: Codable {
     }
 }
 
+extension PDFToolExecutor {
+    /// Renders matches as text the model can act on without further lookups.
+    ///
+    /// Rounded to four places: a normalized page coordinate is precise to well
+    /// under a pixel there, and full double precision is a page of digits the
+    /// model has to carry through its next call.
+    static func describe(_ matches: [PDFTextMatch]) -> String {
+        let lines = matches.map { match in
+            let rect = match.rect
+            return "page \(match.pageID.rawValue) "
+                + "rect [\(round(rect.minX)), \(round(rect.minY)), "
+                + "\(round(rect.width)), \(round(rect.height))] — \(match.snippet)"
+        }
+        return "Found \(matches.count) match\(matches.count == 1 ? "" : "es"):\n"
+            + lines.joined(separator: "\n")
+    }
+
+    private static func round(_ value: CGFloat) -> String {
+        String(format: "%.4f", value)
+    }
+
+    /// The page to restrict a search to, or nil for the whole document.
+    ///
+    /// A page id that names no page means the whole document, not no document.
+    /// Page ids are opaque and a model cannot know one without calling
+    /// `pdf.findText` first, so asked to redact a word it reasonably fills the
+    /// optional in with "1" or "page 1" — and passing that straight through
+    /// searched zero pages and reported the word absent from a document it was
+    /// plainly in.
+    /// Describes what a search covered, for a message that can be acted on.
+    static func scope(_ requested: String?, in context: PDFToolExecutionContext) -> String {
+        guard let page = searchPage(requested, in: context),
+            let index = context.document.pages.firstIndex(where: { $0.id == page })
+        else {
+            let count = context.document.pages.count
+            return "any of the \(count) page\(count == 1 ? "" : "s")"
+        }
+        return "page \(index + 1)"
+    }
+
+    static func searchPage(_ value: String?, in context: PDFToolExecutionContext) -> PDFPageID? {
+        guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        let id = PDFPageID(rawValue: value)
+        return context.document.page(id) != nil ? id : nil
+    }
+}
+
 private struct PageArguments: Codable {
+    var pageID: String?
+}
+
+private struct FindArguments: Codable {
+    var text: String
     var pageID: String?
 }
 

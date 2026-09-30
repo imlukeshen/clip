@@ -419,6 +419,18 @@ public enum CommandRegistry {
             "pdf.redact", "Redact PDF Region", .pdf, destructive: true, exposure: .onDemand,
             required: ["rect"], properties: ["pageID": string, "rect": rect]),
         command(
+            "pdf.findText", "Find PDF Text", .pdf,
+            description:
+                "Locate every occurrence of a string and return its page and rectangle. Call this before pdf.redact or pdf.highlight, which need a rectangle.",
+            kind: .read, exposure: .onDemand,
+            required: ["text"], properties: ["text": string, "pageID": string]),
+        command(
+            "pdf.redactText", "Redact PDF Text", .pdf, destructive: true,
+            description:
+                "Redact every occurrence of a string. Prefer this over pdf.redact when the user names the text to hide rather than a region.",
+            exposure: .onDemand,
+            required: ["text"], properties: ["text": string, "pageID": string]),
+        command(
             "pdf.rotatePage", "Rotate PDF Page", .pdf, exposure: .onDemand,
             properties: ["pageID": string]),
         command(
@@ -535,6 +547,24 @@ public enum ToolCatalog {
     public static var all: [ToolSchema] {
         CommandRegistry.all.compactMap { command in
             command.agentExposure == .always ? command.schema : nil
+        }
+    }
+
+    /// The always-exposed tools plus the on-demand ones for `categories`.
+    ///
+    /// On-demand tools are reachable only through meta-tool discovery, which
+    /// costs a round trip and asks the model to find a name it was never shown.
+    /// A capable model manages it; a small local one does not, which is how
+    /// "redact this word" in the PDF workspace became a long wait and nothing
+    /// happening — `pdf.redact` exists, but was never offered. Tools for the
+    /// workspace that is actually open are worth their place in the list.
+    public static func all(expanding categories: Set<CommandCategory>) -> [ToolSchema] {
+        CommandRegistry.all.compactMap { command in
+            switch command.agentExposure {
+            case .always: command.schema
+            case .onDemand: categories.contains(command.category) ? command.schema : nil
+            case .never: nil
+            }
         }
     }
 

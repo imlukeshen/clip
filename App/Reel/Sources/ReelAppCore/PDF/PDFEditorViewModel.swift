@@ -89,6 +89,7 @@ public final class PDFEditorViewModel {
     public let undoManager = UndoManager()
 
     private let source: PDFiumDocument
+    private var findTask: Task<Void, Never>?
     private let renderer: PDFDocumentRenderer
     private let markdownConverter: PDFMarkdownConverter
     private let toolExecutor: PDFToolExecutor
@@ -97,6 +98,7 @@ public final class PDFEditorViewModel {
     private var renderTask: Task<Void, Never>?
     private var thumbnailTask: Task<Void, Never>?
     private var persistenceTask: Task<Void, Never>?
+    private var autosaveTask: Task<Void, Never>?
     private let signatureStore = SavedSignatureStore()
 
     public init(
@@ -274,6 +276,13 @@ public final class PDFEditorViewModel {
     public func stop() {
         renderTask?.cancel()
         thumbnailTask?.cancel()
+        // Take the pending autosave now rather than losing it: the debounce
+        // exists to batch typing, not to drop the last edit on close.
+        if autosaveTask != nil {
+            autosaveTask?.cancel()
+            autosaveTask = nil
+            saveToLastDerivative()
+        }
         flushPersistence()
     }
 
@@ -871,6 +880,26 @@ public final class PDFEditorViewModel {
     /// Save therefore confirms that, and refreshes an exported copy when one
     /// has already been chosen. It deliberately never opens a file picker:
     /// choosing a destination is Save As, on Shift-Command-S.
+    /// Writes the edits into the edited copy shortly after typing stops.
+    ///
+    /// Only ever to a destination already chosen with Save As. The source PDF is
+    /// never written: ADR-0013 makes an in-place save destructive — it flattens
+    /// the layers and discards the non-destructive model — and that is not
+    /// something to do on a timer while someone is still editing. Until a
+    /// destination exists this does nothing, and Save As remains the one
+    /// deliberate step.
+    private func scheduleAutosave() {
+        guard derivativeURL != nil, !isExporting else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            // Long enough that a burst of typing is one write rather than one
+            // per keystroke, short enough to be gone before anyone quits.
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, derivativeURL != nil else { return }
+            saveToLastDerivative()
+        }
+    }
+
     public func saveEdits() {
         persist()
         guard !saveToLastDerivative() else { return }
@@ -946,11 +975,176 @@ public final class PDFEditorViewModel {
         }
     }
 
+    // MARK: - Find
+
+    public var findQuery: String = ""
+    public private(set) var findMatches: [PDFTextMatch] = []
+    public private(set) var findIndex: Int = 0
+    public private(set) var isFinding = false
+    public var showsFindBar = false {
+        didSet {
+            guard !showsFindBar else { return }
+            findQuery = ""
+            findMatches = []
+            findIndex = 0
+        }
+    }
+    /// Bumped whenever Find is invoked, so the field can take focus again even
+    /// when the bar was already open and `showsFindBar` therefore did not change.
+    public private(set) var findBarFocusRequests = 0
+
+    public func presentFindBar() {
+        showsFindBar = true
+        findBarFocusRequests &+= 1
+    }
+
+    /// The match currently stepped to, for the page view to highlight.
+    public var currentFindMatch: PDFTextMatch? {
+        guard findMatches.indices.contains(findIndex) else { return nil }
+        return findMatches[findIndex]
+    }
+
+    /// Matches on the page being shown, so the highlight follows the page.
+    public var findMatchesOnSelectedPage: [PDFTextMatch] {
+        findMatches.filter { $0.pageID == selectedPageID }
+    }
+
+    public func runFind() {
+        let query = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        findTask?.cancel()
+        guard !query.isEmpty else {
+            findMatches = []
+            findIndex = 0
+            return
+        }
+        isFinding = true
+        let locate = textLocator()
+        let document = document
+        findTask = Task {
+            defer { isFinding = false }
+            let found = (try? await locate(document, query, nil)) ?? []
+            guard !Task.isCancelled else { return }
+            findMatches = found
+            findIndex = 0
+            // Follow the first hit, which is usually on another page: a find
+            // that reports matches while showing none of them reads as broken.
+            if let first = found.first, first.pageID != selectedPageID {
+                selectPage(first.pageID)
+            }
+        }
+    }
+
+    public func stepFind(by offset: Int) {
+        guard !findMatches.isEmpty else { return }
+        findIndex = (findIndex + offset + findMatches.count) % findMatches.count
+        let match = findMatches[findIndex]
+        if match.pageID != selectedPageID { selectPage(match.pageID) }
+    }
+
+    /// Redacts every current match, as one undo entry.
+    public func redactFindMatches() {
+        guard !findMatches.isEmpty else { return }
+        let byPage = Dictionary(grouping: findMatches, by: \.pageID)
+        var patches: [PDFPatch] = []
+        for (pageID, matches) in byPage.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+            guard var page = document.page(pageID) else { continue }
+            page.layers.append(.redaction(PDFRedactionLayer(regions: matches.map(\.rect))))
+            patches.append(.updatePage(page))
+        }
+        guard !patches.isEmpty else { return }
+        do {
+            try perform(patches, actionName: "Redact Matches")
+            notice = "Redacted \(findMatches.count) match\(findMatches.count == 1 ? "" : "es")."
+        } catch {
+            notice = "Those matches could not be redacted."
+        }
+    }
+
+    /// Searches the document's glyphs for a string.
+    ///
+    /// Analyses each page in turn rather than reusing the rendered page's
+    /// analysis, because only the selected page has one and a request to redact
+    /// a name means every page it appears on, not the one that happens to be
+    /// open. Runs detached: analysis is PDFium work and has no business on the
+    /// main actor.
+    nonisolated func textLocator() -> PDFTextLocating {
+        let source = source
+        let fontStore = fontStore
+        return { document, query, restrictedTo in
+            let pages = document.pages.filter { restrictedTo == nil || $0.id == restrictedTo }
+            return try await Task.detached(priority: .userInitiated) {
+                var matches: [PDFTextMatch] = []
+                for page in pages {
+                    // Only layers that stand on their own. A layer carrying a
+                    // sourceReference replaces a real page object, and the
+                    // analysis below is asked to apply it — so searching both
+                    // found the same word twice and drew two highlights, one
+                    // from each measurement.
+                    for layer in page.layers {
+                        guard case .text(let text) = layer, text.sourceReference == nil else {
+                            continue
+                        }
+                        for found in PDFLayerTextSearch.matches(of: query, in: text) {
+                            matches.append(
+                                PDFTextMatch(
+                                    pageID: page.id, rect: found.rect, snippet: found.snippet))
+                        }
+                    }
+                    guard let index = page.sourcePageIndex else { continue }
+                    let edits = page.layers.compactMap { layer -> PDFTextLayer? in
+                        guard case .text(let text) = layer, text.sourceReference != nil else {
+                            return nil
+                        }
+                        return text
+                    }
+                    guard
+                        let analysis = try? source.analyzePage(
+                            at: index,
+                            applying: edits,
+                            fontData: { fontStore.cachedData(for: $0) }
+                        )
+                    else { continue }
+                    for found in PDFGlyphTextSearch.matches(of: query, in: analysis.glyphs) {
+                        matches.append(
+                            PDFTextMatch(pageID: page.id, rect: found.rect, snippet: found.snippet))
+                    }
+                }
+                return matches
+            }.value
+        }
+    }
+
+    /// Runs an assistant-issued PDF command and reports what it did.
+    ///
+    /// Goes through `perform`, the same mutation path the UI uses, so an edit
+    /// the assistant makes is one undo entry and reaches the document the same
+    /// way a click would.
+    public func runAssistantCommand(_ invocation: ToolInvocation) async throws -> String {
+        let result = try await toolExecutor.execute(
+            invocation,
+            context: PDFToolExecutionContext(
+                document: document,
+                selectedPageID: selectedPageID,
+                locatingText: textLocator()
+            )
+        )
+        if !result.patches.isEmpty {
+            try perform(
+                result.patches,
+                actionName: CommandRegistry.command(named: invocation.name)?.title
+                    ?? invocation.name
+            )
+        }
+        if invocation.name == "pdf.toMarkdown" { generatedMarkdown = result.value }
+        return result.message
+    }
+
     public func runPDFCommand(_ id: String) {
         let arguments = defaultArguments(for: id)
         let context = PDFToolExecutionContext(
             document: document,
-            selectedPageID: selectedPageID
+            selectedPageID: selectedPageID,
+            locatingText: textLocator()
         )
         if id == "pdf.ocrPage" { isRecognizingText = true }
         if id == "pdf.toMarkdown" { isExportingMarkdown = true }
@@ -1074,6 +1268,7 @@ public final class PDFEditorViewModel {
                 notice = "The PDF edits could not be saved locally."
             }
         }
+        scheduleAutosave()
     }
 
     private func registerUndo(_ patches: [PDFPatch], actionName: String) {

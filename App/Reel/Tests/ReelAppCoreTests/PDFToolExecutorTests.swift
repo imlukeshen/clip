@@ -11,11 +11,59 @@ struct PDFToolExecutorTests {
         let expected = Set([
             "pdf.describe", "pdf.addText", "pdf.highlight", "pdf.redact",
             "pdf.rotatePage", "pdf.reorderPage", "pdf.ocrPage", "pdf.toMarkdown",
+            // Redaction takes a rectangle, and nothing told the assistant where
+            // a word was, so "redact this name" had no path to an argument.
+            "pdf.findText", "pdf.redactText",
         ])
         let commands = CommandRegistry.all.filter { $0.category == .pdf }
         #expect(Set(commands.map(\.id.rawValue)) == expected)
         #expect(commands.allSatisfy { $0.schema.hasValidObjectSchema })
         #expect(commands.allSatisfy { $0.agentExposure != .never })
+    }
+
+    @Test("A page id the model invented searches the whole document, not none")
+    func unknownPageIdDoesNotNarrowToNothing() async throws {
+        let document = try fixtureDocument()
+        let requested = PageRecorder()
+        var context = PDFToolExecutionContext(
+            document: document,
+            selectedPageID: document.pages[0].id
+        )
+        context.locatingText = { _, _, page in
+            await requested.record(page)
+            return []
+        }
+        let executor = PDFToolExecutor(
+            recognizer: { _, _ in "" },
+            markdownConverter: { _ in "" }
+        )
+
+        // Page ids are opaque UUIDs. A model told to redact a word cannot know
+        // one, so it fills the optional with something plausible — and passing
+        // that through searched no pages and reported the word absent.
+        _ = try await executor.execute(
+            ToolInvocation(
+                callID: "call",
+                name: "pdf.findText",
+                arguments: .object(["text": .string("jiawei"), "pageID": .string("1")])
+            ),
+            context: context
+        )
+        #expect(await requested.value == .some(nil))
+
+        // A real page id still narrows the search.
+        _ = try await executor.execute(
+            ToolInvocation(
+                callID: "call",
+                name: "pdf.findText",
+                arguments: .object([
+                    "text": .string("jiawei"),
+                    "pageID": .string(document.pages[0].id.rawValue),
+                ])
+            ),
+            context: context
+        )
+        #expect(await requested.value == .some(document.pages[0].id))
     }
 
     @Test("All PDF commands execute through the shared patch path")
@@ -84,4 +132,9 @@ struct PDFToolExecutorTests {
             ]
         )
     }
+}
+
+private actor PageRecorder {
+    private(set) var value: PDFPageID??
+    func record(_ page: PDFPageID?) { value = .some(page) }
 }
