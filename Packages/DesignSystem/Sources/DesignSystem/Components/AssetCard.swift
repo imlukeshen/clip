@@ -12,6 +12,7 @@ public struct AssetCard<Thumbnail: View>: View {
     public static var thumbnailAspectRatio: CGFloat { 1.6 }
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     private let title: String
@@ -73,7 +74,7 @@ public struct AssetCard<Thumbnail: View>: View {
                                             theme.palette.accent
                                         )
                                         .font(.system(size: 17))
-                                        .padding(7)
+                                        .padding(theme.metrics.spacing.sm)
                                 }
                             }
                             .overlay(alignment: .topTrailing) {
@@ -82,10 +83,10 @@ public struct AssetCard<Thumbnail: View>: View {
                                         .labelStyle(.iconOnly)
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundStyle(.white)
-                                        .padding(6)
+                                        .padding(theme.metrics.spacing.sm)
                                         .background(.black.opacity(0.6))
                                         .clipShape(Circle())
-                                        .padding(7)
+                                        .padding(theme.metrics.spacing.sm)
                                         .help("Double-click to open")
                                 }
                             }
@@ -94,7 +95,7 @@ public struct AssetCard<Thumbnail: View>: View {
                                 .font(theme.type.numeric.font)
                                 .foregroundStyle(theme.palette.textSecondary)
                                 .padding(.vertical, 1)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, theme.metrics.spacing.xs)
                                 .background(theme.palette.surfaceSunken.opacity(0.8))
                                 .clipShape(
                                     RoundedRectangle(
@@ -102,7 +103,7 @@ public struct AssetCard<Thumbnail: View>: View {
                                         style: .continuous
                                     )
                                 )
-                                .padding(5)
+                                .padding(theme.metrics.spacing.sm)
                         }
                         if case .ingesting(let progress) = state {
                             ProgressView(value: progress)
@@ -113,7 +114,7 @@ public struct AssetCard<Thumbnail: View>: View {
                     .aspectRatio(Self.thumbnailAspectRatio, contentMode: .fit)
                     .background(theme.palette.surfaceSunken)
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
                         Text(title)
                             .font(theme.type.caption.font)
                             .foregroundStyle(theme.palette.textPrimary)
@@ -129,7 +130,7 @@ public struct AssetCard<Thumbnail: View>: View {
                                 .lineLimit(2)
                         }
                     }
-                    .padding(9)
+                    .padding(theme.metrics.spacing.md)
                 }
             }
             .buttonStyle(ReelPlainButtonStyle())
@@ -145,8 +146,8 @@ public struct AssetCard<Thumbnail: View>: View {
                     .buttonStyle(ReelIconButtonStyle())
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.accent)
-                    .padding(.horizontal, 9)
-                    .padding(.bottom, 9)
+                    .padding(.horizontal, theme.metrics.spacing.md)
+                    .padding(.bottom, theme.metrics.spacing.md)
             }
         }
         .background(
@@ -172,14 +173,14 @@ public struct AssetCard<Thumbnail: View>: View {
                 .foregroundStyle(theme.palette.textSecondary)
                 .background(theme.palette.surfaceRaised)
                 .clipShape(Circle())
-                .padding(.trailing, 7)
-                .padding(.bottom, 31)
+                .padding(.trailing, theme.metrics.spacing.sm)
+                .padding(.bottom, 35)
                 .help("Rename file")
                 .accessibilityLabel("Rename \(title)")
             }
         }
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .animation(reduceMotion ? nil : ReelMotion.buttonHover, value: isHovered)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(metadata)")
     }

@@ -22,21 +22,32 @@ private struct ReelPlainButtonBody: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
+    @State private var isFlashing = false
     let configuration: ButtonStyleConfiguration
 
     var body: some View {
         configuration.label
             .contentShape(Rectangle())
             .opacity(opacity)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .scaleEffect(pressScale)
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: isFlashing)
             .animation(ReelMotion.buttonHover, value: isHovered)
+            .buttonPressFlash(isPressed: configuration.isPressed, isFlashing: $isFlashing)
             .onHover { isHovered = $0 }
+    }
+
+    /// Dips under the pointer, then springs briefly past rest on release so a
+    /// quick click is still visible after the button is let go.
+    private var pressScale: CGFloat {
+        guard !reduceMotion else { return 1 }
+        if configuration.isPressed { return 0.94 }
+        return isFlashing ? 1.04 : 1
     }
 
     private var opacity: Double {
         guard isEnabled else { return 0.36 }
-        if configuration.isPressed { return 0.7 }
+        if configuration.isPressed { return 0.62 }
         return isHovered ? 0.82 : 1
     }
 }
@@ -62,6 +73,7 @@ private struct ReelIconButtonBody: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
+    @State private var isFlashing = false
     let configuration: ButtonStyleConfiguration
     let theme: Theme
     let isActive: Bool
@@ -77,15 +89,24 @@ private struct ReelIconButtonBody: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
             .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.34)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.93 : 1))
+            .scaleEffect(pressScale)
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: isFlashing)
             .animation(ReelMotion.buttonHover, value: isHovered)
             .animation(ReelMotion.buttonHover, value: isActive)
+            .buttonPressFlash(isPressed: configuration.isPressed, isFlashing: $isFlashing)
             .onHover { isHovered = $0 }
     }
 
+    private var pressScale: CGFloat {
+        guard !reduceMotion else { return 1 }
+        if configuration.isPressed { return 0.92 }
+        return isFlashing ? 1.05 : 1
+    }
+
     private var backgroundColor: Color {
-        if configuration.isPressed { return theme.palette.accentDim }
+        if configuration.isPressed { return theme.palette.accentLine }
+        if isFlashing { return theme.palette.accentLine }
         if isActive { return theme.palette.accentDim }
         if isHovered && isEnabled { return theme.palette.surfaceRaised }
         return .clear
@@ -106,6 +127,7 @@ private struct ReelProminentButtonBody: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
+    @State private var isFlashing = false
     let configuration: ButtonStyleConfiguration
     let theme: Theme
 
@@ -120,9 +142,11 @@ private struct ReelProminentButtonBody: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
             .opacity(prominenceOpacity)
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.97 : 1))
+            .scaleEffect(pressScale)
             .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : ReelMotion.buttonPress, value: isFlashing)
             .animation(ReelMotion.buttonHover, value: isHovered)
+            .buttonPressFlash(isPressed: configuration.isPressed, isFlashing: $isFlashing)
             .onHover { isHovered = $0 }
     }
 
@@ -130,7 +154,13 @@ private struct ReelProminentButtonBody: View {
     /// from the fill easing back instead.
     private var prominenceOpacity: Double {
         guard isEnabled else { return 0.36 }
-        if configuration.isPressed { return 0.78 }
+        if configuration.isPressed { return 0.7 }
         return isHovered ? 0.88 : 1
+    }
+
+    private var pressScale: CGFloat {
+        guard !reduceMotion else { return 1 }
+        if configuration.isPressed { return 0.94 }
+        return isFlashing ? 1.04 : 1
     }
 }
