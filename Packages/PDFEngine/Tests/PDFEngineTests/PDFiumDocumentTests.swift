@@ -380,6 +380,58 @@ struct PDFiumDocumentTests {
         #expect(try source.analyzePage(at: 0).text.contains("Hello PDFium"))
     }
 
+    @Test("A placed text layer is actually drawn on the page")
+    func placedTextLayerIsDrawn() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "placed-text"),
+            title: "Placed"
+        )
+        let pageID = document.pages[0].id
+        let page = try #require(document.page(pageID))
+        let renderer = PDFDocumentRenderer(source: source)
+        let before = try darkPixelCount(renderer.render(document, pageID: pageID))
+
+        // Sized the way the signature tool sizes one: measured text, padded.
+        let pointSize = page.size.height * 0.045
+        let layer = PDFTextLayer(
+            text: "Luke Shen",
+            frame: CGRect(x: 0.1, y: 0.4, width: 0.5, height: 0.12),
+            font: PDFFontDescriptor(postScriptName: "SnellRoundhand-Black"),
+            fontSize: pointSize
+        )
+        _ = try document.apply(.addLayer(.text(layer), to: pageID, atIndex: 0))
+
+        let after = try darkPixelCount(renderer.render(document, pageID: pageID))
+        #expect(after > before, "placed text drew nothing: before=\(before) after=\(after)")
+    }
+
+    @Test("Text too large for its frame still draws")
+    func oversizedTextStillDraws() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "oversized-text"),
+            title: "Oversized"
+        )
+        let pageID = document.pages[0].id
+        let renderer = PDFDocumentRenderer(source: source)
+        let before = try darkPixelCount(renderer.render(document, pageID: pageID))
+
+        // A frame far too small for the text, as a stale layer or a bad size
+        // estimate produces. CTFrameDraw lays out nothing in that case, which
+        // used to erase the layer silently.
+        let layer = PDFTextLayer(
+            text: "Luke Shen",
+            frame: CGRect(x: 0.05, y: 0.4, width: 0.08, height: 0.03),
+            font: PDFFontDescriptor(postScriptName: "Zapfino"),
+            fontSize: 68
+        )
+        _ = try document.apply(.addLayer(.text(layer), to: pageID, atIndex: 0))
+
+        let after = try darkPixelCount(renderer.render(document, pageID: pageID))
+        #expect(after > before, "oversized text vanished: before=\(before) after=\(after)")
+    }
+
     private func fixturePDF() throws -> Data {
         let data = NSMutableData()
         let consumer = try #require(CGDataConsumer(data: data))

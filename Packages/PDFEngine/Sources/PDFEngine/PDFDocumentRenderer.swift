@@ -149,16 +149,25 @@ public struct PDFDocumentRenderer: Sendable {
         case .text(let text):
             guard text.sourceReference == nil else { return }
             let rect = outputRect(text.frame, size: size)
-            let pointSize = max(text.fontSize / page.size.height * Double(size.height), 1)
+            guard !text.text.isEmpty, rect.width > 0, rect.height > 0 else { return }
+            let requested = max(text.fontSize / page.size.height * Double(size.height), 1)
+            // Shrink to fit rather than vanish. CTFrameDraw lays out no lines at
+            // all when the text cannot fit its path, so a frame even slightly
+            // too small silently erased the layer instead of overflowing it.
+            let pointSize = fittedPointSize(
+                text.text,
+                fontName: text.font.postScriptName,
+                requested: requested,
+                in: rect
+            )
             let font = CTFontCreateWithName(text.font.postScriptName as CFString, pointSize, nil)
             let attributes: [NSAttributedString.Key: Any] = [
                 NSAttributedString.Key(kCTFontAttributeName as String): font,
                 NSAttributedString.Key(kCTForegroundColorAttributeName as String): color(
                     text.color),
             ]
-            let framesetter = CTFramesetterCreateWithAttributedString(
-                NSAttributedString(string: text.text, attributes: attributes)
-            )
+            let attributed = NSAttributedString(string: text.text, attributes: attributes)
+            let framesetter = CTFramesetterCreateWithAttributedString(attributed)
             let path = CGPath(rect: rect, transform: nil)
             let frame = CTFramesetterCreateFrame(
                 framesetter,
@@ -178,6 +187,52 @@ public struct PDFDocumentRenderer: Sendable {
                 context.fill(outputRect(region, size: size))
             }
         }
+    }
+
+    /// Largest size at or below `requested` whose text fits `rect`.
+    ///
+    /// Bounded and coarse on purpose: this is a safety net for a frame that no
+    /// longer matches its text, not a layout engine.
+    private func fittedPointSize(
+        _ text: String,
+        fontName: String,
+        requested: Double,
+        in rect: CGRect
+    ) -> Double {
+        var size = requested
+        // Solve for the scale rather than stepping towards it: a stale frame can
+        // be an order of magnitude too small, which no bounded loop would reach.
+        for _ in 0..<4 {
+            guard let needed = measuredSize(text, fontName: fontName, pointSize: size),
+                needed.width > 0, needed.height > 0
+            else { return max(size, 1) }
+            if needed.width <= rect.width, needed.height <= rect.height { return size }
+            let scale = min(rect.width / needed.width, rect.height / needed.height)
+            size = max(size * scale * 0.98, 1)
+            if size <= 1 { return 1 }
+        }
+        return max(size, 1)
+    }
+
+    /// Size the text occupies when laid out on one line at `pointSize`.
+    private func measuredSize(
+        _ text: String,
+        fontName: String,
+        pointSize: Double
+    ) -> CGSize? {
+        let font = CTFontCreateWithName(fontName as CFString, pointSize, nil)
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]
+        )
+        let setter = CTFramesetterCreateWithAttributedString(attributed)
+        return CTFramesetterSuggestFrameSizeWithConstraints(
+            setter,
+            CFRange(location: 0, length: 0),
+            nil,
+            CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+            nil
+        )
     }
 
     private func outputRect(
