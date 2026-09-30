@@ -77,6 +77,10 @@ public final class PDFEditorViewModel {
     /// Name the signature tool will place, shared with its composer.
     public var signatureName = ""
     public var signatureStyle: PDFSignatureStyle = .flowing
+    /// Signatures the user has adopted and can stamp again.
+    public private(set) var savedSignatures: [SavedSignature] = []
+    /// Which saved signature the next click places, if any.
+    public var selectedSignatureID: UUID?
     public var automaticallyResolveMissingFonts: Bool
     /// Current library location for the source PDF.
     public private(set) var sourceURL: URL
@@ -93,6 +97,7 @@ public final class PDFEditorViewModel {
     private var renderTask: Task<Void, Never>?
     private var thumbnailTask: Task<Void, Never>?
     private var persistenceTask: Task<Void, Never>?
+    private let signatureStore = SavedSignatureStore()
 
     public init(
         document: PDFEditDocument,
@@ -260,6 +265,8 @@ public final class PDFEditorViewModel {
     }
 
     public func start() {
+        savedSignatures = signatureStore.load()
+        selectedSignatureID = savedSignatures.first?.id
         rebuild()
         rebuildThumbnails()
     }
@@ -461,6 +468,41 @@ public final class PDFEditorViewModel {
             y: min(max(point.y - height / 2, 0), 1 - height)
         )
         return addText(in: CGRect(origin: origin, size: CGSize(width: width, height: height)))
+    }
+
+    /// Keeps the current name and style for reuse in any document.
+    public func adoptSignature() {
+        let trimmed = signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            notice = "Type a name to save a signature."
+            return
+        }
+        let existing = savedSignatures.first {
+            $0.name == trimmed && $0.style == signatureStyle
+        }
+        if let existing {
+            selectedSignatureID = existing.id
+            return
+        }
+        let adopted = SavedSignature(name: trimmed, style: signatureStyle)
+        savedSignatures.append(adopted)
+        selectedSignatureID = adopted.id
+        signatureStore.save(savedSignatures)
+    }
+
+    public func removeSignature(_ id: UUID) {
+        savedSignatures.removeAll { $0.id == id }
+        if selectedSignatureID == id { selectedSignatureID = savedSignatures.first?.id }
+        signatureStore.save(savedSignatures)
+    }
+
+    /// Makes a saved signature the one the next click places.
+    public func useSignature(_ id: UUID) {
+        guard let signature = savedSignatures.first(where: { $0.id == id }) else { return }
+        selectedSignatureID = id
+        signatureName = signature.name
+        signatureStyle = signature.style
+        activeTool = .signature
     }
 
     /// Places a typed signature, sized to the name it spells.

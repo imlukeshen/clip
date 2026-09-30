@@ -192,11 +192,64 @@ private struct PDFLayerInspector: View {
 
                 signaturePreview
 
+                Button("Save signature", action: editor.adoptSignature)
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(
+                        editor.signatureName
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("pdf-signature-adopt")
+
+                if !editor.savedSignatures.isEmpty {
+                    SectionLabel("Saved")
+                    VStack(spacing: theme.metrics.spacing.xs) {
+                        ForEach(editor.savedSignatures) { signature in
+                            savedSignatureRow(signature)
+                        }
+                    }
+                }
+
                 Text("Click the page to place it, then drag to position.")
                     .font(theme.type.micro.font)
                     .foregroundStyle(theme.palette.textTertiary)
             }
         }
+    }
+
+    /// One adopted signature, stamped with a single click.
+    private func savedSignatureRow(_ signature: SavedSignature) -> some View {
+        let isSelected = editor.selectedSignatureID == signature.id
+        return HStack(spacing: theme.metrics.spacing.sm) {
+            Button {
+                editor.useSignature(signature.id)
+            } label: {
+                Text(signature.name)
+                    .font(.custom(signature.style.fontDescriptor.postScriptName, size: 20))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, theme.metrics.spacing.xs)
+                    .padding(.horizontal, theme.metrics.spacing.sm)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .help("Use this signature, then click the page")
+
+            Button {
+                editor.removeSignature(signature.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(theme.type.micro.font)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .help("Remove this saved signature")
+        }
+        .background(isSelected ? theme.palette.accentDim : .clear)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+        )
     }
 
     /// Shows the name in the chosen face before it is committed to the page.

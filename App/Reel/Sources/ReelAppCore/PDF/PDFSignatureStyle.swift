@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Signatures are ordinary text layers rather than pasted images, so they stay
 /// vector in the page, scale cleanly, and can be re-typed rather than redrawn.
-public enum PDFSignatureStyle: String, CaseIterable, Sendable, Identifiable {
+public enum PDFSignatureStyle: String, Codable, CaseIterable, Sendable, Identifiable {
     case flowing
     case formal
     case casual
