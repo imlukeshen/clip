@@ -126,16 +126,18 @@ struct LibrarySidebar: View {
         // sidebar, the way they do in Finder and Xcode. Only the fill extends —
         // the rows stay inside the safe area and clear the buttons.
         .background(theme.palette.surfacePanel.ignoresSafeArea(.container, edges: .top))
-        .alert("New Folder", isPresented: $showsNewFolder) {
-            TextField("Folder name", text: $newFolderName)
-            Button("Cancel", role: .cancel) {}
-            Button("Create") {
+        .sheet(isPresented: $showsNewFolder) {
+            NewFolderSheet(
+                destinationName: model.selectedFolderPath.flatMap { path in
+                    path.isEmpty ? nil : (path as NSString).lastPathComponent
+                } ?? "Media",
+                name: $newFolderName
+            ) {
                 model.createFolder(
                     named: newFolderName,
                     in: model.selectedFolderPath ?? ""
                 )
             }
-            .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
 
@@ -340,7 +342,10 @@ private struct FolderTreeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                if node.children != nil || node.id != "Inbox" {
+                // Driven by hasChildren, not by whether children happen to be
+                // loaded: reading `children` removed Inbox's own chevron the
+                // moment it was collapsed, with no way to expand it again.
+                if node.hasChildren {
                     Button {
                         model.toggleFolderExpansion(node.id)
                     } label: {
@@ -438,10 +443,13 @@ private struct FolderTreeRow: View {
             Button("Cancel", role: .cancel) {}
             Button("Rename") { model.renameFolder(node.id, to: renameValue) }
         }
-        .alert("New Folder", isPresented: $showsNewFolder) {
-            TextField("Folder name", text: $newFolderValue)
-            Button("Cancel", role: .cancel) {}
-            Button("Create") { model.createFolder(named: newFolderValue, in: node.id) }
+        .sheet(isPresented: $showsNewFolder) {
+            NewFolderSheet(
+                destinationName: node.name,
+                name: $newFolderValue
+            ) {
+                model.createFolder(named: newFolderValue, in: node.id)
+            }
         }
     }
 }
