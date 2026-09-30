@@ -43,10 +43,16 @@ struct ClipApp: App {
     }
 
     var body: some Scene {
-        Window("Clip", id: "main") {
+        Window("clipx", id: "main") {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
-                .onAppear { appDelegate.install(model: model) }
+                .onAppear {
+                    appDelegate.install(model: model)
+                    ApplicationAppearance.apply(model.appearance, to: .shared)
+                }
+                .onChange(of: model.appearance) { _, appearance in
+                    ApplicationAppearance.apply(appearance, to: .shared)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
@@ -124,15 +130,33 @@ struct ClipApp: App {
                             && model.pdfEditor == nil && model.textEditor == nil
                             && !model.undoManager.canRedo)
                 )
+                Divider()
+                // No key equivalent: the Delete key is handled per editor by
+                // `onDeleteCommand`, which respects focus. A menu shortcut here
+                // would take the key from every text field in the app.
+                Button(commandTitle("edit.delete")) {
+                    AppCommandRouter.run("edit.delete", in: model)
+                }
+                .disabled(AppCommandRouter.availability(of: "edit.delete", in: model) != .available)
             }
             CommandMenu("Assets") {
-                Button(commandTitle("asset.search")) {
-                    AppCommandRouter.run("asset.search", in: model)
+                // One item, not two sharing Command-F. AppKit gives the
+                // shortcut to the first matching menu item and stops there, so a
+                // disabled first item swallows the key rather than letting an
+                // enabled second one have it — which is why Find did nothing in
+                // the PDF editor. Branching inside the action keeps one binding.
+                Button(model.pdfEditor != nil ? "Find in PDF…" : commandTitle("asset.search")) {
+                    if let pdfEditor = model.pdfEditor {
+                        pdfEditor.presentFindBar()
+                    } else {
+                        AppCommandRouter.run("asset.search", in: model)
+                    }
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(
-                    model.editor != nil || model.imageEditor != nil || model.pdfEditor != nil
-                        || model.textEditor != nil
+                    model.pdfEditor == nil
+                        && (model.editor != nil || model.imageEditor != nil
+                            || model.textEditor != nil)
                 )
                 Divider()
                 Button(commandTitle("asset.selectAll")) {

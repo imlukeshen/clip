@@ -6,7 +6,7 @@ Project context for Claude Code. Read this before touching anything.
 
 ## What this is
 
-Clip is a local-first screen demo editor for macOS, using Swift 6 language mode
+clipx is a local-first screen demo editor for macOS, using Swift 6 language mode
 and Swift 6.2 package manifests, targeting macOS 14+. Captures come from the
 **system** screenshot tools — there
 is no in-app recorder. The app ingests them, stitches them on a timeline, edits
@@ -105,7 +105,7 @@ Plus two structural rules CI enforces:
 
 ```bash
 make bootstrap      # toolchain deps — run once
-make generate       # project.yml → Clip.xcodeproj (and removes the stale Reel project)
+make generate       # project.yml → clipx.xcodeproj (and removes the stale Reel/Clip projects)
 make xcode          # generate and open the one supported Xcode project
 make test-packages  # fast: packages only, no Xcode, ~90s — use this while iterating
 make test           # packages + app targets
@@ -196,7 +196,14 @@ tradeoff and ask.
 3. **Undo coalescing window** for continuous trim gestures.
 4. **HDR captures.** v1 tone-maps to sRGB; may need to become a real pipeline
    decision.
-5. **The name.** "Reel" is a placeholder throughout every document.
+5. ~~**The name.**~~ Settled: the product is **clipx**. Note that this is the
+   *product* name only. The Swift modules, the `App/Reel/` directory, and the
+   bundle identifier `app.reel.editor` are still the original internal names,
+   and renaming them is a separate change — the bundle identifier in particular
+   is the app's identity for preferences and TCC grants, so changing it would
+   reset both. On-disk state is looked up through
+   `AppModel.preferredAppDirectory`, which prefers `clipx` and falls back to
+   `Clip` then `Reel`, so a library made under an earlier name keeps working.
 
 ---
 

@@ -34,8 +34,17 @@ public struct ChatRequest: Codable, Sendable, Equatable {
     public var tools: [ToolSchema]
     public var maxTokens: Int
     public var purpose: EgressPurpose
-    public var mediaAttached: Bool
     public var mediaConsent: Bool
+
+    /// Whether this request carries any image.
+    ///
+    /// Derived rather than passed in. As a flag it could disagree with the
+    /// messages, and the disagreement that matters is the one that sends a
+    /// screenshot to a provider while reporting to the consent gate and the
+    /// egress ledger that nothing was attached.
+    public var mediaAttached: Bool {
+        messages.contains { !$0.images.isEmpty }
+    }
 
     public init(
         model: String,
@@ -44,7 +53,6 @@ public struct ChatRequest: Codable, Sendable, Equatable {
         tools: [ToolSchema] = ToolCatalog.all,
         maxTokens: Int = 2_048,
         purpose: EgressPurpose = .chat,
-        mediaAttached: Bool = false,
         mediaConsent: Bool = false
     ) {
         self.model = model
@@ -53,7 +61,6 @@ public struct ChatRequest: Codable, Sendable, Equatable {
         self.tools = tools
         self.maxTokens = maxTokens
         self.purpose = purpose
-        self.mediaAttached = mediaAttached
         self.mediaConsent = mediaConsent
     }
 }
@@ -64,11 +71,19 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var role: Role
     public var content: String
+    /// Images sent alongside the text, in the order they should be read.
+    public var images: [ChatImage]
 
-    public init(id: String = UUID().uuidString, role: Role, content: String) {
+    public init(
+        id: String = UUID().uuidString,
+        role: Role,
+        content: String,
+        images: [ChatImage] = []
+    ) {
         self.id = id
         self.role = role
         self.content = content
+        self.images = images
     }
 }
 

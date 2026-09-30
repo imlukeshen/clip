@@ -248,26 +248,32 @@ public actor LibraryFolders {
         let url = try folderURL(relativePath)
         let count = index.directAssetCounts[relativePath, default: 0]
         let shouldLoad = forceLoad || expanding.contains(relativePath)
-        let children: [FolderNode]?
-        if shouldLoad {
-            let entries = try FileManager.default.contentsOfDirectory(
+        // Listed whether or not this folder is expanded, so a collapsed folder
+        // still knows it has something to show.
+        let entries =
+            (try? FileManager.default.contentsOfDirectory(
                 at: url,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
-            )
-            let knownFileNames = index.knownFileNames[relativePath, default: []]
-            let folders = entries.filter { child in
-                !knownFileNames.contains(child.lastPathComponent)
-                    && (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-            }
+            )) ?? []
+        let knownFileNames = index.knownFileNames[relativePath, default: []]
+        let folders = entries.filter { child in
+            !knownFileNames.contains(child.lastPathComponent)
+                && (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        let children: [FolderNode]?
+        if shouldLoad {
             let sortedFolders = folders.sorted {
                 $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
                     == .orderedAscending
             }
-            children = try sortedFolders.map { child in
-                let childPath = relative(child)
-                return try node(
-                    relativePath: childPath,
+            // A child that cannot be read is skipped rather than failing the
+            // whole tree. Expansion state is persisted, so one folder deleted
+            // from under the app used to take the entire sidebar down and keep
+            // it down across launches.
+            children = sortedFolders.compactMap { child in
+                try? node(
+                    relativePath: relative(child),
                     expanding: expanding,
                     index: index
                 )
@@ -279,6 +285,7 @@ public actor LibraryFolders {
             id: relativePath,
             name: relativePath.isEmpty ? "Media" : url.lastPathComponent,
             children: children,
+            hasChildren: !folders.isEmpty,
             assetCount: count
         )
     }

@@ -131,7 +131,7 @@ struct ImageEditorView: View {
                 Label("Add image", systemImage: "photo.badge.plus")
                     .frame(height: 30)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help("Import or paste another image as a new canvas layer")
             .accessibilityIdentifier("photo-add-image")
@@ -171,6 +171,7 @@ struct ImageEditorView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: EditorChromeMetrics.headerHeight)
+        .titlebarDoubleClick()
         .background(theme.palette.surfacePanel)
     }
 
@@ -230,7 +231,7 @@ struct ImageEditorView: View {
                 } label: {
                     Label("Aspect", systemImage: "aspectratio")
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
 
                 Button("Reset") { editor.resetCrop() }

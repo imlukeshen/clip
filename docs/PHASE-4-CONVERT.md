@@ -1,4 +1,4 @@
-# Clip — Phase V: Universal Conversion
+# clipx — Phase V: Universal Conversion
 
 > **Delivery status:** V0–V5 are complete and validated for both distribution
 > channels. LibreOffice remains optional and is exposed only by the direct build

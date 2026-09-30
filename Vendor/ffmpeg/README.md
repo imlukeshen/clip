@@ -1,11 +1,11 @@
-# Clip FFmpeg framework
+# clipx FFmpeg framework
 
 `ReelFFmpeg.xcframework` is the Apple Silicon, macOS 14+ dynamic framework used
-by both Clip distribution channels. It contains FFmpeg 7.1.2, libvpx 1.15.2,
+by both clipx distribution channels. It contains FFmpeg 7.1.2, libvpx 1.15.2,
 libaom 3.12.1, and libwebp 1.6.0 behind the small C API in `bridge/`.
 
 The framework is built in LGPL-safe mode. GPL and nonfree components, the
-FFmpeg programs, x264, and x265 are not included. Clip calls the libraries in
+FFmpeg programs, x264, and x265 are not included. clipx calls the libraries in
 process and uses VideoToolbox for H.264 and HEVC encoding.
 
 From the repository root:

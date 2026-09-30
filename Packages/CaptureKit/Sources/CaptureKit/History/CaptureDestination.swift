@@ -11,7 +11,7 @@ public enum CaptureDestination: String, CaseIterable, Sendable, Codable, Identif
     case timeline
     /// Copy it into the capture history, ready to paste.
     case clipboard
-    /// Leave it wherever the system wrote it and let Clip ignore it.
+    /// Leave it wherever the system wrote it and let clipx ignore it.
     case file
 
     public var id: String { rawValue }
@@ -30,7 +30,7 @@ public enum CaptureDestination: String, CaseIterable, Sendable, Codable, Identif
         case .timeline:
             "Recordings open as a timeline, or append to the timeline you are editing."
         case .clipboard: "Recordings are copied into the history, ready to paste."
-        case .file: "Recordings stay where macOS saved them and Clip ignores them."
+        case .file: "Recordings stay where macOS saved them and clipx ignores them."
         }
     }
 

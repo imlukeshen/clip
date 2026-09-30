@@ -1,6 +1,6 @@
 import Foundation
 
-/// A durable stage in Clip's local media index.
+/// A durable stage in clipx's local media index.
 public enum IndexStage: String, Codable, Sendable, CaseIterable, Hashable {
     case metadata
     case text
@@ -168,7 +168,7 @@ public struct IndexedTextMatch: Sendable, Equatable {
     }
 }
 
-/// One normalized semantic-search vector persisted inside the Clip library.
+/// One normalized semantic-search vector persisted inside the clipx library.
 public struct EmbeddingRecord: Sendable, Equatable {
     public var assetID: AssetID
     public var chunkIndex: Int

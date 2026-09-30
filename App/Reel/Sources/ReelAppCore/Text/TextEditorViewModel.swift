@@ -93,9 +93,10 @@ public final class TextEditorViewModel {
                 flushContentAutosave()
                 return
             }
-            rebuildTeXProjectAnalysis()
+            scheduleTeXProjectAnalysis()
             scheduleContentAutosave()
             scheduleLanguageDetection()
+            scheduleTeXAutoCompile()
         }
     }
     /// The file currently shown in the editor.
@@ -154,10 +155,21 @@ public final class TextEditorViewModel {
     private var textBuffers: [FileID: String]
     private var dirtyFileIDs: Set<FileID> = []
 
+    /// Told when detection settles a library file's language. The editor never
+    /// renames a library file itself; the owner decides whether the name follows.
+    @ObservationIgnored public var onLibraryLanguageDetected: ((AssetID, LanguageID) -> Void)?
+
     private var structureTask: Task<Void, Never>?
     private var contentTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
     private var languageDetectionTask: Task<Void, Never>?
+    private var texAutoCompileTask: Task<Void, Never>?
+    private var texProjectAnalysisTask: Task<Void, Never>?
+
+    /// Quiet period after the last keystroke before a background rebuild.
+    private static let texAutoCompileDelay = Duration.milliseconds(1_500)
+    /// How many quiet periods to wait out an in-flight compile before giving up.
+    private static let texAutoCompileRetryLimit = 20
     private var externalReloadTask: Task<Void, Never>?
     private var fileMonitor: TextFileMonitor?
     private var isApplyingExternalText = false
@@ -275,9 +287,30 @@ public final class TextEditorViewModel {
     }
 
     /// Starts editor-owned background work.
+    /// Bounds shared by the inspector stepper and the zoom shortcuts.
+    public static let minimumFontSize = 10.0
+    public static let maximumFontSize = 28.0
+
+    /// Steps the editor font size, clamped to the supported range.
+    public func adjustFontSize(by delta: Double) {
+        var updated = settings
+        let size = min(
+            max(updated.fontSize + delta, Self.minimumFontSize),
+            Self.maximumFontSize
+        )
+        guard size != updated.fontSize else { return }
+        updated.fontSize = size
+        updateSettings(updated)
+    }
+
     public func start() {
         isStopped = false
         startFileMonitor()
+        // Opening a LaTeX file with no PDF yet should show a preview without
+        // being asked; typing keeps it current from there.
+        if language == .latex, texPDFURL == nil {
+            scheduleTeXAutoCompile()
+        }
     }
 
     /// Stops background work and flushes any dirty content before closing.
@@ -287,6 +320,8 @@ public final class TextEditorViewModel {
         contentTask?.cancel()
         cleanupTask?.cancel()
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         externalReloadTask?.cancel()
         cancelTeXCompilation(resetState: true)
         fileMonitor?.cancel()
@@ -315,36 +350,68 @@ public final class TextEditorViewModel {
     }
 
     /// Gives an unsaved scratch buffer a user-facing filename without turning it
-    /// into a library asset. Finder-style extension preservation keeps `Notes.md`
-    /// as Markdown when the user enters only `Meeting Notes`.
+    /// into a library asset.
+    ///
+    /// The extension always names the language: typing `solver.go` switches the
+    /// buffer to Go, while typing just `solver` keeps the language and adds its
+    /// extension.
     @discardableResult
     public func renameActiveScratchFile(to proposedName: String) -> Bool {
         guard let activeFile, activeFile.assetID == nil, sourceURL == nil else {
             notice = "Only an unsaved scratch file can be renamed here."
             return false
         }
-        guard
-            let name = Self.normalizedScratchFilename(
-                proposedName,
-                preservingExtensionOf: activeFile.relativePath
-            )
-        else {
+        guard let validated = Self.validatedFilename(proposedName) else {
             notice = "Choose a filename without path separators."
             return false
         }
-        guard name != activeFile.relativePath else { return true }
+        let (name, language) = Self.nameAndLanguage(
+            forProposedName: validated,
+            currentLanguage: activeFile.language
+        )
+        guard name != activeFile.relativePath || language != activeFile.language else {
+            return true
+        }
 
         var candidate = document
         do {
-            _ = try candidate.apply(.renameFile(activeFile.id, name))
+            if name != activeFile.relativePath {
+                _ = try candidate.apply(.renameFile(activeFile.id, name))
+            }
         } catch {
             notice = "Another file in this document already uses that name."
             return false
         }
 
-        perform(.renameFile(activeFile.id, name), actionName: "Rename File")
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
+        if name != activeFile.relativePath {
+            perform(.renameFile(activeFile.id, name), actionName: "Rename File")
+        }
+        if language != activeFile.language {
+            languageDetectionTask?.cancel()
+            perform(
+                .setLanguage(activeFile.id, language, explicit: true), actionName: "Rename File")
+            rebuildTeXProjectAnalysis()
+            if language != .latex { cancelTeXCompilation(resetState: true) }
+        }
         reconcileActivePathChange()
         return self.activeFile?.relativePath == name
+    }
+
+    /// The filename and language a typed name implies: a recognised extension
+    /// picks the language, anything else gets the current language's extension.
+    public static func nameAndLanguage(
+        forProposedName name: String,
+        currentLanguage: LanguageID
+    ) -> (name: String, language: LanguageID) {
+        let typedExtension = (name as NSString).pathExtension
+        if !typedExtension.isEmpty,
+            let typedLanguage = LanguageDetector.language(forExtension: typedExtension)
+        {
+            return (name, typedLanguage)
+        }
+        return (LanguageDetector.fileName(name, matching: currentLanguage), currentLanguage)
     }
 
     /// Reconciles the editor after LibraryStore has physically renamed an open
@@ -423,20 +490,15 @@ public final class TextEditorViewModel {
             activeFile.language != language || !activeFile.languageIsExplicit
         else { return }
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         undoManager.beginUndoGrouping()
         defer { undoManager.endUndoGrouping() }
         perform(
             .setLanguage(activeFileID, language, explicit: true),
             actionName: "Set Language"
         )
-        if sourceURL == nil,
-            Self.isDefaultScratchName(activeFile.relativePath),
-            let pathExtension = Self.preferredScratchExtension(for: language)
-        {
-            let destination =
-                language == .latex
-                ? Self.availableScratchTeXPath(in: document, excluding: activeFileID)
-                : "Untitled.\(pathExtension)"
+        if let destination = scratchPath(for: activeFile, matching: language, in: document) {
             perform(
                 .renameFile(activeFileID, destination),
                 actionName: "Set Language"
@@ -452,6 +514,8 @@ public final class TextEditorViewModel {
     public func enableAutomaticLanguageDetection() {
         guard let activeFile else { return }
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         let detected = detectedLanguage(for: text, file: activeFile)
         applyDetectedLanguage(detected, forceMetadataUpdate: true)
         notice = "Language detection is automatic."
@@ -633,6 +697,41 @@ public final class TextEditorViewModel {
     }
 
     /// Requests a build, showing the package-network decision before first use.
+    /// Rebuilds the PDF a short while after typing stops.
+    ///
+    /// Deliberately quieter than the explicit build button: it never raises the
+    /// package-consent prompt, because a background rebuild must not put a
+    /// network question in front of someone who was only typing, and it waits
+    /// for an in-flight compile rather than queueing a second one. An explicit
+    /// Command-B still works while this is pending.
+    private func scheduleTeXAutoCompile() {
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
+        guard language == .latex, !isStopped else { return }
+        // Consent and cache state are the user's to resolve explicitly.
+        guard texPackageAccess != nil, !isTeXPackageCacheResetting else { return }
+        let fileID = activeFileID
+        let contents = text
+        texAutoCompileTask = Task { [weak self] in
+            for _ in 0..<Self.texAutoCompileRetryLimit {
+                do {
+                    try await Task.sleep(for: Self.texAutoCompileDelay)
+                } catch {
+                    return
+                }
+                guard let self, !self.isStopped, self.activeFileID == fileID,
+                    self.text == contents, self.language == .latex,
+                    self.texPackageAccess != nil, !self.isTeXPackageCacheResetting
+                else { return }
+                // Let the running build finish; its result already reflects
+                // older text, so wait rather than cancel and restart.
+                if self.texCompilationState == .compiling { continue }
+                self.beginTeXCompilation()
+                return
+            }
+        }
+    }
+
     public func requestTeXCompile() {
         guard language == .latex else { return }
         guard !isTeXPackageCacheResetting else {
@@ -799,7 +898,7 @@ public final class TextEditorViewModel {
 
     /// Reports that a paste exceeded the hard in-app size limit.
     public func reportPasteRefused() {
-        notice = "Pastes over 20 MB cannot be opened in Clip."
+        notice = "Pastes over 20 MB cannot be opened in clipx."
     }
 
     /// Detects a high-confidence language when content is pasted into an empty buffer.
@@ -818,6 +917,8 @@ public final class TextEditorViewModel {
     /// meaningful language signal.
     private func scheduleLanguageDetection() {
         languageDetectionTask?.cancel()
+        texAutoCompileTask?.cancel()
+        texProjectAnalysisTask?.cancel()
         guard let activeFile, !activeFile.languageIsExplicit else { return }
         // A populated Markdown document owns per-block language decisions.
         // File-level detection must never tear down and recreate its live editor
@@ -873,35 +974,51 @@ public final class TextEditorViewModel {
             _ = try updatedDocument.apply(
                 .setLanguage(activeFile.id, detected, explicit: false)
             )
-            let promotedScratchToTeX =
-                detected == .latex
-                && sourceURL == nil
-                && Self.isDefaultScratchName(activeFile.relativePath)
-                && activeFile.relativePath.caseInsensitiveCompare("Untitled.tex") != .orderedSame
-            if promotedScratchToTeX {
-                // A default .txt scratch name carries no user intent. Promote it
-                // with the detected language so project analysis can immediately
-                // recognize the buffer as a compilable TeX main file.
-                _ = try updatedDocument.apply(
-                    .renameFile(
-                        activeFile.id,
-                        Self.availableScratchTeXPath(
-                            in: updatedDocument,
-                            excluding: activeFile.id
-                        )
-                    )
-                )
+            // A scratch file's name follows its language, so a buffer detected
+            // as Go becomes `Untitled.go`. A LaTeX one is then immediately
+            // recognisable to project analysis as a compilable main file.
+            // Library files are left alone: detection must never rename
+            // something on disk behind the user's back.
+            let renamedPath = scratchPath(for: activeFile, matching: detected, in: updatedDocument)
+            if let renamedPath {
+                _ = try updatedDocument.apply(.renameFile(activeFile.id, renamedPath))
             }
             document = updatedDocument
-            if promotedScratchToTeX { invalidateTeXBuildIdentity() }
+            if renamedPath != nil { invalidateTeXBuildIdentity() }
             rebuildTeXProjectAnalysis()
             persistStructureNow()
             if previous == .latex, detected != .latex {
                 cancelTeXCompilation(resetState: true)
             }
+            if let assetID = activeFile.assetID {
+                onLibraryLanguageDetected?(assetID, detected)
+            }
         } catch {
-            notice = "Clip could not update the detected language."
+            notice = "clipx could not update the detected language."
         }
+    }
+
+    /// The name `file` should take once its language is `language`, or `nil`
+    /// when it keeps its name: it already matches, it is not a scratch file,
+    /// or the matching name is taken.
+    private func scratchPath(
+        for file: TextFile,
+        matching language: LanguageID,
+        in document: TextDocument
+    ) -> String? {
+        guard file.assetID == nil, sourceURLs[file.id] == nil,
+            !file.relativePath.contains("/")
+        else { return nil }
+        let destination =
+            language == .latex && Self.isDefaultScratchName(file.relativePath)
+            ? Self.availableScratchTeXPath(in: document, excluding: file.id)
+            : LanguageDetector.fileName(file.relativePath, matching: language)
+        guard destination != file.relativePath else { return nil }
+        let isTaken = document.files.contains {
+            $0.id != file.id
+                && $0.relativePath.caseInsensitiveCompare(destination) == .orderedSame
+        }
+        return isTaken ? nil : destination
     }
 
     private static func availableScratchTeXPath(
@@ -1092,7 +1209,7 @@ public final class TextEditorViewModel {
                 sourceSnapshot: sourceSnapshot
             )
         } catch {
-            texCompilationState = .failed("Clip could not prepare the LaTeX source workspace.")
+            texCompilationState = .failed("clipx could not prepare the LaTeX source workspace.")
             return
         }
         let overrides: [String: Data] = Dictionary(
@@ -1463,7 +1580,36 @@ public final class TextEditorViewModel {
         return NSRange(location: start, length: location - start)
     }
 
+    /// Quiet period before re-reading the project structure while typing.
+    private static let texProjectAnalysisDelay = Duration.milliseconds(250)
+
+    /// Re-reads the project structure shortly after typing stops.
+    ///
+    /// The analysis parses every file in the project for `\input` and
+    /// `\include` and re-infers the main file, so running it from `text`'s
+    /// observer made each keystroke cost a pass over the whole project. Every
+    /// other structural caller stays synchronous: those are rare events where
+    /// the result is needed immediately.
+    private func scheduleTeXProjectAnalysis() {
+        texProjectAnalysisTask?.cancel()
+        guard !isStopped else { return }
+        let fileID = activeFileID
+        let contents = text
+        texProjectAnalysisTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.texProjectAnalysisDelay)
+            } catch {
+                return
+            }
+            guard let self, !self.isStopped, self.activeFileID == fileID, self.text == contents
+            else { return }
+            self.rebuildTeXProjectAnalysis()
+        }
+    }
+
     private func rebuildTeXProjectAnalysis() {
+        // A structural rebuild supersedes anything the debounce has queued.
+        texProjectAnalysisTask?.cancel()
         let sources = Dictionary(
             uniqueKeysWithValues: document.files.compactMap { file in
                 textBuffers[file.id].map { (file.relativePath, $0) }
@@ -1642,15 +1788,6 @@ public final class TextEditorViewModel {
         return Int(suffix).map { $0 >= 2 } == true
     }
 
-    private static func preferredScratchExtension(for language: LanguageID) -> String? {
-        switch language {
-        case .markdown: "md"
-        case .latex: "tex"
-        case .plainText: "txt"
-        default: nil
-        }
-    }
-
     private func startFileMonitor() {
         guard fileMonitor == nil, let sourceURL else { return }
         fileMonitor = TextFileMonitor(url: sourceURL) { [weak self] in
@@ -1665,18 +1802,6 @@ public final class TextEditorViewModel {
         let depth = relativePath.split(separator: "/").count
         for _ in 0..<depth { root.deleteLastPathComponent() }
         return root
-    }
-
-    private static func normalizedScratchFilename(
-        _ proposedName: String,
-        preservingExtensionOf currentPath: String
-    ) -> String? {
-        guard let name = validatedFilename(proposedName) else { return nil }
-        let currentExtension = (currentPath as NSString).pathExtension
-        guard !currentExtension.isEmpty, (name as NSString).pathExtension.isEmpty else {
-            return name
-        }
-        return "\(name).\(currentExtension)"
     }
 
     private static func validatedFilename(_ proposedName: String) -> String? {

@@ -70,7 +70,7 @@ public struct CommandDefinition: Command, Sendable, Equatable, Identifiable {
     }
 }
 
-/// The single capability catalog for Clip's user and assistant surfaces.
+/// The single capability catalog for clipx's user and assistant surfaces.
 public enum CommandRegistry {
     public static let all: [CommandDefinition] = [
         command(
@@ -88,13 +88,18 @@ public enum CommandRegistry {
         command(
             "navigation.convert", "Open Convert Queue", .view, kind: .confirm, exposure: .onDemand),
         command(
-            "capture.history", "Open Clip Clipboard", .app,
+            "capture.history", "Open clipx Clipboard", .app,
             shortcut: .init("c", modifiers: ["command", "shift"]), kind: .read, exposure: .never),
         command(
-            "capture.clearHistory", "Clear Clip Clipboard", .app, destructive: true,
+            "capture.clearHistory", "Clear clipx Clipboard", .app, destructive: true,
             kind: .confirm, exposure: .onDemand),
         command("edit.undo", "Undo", .app, exposure: .onDemand),
         command("edit.redo", "Redo", .app, exposure: .onDemand),
+        command(
+            "edit.delete", "Delete Selection", .app, destructive: true,
+            description:
+                "Delete the selected element in the open editor: timeline items, an image layer, or a PDF edit.",
+            kind: .confirm, exposure: .onDemand),
         command("asset.selectAll", "Select All", .asset, shortcut: .init("a"), exposure: .onDemand),
         command(
             "asset.deselectAll", "Deselect All", .asset,
@@ -167,7 +172,7 @@ public enum CommandRegistry {
         command(
             "convert.run", "Run Conversion", .file,
             description:
-                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise Clip uses the configured export folder.",
+                "Write converted copies after explicit user confirmation. Call convert.plan first. destination is an optional absolute folder path; otherwise clipx uses the configured export folder.",
             kind: .confirm,
             exposure: .always,
             required: ["assetIDs", "target"],
@@ -210,7 +215,7 @@ public enum CommandRegistry {
         command(
             "tex.compile", "Compile LaTeX", .text,
             description:
-                "Compile the active LaTeX project in Clip's confined TeX workspace and wait for success or diagnostics.",
+                "Compile the active LaTeX project in clipx's confined TeX workspace and wait for success or diagnostics.",
             exposure: .always),
         command(
             "tex.diagnostics", "Read LaTeX Diagnostics", .text,
@@ -414,6 +419,18 @@ public enum CommandRegistry {
             "pdf.redact", "Redact PDF Region", .pdf, destructive: true, exposure: .onDemand,
             required: ["rect"], properties: ["pageID": string, "rect": rect]),
         command(
+            "pdf.findText", "Find PDF Text", .pdf,
+            description:
+                "Locate every occurrence of a string and return its page and rectangle. Call this before pdf.redact or pdf.highlight, which need a rectangle.",
+            kind: .read, exposure: .onDemand,
+            required: ["text"], properties: ["text": string, "pageID": string]),
+        command(
+            "pdf.redactText", "Redact PDF Text", .pdf, destructive: true,
+            description:
+                "Redact every occurrence of a string. Prefer this over pdf.redact when the user names the text to hide rather than a region.",
+            exposure: .onDemand,
+            required: ["text"], properties: ["text": string, "pageID": string]),
+        command(
             "pdf.rotatePage", "Rotate PDF Page", .pdf, exposure: .onDemand,
             properties: ["pageID": string]),
         command(
@@ -530,6 +547,24 @@ public enum ToolCatalog {
     public static var all: [ToolSchema] {
         CommandRegistry.all.compactMap { command in
             command.agentExposure == .always ? command.schema : nil
+        }
+    }
+
+    /// The always-exposed tools plus the on-demand ones for `categories`.
+    ///
+    /// On-demand tools are reachable only through meta-tool discovery, which
+    /// costs a round trip and asks the model to find a name it was never shown.
+    /// A capable model manages it; a small local one does not, which is how
+    /// "redact this word" in the PDF workspace became a long wait and nothing
+    /// happening — `pdf.redact` exists, but was never offered. Tools for the
+    /// workspace that is actually open are worth their place in the list.
+    public static func all(expanding categories: Set<CommandCategory>) -> [ToolSchema] {
+        CommandRegistry.all.compactMap { command in
+            switch command.agentExposure {
+            case .always: command.schema
+            case .onDemand: categories.contains(command.category) ? command.schema : nil
+            case .never: nil
+            }
         }
     }
 

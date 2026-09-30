@@ -45,7 +45,7 @@ public actor IngestPipeline {
 
     /// Imports a candidate while retaining whether this call inserted it.
     ///
-    /// The library inbox watcher needs this distinction because Clip-owned
+    /// The library inbox watcher needs this distinction because clipx-owned
     /// moves (such as a rename) appear as new filesystem URLs. Republishing a
     /// duplicate as a fresh capture would unexpectedly navigate back into an
     /// editor even though no new media arrived.
@@ -94,15 +94,52 @@ public actor IngestPipeline {
         return try await ingest(temporaryURL, source: source)
     }
 
-    private func performIngest(_ url: URL, source: IngestSource) async throws -> IngestResult {
+    /// Creates a new text file in the inbox and indexes it as a text asset.
+    ///
+    /// Unlike an import, the bytes are clipx's own, so there is nothing to wait
+    /// on and nothing to deduplicate: a second empty "Untitled.txt" is a second
+    /// file, not the first one again. The name is made unique within the inbox.
+    public func createTextFile(named name: String, contents: Data) async throws -> AssetRecord {
+        let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ClipNewText/\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let staged = stagingRoot.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingRoot,
+                withIntermediateDirectories: true
+            )
+            try contents.write(to: staged, options: .atomic)
+        } catch {
+            throw IngestError.unreadable(staged, underlying: "new text file could not be staged")
+        }
+        defer {
+            do {
+                try FileManager.default.removeItem(at: stagingRoot)
+            } catch {
+                // The staging copy holds nothing the library copy does not.
+            }
+        }
+        return try await performIngest(staged, source: .picker, isNewFile: true).record
+    }
+
+    private func performIngest(
+        _ url: URL,
+        source: IngestSource,
+        isNewFile: Bool = false
+    ) async throws -> IngestResult {
         try ensureSupported(url)
         let probeService = probe
         let continuation = continuation
-        let probed = try await waiter.wait(
-            for: url,
-            progress: { value in continuation.yield(.progress(url, value * 0.4)) },
-            validate: { candidate in try await probeService.probe(candidate) }
-        )
+        let probed =
+            isNewFile
+            ? try await probeService.probe(url)
+            : try await waiter.wait(
+                for: url,
+                progress: { value in continuation.yield(.progress(url, value * 0.4)) },
+                validate: { candidate in try await probeService.probe(candidate) }
+            )
         let snapshot = try waiter.snapshot(of: url)
         if let duration = probed.duration, duration <= .zero {
             throw IngestError.zeroDuration(url)
@@ -110,7 +147,7 @@ public actor IngestPipeline {
         continuation.yield(.progress(url, 0.5))
 
         let contentHash = try SampledFileHasher.hash(url)
-        if let existing = try await library.asset(contentHash: contentHash) {
+        if !isNewFile, let existing = try await library.asset(contentHash: contentHash) {
             continuation.yield(.duplicate(existing))
             return IngestResult(record: existing, wasInserted: false)
         }
@@ -155,7 +192,9 @@ public actor IngestPipeline {
         let record = AssetRecord(
             id: assetID,
             relativePath: try relativePath(destination),
-            displayName: url.lastPathComponent,
+            // An import keeps the name it arrived with; a new file is named
+            // for where it landed, so "Untitled 2.txt" does not read "Untitled.txt".
+            displayName: isNewFile ? destination.lastPathComponent : url.lastPathComponent,
             kind: probed.kind,
             container: probed.container ?? fileExtension,
             codec: probed.codec,
@@ -256,13 +295,14 @@ public actor IngestPipeline {
     ) throws -> DerivativePaths {
         let thumbnail = try staged.thumbnail.map { source in
             let destination = LibraryLayout.thumbnails(in: libraryRoot)
-                .appendingPathComponent("\(assetID.rawValue).thumb.heic")
+                .appendingPathComponent(
+                    LibraryLayout.thumbnailFilename(forAssetID: assetID.rawValue))
             try FileManager.default.moveItem(at: source, to: destination)
             return destination
         }
         let peaks = try staged.peaks.map { source in
             let destination = LibraryLayout.peaks(in: libraryRoot)
-                .appendingPathComponent("\(assetID.rawValue).peaks.bin")
+                .appendingPathComponent(LibraryLayout.peaksFilename(forAssetID: assetID.rawValue))
             try FileManager.default.moveItem(at: source, to: destination)
             return destination
         }

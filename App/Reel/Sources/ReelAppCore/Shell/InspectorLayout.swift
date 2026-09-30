@@ -3,7 +3,7 @@ import Foundation
 /// Width calibration for the trailing inspector column.
 ///
 /// Finder's preview pane is narrow, draggable, and remembers where it was left;
-/// these bounds give Clip the same behaviour while keeping the column wide
+/// these bounds give clipx the same behaviour while keeping the column wide
 /// enough for the editor tool panels that share it.
 public enum InspectorLayout {
     /// Below this the richer editor controls start wrapping labels and losing

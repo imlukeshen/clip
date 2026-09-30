@@ -4,6 +4,7 @@ import CoreModel
 import Foundation
 import LibraryStore
 import MediaEngine
+import OSLog
 import Observation
 
 public enum TimelineTool: String, Sendable, CaseIterable {
@@ -24,6 +25,8 @@ public struct EditorSourceMoment: Sendable, Equatable, Hashable {
 @MainActor
 @Observable
 public final class EditorViewModel {
+    private static let log = Logger(subsystem: "app.reel.editor", category: "playback")
+
     public private(set) var document: ProjectDocument
     public private(set) var selection: Set<ItemID> = []
     public private(set) var playhead = RationalTime.zero
@@ -1429,7 +1432,7 @@ public final class EditorViewModel {
     }
 
     /// Hands one or more OCR regions to the existing destructive video effect path.
-    /// Regions use Clip's top-left normalized canvas coordinates.
+    /// Regions use clipx's top-left normalized canvas coordinates.
     public func redactCurrentRegions(_ regions: [NormalizedRect]) {
         guard let item = document.item(at: playhead)?.item else {
             notice = "Move the playhead over a clip before adding a redaction."
@@ -2138,7 +2141,10 @@ public final class EditorViewModel {
                 item.audioMix = built.audioMix
                 player.replaceCurrentItem(with: item)
                 seek(to: playhead)
-                if isPlaying { player.playImmediately(atRate: playbackRate) }
+                if isPlaying {
+                    player.playImmediately(atRate: playbackRate)
+                    Self.log.log(level: .default, "Build installed item and resumed.")
+                }
                 isBuilding = false
             } catch is CancellationError {
                 // A newer document build superseded this one.
@@ -2155,12 +2161,25 @@ public final class EditorViewModel {
     }
 
     private func startPlayback(rate: Float) {
-        guard duration > .zero else { return }
+        guard duration > .zero else {
+            Self.log.error("Play ignored: the timeline reports no duration.")
+            return
+        }
         if rate > 0, playhead >= duration { seek(to: .zero) }
         if rate < 0, playhead <= .zero { seek(to: duration) }
         playbackRate = rate
-        player.playImmediately(atRate: rate)
+        // Set before any rebuild: a build in flight starts playback itself when
+        // it installs the item, and it decides that by reading `isPlaying`.
         isPlaying = true
+        if player.currentItem == nil {
+            // The composition is built lazily, so the first press of play can
+            // land before a player item exists. Dropping the rate on an empty
+            // player silently lost that press until something else — scrubbing
+            // the playhead — happened to trigger a build.
+            if !isBuilding { rebuild(quality: .full) }
+        } else {
+            player.playImmediately(atRate: rate)
+        }
         playbackTask?.cancel()
         playbackTask = Task { [weak self] in
             while !Task.isCancelled {

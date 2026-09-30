@@ -19,11 +19,15 @@ struct TextInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("Panel", selection: $panel) {
-                ForEach(Panel.allCases) { Text($0.rawValue).tag($0) }
+            HStack {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                // Sized to its labels: a two-item switch stretched across the
+                // whole rail reads as a banner rather than a control.
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 12)
             .frame(height: EditorChromeMetrics.headerHeight)
             Divider().overlay(theme.palette.line)
@@ -73,7 +77,7 @@ struct TextInspector: View {
                                 Text("Text context")
                                     .font(theme.type.label.font)
                                 Text(
-                                    "Ask Clip to inspect LaTeX errors, format source, search the library, or prepare an export."
+                                    "Ask clipx to inspect LaTeX errors, format source, search the library, or prepare an export."
                                 )
                                 .font(theme.type.caption.font)
                                 .foregroundStyle(theme.palette.textTertiary)
@@ -213,7 +217,7 @@ struct TextInspector: View {
             } label: {
                 menuValue(texPackageAccessTitle)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .disabled(editor.isTeXPackageCacheResetting)
             .accessibilityIdentifier("text-inspector-tex-package-access")
@@ -259,7 +263,7 @@ struct TextInspector: View {
                 Button("CRLF") { editor.normalizeLineEndings(to: .crlf) }
                 Button("CR") { editor.normalizeLineEndings(to: .cr) }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
         }
         .padding(.horizontal, theme.metrics.spacing.md)
@@ -342,7 +346,7 @@ struct TextInspector: View {
             } label: {
                 menuValue(editor.language.editorDisplayName)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .accessibilityIdentifier("text-inspector-language-menu")
         }
@@ -373,7 +377,7 @@ struct TextInspector: View {
             } label: {
                 menuValue("\(editor.settings.tabWidth) spaces")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .accessibilityIdentifier("text-inspector-tab-width-menu")
         }

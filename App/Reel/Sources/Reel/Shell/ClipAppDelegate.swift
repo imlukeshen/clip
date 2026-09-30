@@ -80,7 +80,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // A SwiftUI `WindowGroup` can restore the valid state "no windows".
-        // That is useful for document apps, but Clip is a library app: launching
+        // That is useful for document apps, but clipx is a library app: launching
         // it should always reveal the library. Wait until SwiftUI has installed
         // its scene commands, then use the scene's own New Window command when
         // restoration did not create a window.
@@ -106,11 +106,39 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
         hotKey.unregister()
     }
 
+    /// Frees the local models before the process goes away.
+    ///
+    /// Ollama keeps a model resident for five minutes after the last request, so
+    /// quitting clipx otherwise leaves several gigabytes held by a server the
+    /// person believes they are finished with. The unload has to happen before
+    /// the process ends, and `applicationWillTerminate` cannot wait for async
+    /// work, so the reply is deferred instead.
+    ///
+    /// Deadlined rather than simply awaited: these are loopback requests that
+    /// normally answer in milliseconds, but nothing about freeing memory is
+    /// worth holding a quit open for if the server is wedged.
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        Task { @MainActor in
+            let release = Task { await model.aiSettings.releaseLocalModels() }
+            let deadline = Task {
+                try? await Task.sleep(for: .milliseconds(1_200))
+                release.cancel()
+            }
+            await release.value
+            deadline.cancel()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// Responds to the global Command-Shift-C.
     ///
     /// A Carbon hotkey takes the key event before the responder chain, so this
     /// always uses the process-wide floating panel. That keeps the shortcut
-    /// available over another app and while Clip already has an editor or sheet
+    /// available over another app and while clipx already has an editor or sheet
     /// open. If Carbon registration is unavailable, the menu command remains a
     /// local fallback and opens the same history in-window.
     func handleHotKey() {
@@ -171,7 +199,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
 
         // SwiftUI can restore a scene session with no windows, and its New
         // Window menu action is not available until a scene is already active.
-        // Keep a native host as the reliable launch/reopen path so Clip never
+        // Keep a native host as the reliable launch/reopen path so clipx never
         // becomes an invisible background process.
         let rootView = MainWindow(model: model)
             .frame(minWidth: 1024, minHeight: 680)
@@ -181,7 +209,7 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Clip"
+        window.title = "clipx"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 1024, height: 680)

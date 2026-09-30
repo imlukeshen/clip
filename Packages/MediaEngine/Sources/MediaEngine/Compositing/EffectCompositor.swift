@@ -17,7 +17,15 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
 
     private let renderQueue = DispatchQueue(label: "app.reel.media-compositor")
     private let context: CIContext
-    private let cancelled = OSAllocatedUnfairLock(initialState: false)
+    /// Generation of the current run of composition requests.
+    ///
+    /// Cancellation has to retire the requests already queued without muting
+    /// the ones that arrive next. A sticky boolean could not express that: once
+    /// AVFoundation cancelled — which it does on every seek, pause and rate
+    /// change — every later request finished as cancelled and the player waited
+    /// forever for a frame it would never receive, reporting `.playing` with a
+    /// clock frozen at zero.
+    private let generation = OSAllocatedUnfairLock(initialState: 0)
     let contextCreationCount = 1
 
     public override init() {
@@ -30,15 +38,17 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
     }
 
     public func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {
-        cancelled.withLock { $0 = false }
+        // Requests already queued targeted the previous context.
+        generation.withLock { $0 &+= 1 }
     }
 
     public func startRequest(_ asyncVideoCompositionRequest: AVAsynchronousVideoCompositionRequest)
     {
         let context = context
-        let cancelled = cancelled
+        let generation = generation
+        let issued = generation.withLock { $0 }
         renderQueue.async {
-            if cancelled.withLock({ $0 }) {
+            guard generation.withLock({ $0 }) == issued else {
                 asyncVideoCompositionRequest.finishCancelledRequest()
                 return
             }
@@ -47,8 +57,14 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
     }
 
     public func cancelAllPendingVideoCompositionRequests() {
-        cancelled.withLock { $0 = true }
+        generation.withLock { $0 &+= 1 }
     }
+
+    /// The generation a request issued right now belongs to.
+    var currentGeneration: Int { generation.withLock { $0 } }
+
+    /// Whether a request issued at `issued` is still worth rendering.
+    func isCurrent(_ issued: Int) -> Bool { generation.withLock { $0 } == issued }
 
     private static func render(
         _ request: AVAsynchronousVideoCompositionRequest,

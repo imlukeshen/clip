@@ -62,6 +62,11 @@ struct TextView: View {
                                 )
                             }
                             .buttonStyle(ReelPlainButtonStyle())
+                            .contextMenu {
+                                Button("Move to Trash", role: .destructive) {
+                                    model.trashScratchBuffer(buffer.id)
+                                }
+                            }
                             .accessibilityIdentifier("scratch-buffer-\(buffer.id.rawValue)")
                         }
                     }

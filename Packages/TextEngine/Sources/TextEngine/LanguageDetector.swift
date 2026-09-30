@@ -72,6 +72,41 @@ public enum LanguageDetector {
         Set(languagesByExtension.keys)
     }
 
+    /// The language a file extension names, or `nil` when clipx does not
+    /// recognise the extension.
+    public static func language(forExtension pathExtension: String) -> LanguageID? {
+        languagesByExtension[pathExtension.lowercased()]
+    }
+
+    /// The extension a file written in `language` gets by default.
+    public static func preferredExtension(for language: LanguageID) -> String {
+        preferredExtensions[language] ?? "txt"
+    }
+
+    /// `name` with an extension that matches `language`, so a file's name
+    /// always says what it contains.
+    ///
+    /// An extension that already belongs to the language is kept, so `.h`
+    /// stays C and `.yml` stays YAML. Another recognised extension is replaced;
+    /// an unrecognised one, as in `v1.2`, is treated as part of the name.
+    public static func fileName(_ name: String, matching language: LanguageID) -> String {
+        let current = (name as NSString).pathExtension
+        if !current.isEmpty, self.language(forExtension: current) == language {
+            return name
+        }
+        let stem =
+            !current.isEmpty && self.language(forExtension: current) != nil
+            ? (name as NSString).deletingPathExtension : name
+        return "\(stem).\(preferredExtension(for: language))"
+    }
+
+    private static let preferredExtensions: [LanguageID: String] = [
+        .plainText: "txt", .markdown: "md", .latex: "tex", .swift: "swift",
+        .javascript: "js", .typescript: "ts", .python: "py", .json: "json", .yaml: "yaml",
+        .toml: "toml", .html: "html", .css: "css", .rust: "rs", .go: "go", .c: "c",
+        .cpp: "cpp", .java: "java", .sql: "sql", .bash: "sh", .xml: "xml",
+    ]
+
     /// Maps a lowercase full filename to a language for extensionless files.
     private static let languagesByFilename: [String: LanguageID] = [
         "makefile": .bash,
@@ -125,6 +160,10 @@ public enum LanguageDetector {
         {
             return .html
         }
+        // Before Swift: a Go program also declares `func main(`.
+        if lowercased.hasPrefix("package ") && trimmed.contains("func ") {
+            return .go
+        }
         if trimmed.contains("import SwiftUI") || trimmed.contains("import Foundation")
             || trimmed.contains("@main") || trimmed.contains("func main(")
         {
@@ -160,9 +199,6 @@ public enum LanguageDetector {
         }
         if trimmed.contains("#include <") || trimmed.contains("std::") {
             return trimmed.contains("std::") ? .cpp : .c
-        }
-        if lowercased.hasPrefix("package main") && trimmed.contains("func ") {
-            return .go
         }
         if trimmed.contains("fn main()") || trimmed.contains("use std::") {
             return .rust

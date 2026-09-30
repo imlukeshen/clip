@@ -1,6 +1,6 @@
 import Foundation
 
-/// One entry in the clipboard history: something Clip copied — a screenshot, a
+/// One entry in the clipboard history: something clipx copied — a screenshot, a
 /// recording, a run of text, or a set of files — kept on disk so it can be put
 /// back on the pasteboard later.
 public struct CaptureHistoryItem: Codable, Sendable, Equatable, Identifiable {

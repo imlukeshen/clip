@@ -760,48 +760,55 @@ struct TextEditorViewModelTests {
         editor.stop()
     }
 
-    @Test("Legacy automatic preference never builds while typing")
-    func legacyAutomaticPreferenceRequiresBuildRequest() async throws {
+    @Test("Typing rebuilds the PDF without an explicit build request")
+    func typingRebuildsAutomatically() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
         defer { fixture.remove() }
         let recorder = TeXJobRecorder()
-        fixture.preferences.set(
-            TeXCompileMode.automatic.rawValue,
-            forKey: "clip.tex.compileMode"
-        )
         let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
         editor.start()
 
-        editor.text += "\n% visible edit that must wait for Build"
-        try await Task.sleep(for: .milliseconds(2_700))
-
+        editor.text += "\n% an edit that rebuilds on its own"
+        // The rebuild is debounced, so nothing may start on the keystroke itself.
         #expect(recorder.job == nil)
-        #expect(editor.texCompilationState == .idle)
-        editor.requestTeXCompile()
-        await waitUntil { editor.texCompilationState == .succeeded }
+
+        await waitUntil(attempts: 250) { recorder.job != nil }
+        #expect(recorder.job != nil)
+        await waitUntil(attempts: 250) { editor.texCompilationState == .succeeded }
+        #expect(editor.texCompilationState == .succeeded)
+        editor.stop()
+    }
+
+    @Test("An automatic rebuild waits for typing to stop")
+    func automaticRebuildWaitsForQuietPeriod() async throws {
+        let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
+        defer { fixture.remove() }
+        let recorder = TeXJobRecorder()
+        let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
+        editor.start()
+
+        // Continuous typing must not start a compile per keystroke; each edit
+        // restarts the quiet period.
+        for index in 0..<6 {
+            editor.text += "\n% keystroke \(index)"
+            try await Task.sleep(for: .milliseconds(120))
+        }
+        #expect(recorder.job == nil)
+
+        await waitUntil(attempts: 250) { recorder.job != nil }
         #expect(recorder.job != nil)
         editor.stop()
     }
 
-    @Test("Legacy on-save preference never builds when saving")
-    func legacyOnSavePreferenceRequiresBuildRequest() async throws {
+    @Test("An explicit build request still compiles immediately")
+    func explicitBuildRequestCompiles() async throws {
         let fixture = try TeXEditorFixture(packageAccess: .cachedOnly)
         defer { fixture.remove() }
         let recorder = TeXJobRecorder()
-        fixture.preferences.set(
-            TeXCompileMode.onSave.rawValue,
-            forKey: "clip.tex.compileMode"
-        )
         let editor = try fixture.editor(engine: RecordingTeXEngine(recorder: recorder))
 
-        editor.text += "\n% save without building"
-        editor.saveNow()
-        try await Task.sleep(for: .milliseconds(250))
-
-        #expect(recorder.job == nil)
-        #expect(editor.texCompilationState == .idle)
         editor.requestTeXCompile()
-        await waitUntil { editor.texCompilationState == .succeeded }
+        await waitUntil(attempts: 250) { editor.texCompilationState == .succeeded }
         #expect(recorder.job != nil)
         editor.stop()
     }

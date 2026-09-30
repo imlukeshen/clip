@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ALLOWLIST = ROOT / "Scripts" / "allowed-resolved-packages.txt"
-CANONICAL_LOCK = ROOT / "App" / "Clip.Package.resolved"
+CANONICAL_LOCK = ROOT / "App" / "clipx.Package.resolved"
 
 
 def packages_in(paths: list[Path]) -> set[str]:

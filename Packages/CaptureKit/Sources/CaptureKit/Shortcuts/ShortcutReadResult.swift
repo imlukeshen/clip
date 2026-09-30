@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why Clip cannot truthfully display the user's screenshot shortcuts.
+/// Why clipx cannot truthfully display the user's screenshot shortcuts.
 public enum UnavailableReason: Sendable, Equatable {
     case sandboxed
     case missingDomain

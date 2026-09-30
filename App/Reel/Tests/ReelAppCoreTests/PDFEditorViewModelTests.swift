@@ -370,6 +370,121 @@ struct PDFEditorViewModelTests {
         model.closePDFEditor()
     }
 
+    @Test("Editing one phrase leaves the other runs in the paragraph untouched")
+    @MainActor
+    func paragraphEditTouchesOnlyItsOwnRun() async throws {
+        let source = try PDFiumDocument(data: mixedParagraphPDF())
+        let document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "pdf-paragraph-fixture"),
+            title: "Paragraph Fixture"
+        )
+        let editor = PDFEditorViewModel(
+            document: document,
+            sourceURL: URL(fileURLWithPath: "/tmp/paragraph-fixture.pdf"),
+            source: source,
+            fontStore: PDFOpenFontStore(
+                cacheDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "clip-pdf-paragraph-tests-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            ),
+            automaticallyResolveMissingFonts: false,
+            persisting: { _ in }
+        )
+        editor.start()
+        try await waitUntil { editor.isPageIndexed }
+
+        let paragraph = try #require(editor.pageTextIndex.paragraphs.first)
+        #expect(paragraph.pageObjectIndexes.count == 2)
+        let boldObject = try #require(
+            paragraph.spans.first { $0.text.contains("open-source") }
+        ).pageObjectIndex
+
+        let edited = paragraph.text.replacingOccurrences(
+            of: "Our company provides an",
+            with: "RAVN provides an"
+        )
+        editor.replaceParagraphText(paragraph, with: edited)
+
+        // One undo step for the whole paragraph.
+        #expect(editor.undoManager.canUndo)
+        // The bold run was not part of the change, so it gained no edit layer.
+        let editedObjects = editor.selectedPage?.layers.compactMap { layer -> Int? in
+            guard case .text(let text) = layer else { return nil }
+            return text.sourceReference?.pageObjectIndex
+        }
+        #expect(editedObjects?.contains(boldObject) == false)
+        #expect(editedObjects?.isEmpty == false)
+
+        let rewritten = try #require(
+            editor.editableTextBlocks.first { $0.text.contains("RAVN provides an") }
+        )
+        #expect(!rewritten.text.contains("Our company"))
+    }
+
+    /// One paragraph split into a roman run and a bold run, as a real PDF does.
+    private func mixedParagraphPDF() throws -> Data {
+        let data = NSMutableData()
+        let consumer = try #require(CGDataConsumer(data: data))
+        var mediaBox = CGRect(x: 0, y: 0, width: 400, height: 160)
+        let context = try #require(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
+        context.beginPDFPage(nil)
+        for (string, face, x) in [
+            ("Our company provides an ", "Helvetica", 20.0),
+            ("open-source platform", "Helvetica-Bold", 150.0),
+        ] {
+            let attributes: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(
+                    face as CFString,
+                    12,
+                    nil
+                )
+            ]
+            let line = CTLineCreateWithAttributedString(
+                NSAttributedString(string: string, attributes: attributes)
+            )
+            context.textPosition = CGPoint(x: x, y: 110)
+            CTLineDraw(line, context)
+        }
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    @Test("A paragraph edit reaches the persisted document")
+    @MainActor
+    func paragraphEditIsPersisted() async throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "pdf-persist-fixture"),
+            title: "Persist Fixture"
+        )
+        let recorder = PersistenceRecorder()
+        let editor = PDFEditorViewModel(
+            document: document,
+            sourceURL: URL(fileURLWithPath: "/tmp/persist-fixture.pdf"),
+            source: source,
+            fontStore: PDFOpenFontStore(
+                cacheDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "clip-pdf-persist-tests-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            ),
+            automaticallyResolveMissingFonts: false,
+            persisting: { await recorder.record($0) }
+        )
+        editor.start()
+        try await waitUntil { editor.isPageIndexed }
+
+        let paragraph = try #require(editor.pageTextIndex.paragraphs.first)
+        let edited = paragraph.text.replacingOccurrences(of: "Editable", with: "Saved")
+        #expect(edited != paragraph.text)
+        editor.replaceParagraphText(paragraph, with: edited)
+
+        try await waitUntil { await recorder.containsEditedText(containing: "Saved") }
+        #expect(await recorder.containsEditedText(containing: "Saved"))
+    }
+
     private func fixturePDF() throws -> Data {
         let data = NSMutableData()
         let consumer = try #require(CGDataConsumer(data: data))
@@ -428,4 +543,21 @@ private actor PDFPersistenceRecorder {
 
 private enum PDFEditorTestError: Error {
     case timeout
+}
+
+private actor PersistenceRecorder {
+    private var documents: [PDFEditDocument] = []
+
+    func record(_ document: PDFEditDocument) { documents.append(document) }
+
+    func containsEditedText(containing text: String) -> Bool {
+        documents.contains { document in
+            document.pages.contains { page in
+                page.layers.contains { layer in
+                    guard case .text(let value) = layer else { return false }
+                    return value.text.contains(text)
+                }
+            }
+        }
+    }
 }

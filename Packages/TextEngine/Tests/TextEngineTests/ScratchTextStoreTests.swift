@@ -57,3 +57,27 @@ import Testing
         try await store.records()
     }
 }
+
+@Test func trashedScratchBuffersStopListing() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "clip-trash-scratch-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    let trash = root.appendingPathComponent("Trash", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+    let store = ScratchTextStore(directory: root.appendingPathComponent("scratch")) { url in
+        try FileManager.default.moveItem(
+            at: url,
+            to: trash.appendingPathComponent(url.lastPathComponent)
+        )
+    }
+    let kept = try await store.create()
+    let trashed = try await store.create()
+
+    try await store.trash(trashed.document.id)
+
+    #expect(try await store.records().map(\.id) == [kept.document.id])
+    #expect(try await store.load(trashed.document.id) == nil)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: trash.path).count == 2)
+}

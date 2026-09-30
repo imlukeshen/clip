@@ -1,6 +1,6 @@
 import Foundation
 
-/// Color spaces supported by a Clip project.
+/// Color spaces supported by a clipx project.
 public enum ColorSpaceTag: String, Codable, Sendable {
     case sRGB
     case displayP3

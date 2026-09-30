@@ -35,10 +35,10 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.click()
 
-        // Open from Clip's menu so this paste-behaviour test remains isolated
+        // Open from clipx's menu so this paste-behaviour test remains isolated
         // from global shortcut ownership (for example, when Maccy owns ⌘⇧C).
         app.menuBars.menuBarItems["Capture"].click()
-        let openClipboard = app.menuItems["Open Clip Clipboard"]
+        let openClipboard = app.menuItems["Open clipx Clipboard"]
         XCTAssertTrue(openClipboard.waitForExistence(timeout: 2))
         openClipboard.click()
         let pasteRow = app.buttons["Paste one-click paste"]
@@ -50,7 +50,7 @@ final class TextEditorTypingTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertEqual(editor.value as? String, "one-click paste")
-        XCTAssertTrue(app.staticTexts["Clip Clipboard"].waitForNonExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["clipx Clipboard"].waitForNonExistence(timeout: 2))
     }
 
     @MainActor
@@ -75,7 +75,7 @@ final class TextEditorTypingTests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
         app.typeKey("c", modifierFlags: [.command, .shift])
 
-        let clipboardTitle = app.staticTexts["Clip Clipboard"]
+        let clipboardTitle = app.staticTexts["clipx Clipboard"]
         XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
 
         app.typeKey(.escape, modifierFlags: [])
@@ -104,12 +104,12 @@ final class TextEditorTypingTests: XCTestCase {
         toggle.click()
 
         app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertFalse(app.staticTexts["Clip Clipboard"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["clipx Clipboard"].waitForExistence(timeout: 2))
 
         app.activate()
         toggle.click()
         app.typeKey("c", modifierFlags: [.command, .shift])
-        let clipboardTitle = app.staticTexts["Clip Clipboard"]
+        let clipboardTitle = app.staticTexts["clipx Clipboard"]
         XCTAssertTrue(clipboardTitle.waitForExistence(timeout: 5))
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(clipboardTitle.waitForNonExistence(timeout: 5))
@@ -142,8 +142,8 @@ final class TextEditorTypingTests: XCTestCase {
         let editor = app.textViews["text-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.click()
-        editor.typeText("Clip typing works")
-        XCTAssertEqual(editor.value as? String, "Clip typing works")
+        editor.typeText("clipx typing works")
+        XCTAssertEqual(editor.value as? String, "clipx typing works")
 
         app.typeKey("z", modifierFlags: .command)
         XCTAssertEqual(editor.value as? String, "")
@@ -162,10 +162,10 @@ final class TextEditorTypingTests: XCTestCase {
         editor.typeKey(.delete, modifierFlags: [])
 
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("Clip paste works", forType: .string)
+        NSPasteboard.general.setString("clipx paste works", forType: .string)
         app.activate()
         editor.typeKey("v", modifierFlags: .command)
-        XCTAssertEqual(editor.value as? String, "Clip paste works")
+        XCTAssertEqual(editor.value as? String, "clipx paste works")
     }
 
     @MainActor
@@ -421,7 +421,7 @@ final class TextEditorTypingTests: XCTestCase {
         let editor = app.textViews["text-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.click()
-        editor.typeText("# Clip preview")
+        editor.typeText("# clipx preview")
 
         let languageMenu = app.descendants(matching: .any)["text-language-menu"]
         XCTAssertTrue(languageMenu.waitForExistence(timeout: 5))
@@ -462,7 +462,7 @@ final class TextEditorTypingTests: XCTestCase {
         editor.typeText("\n\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(
-            "import SwiftUI\n\nstruct ClipCard: View {\n    var body: some View { Text(\"Clip\") }\n}",
+            "import SwiftUI\n\nstruct ClipCard: View {\n    var body: some View { Text(\"clipx\") }\n}",
             forType: .string
         )
         app.activate()
@@ -581,6 +581,8 @@ final class TextEditorTypingTests: XCTestCase {
             app.staticTexts["PDF ready"].waitForExistence(timeout: 90),
             "LaTeX did not compile into the PDF preview"
         )
+        // Matches the text typed into the document above, which is fixture
+        // content rather than the product name.
         XCTAssertTrue(app.staticTexts["Clip PDF"].waitForExistence(timeout: 10))
         assertVisibleSourceGlyphs(
             in: app.textViews["text-editor"],

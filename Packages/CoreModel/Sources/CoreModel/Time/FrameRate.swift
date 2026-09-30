@@ -1,6 +1,6 @@
 import Foundation
 
-/// Frame rates supported by a Clip canvas.
+/// Frame rates supported by a clipx canvas.
 public enum FrameRate: String, Codable, Sendable, CaseIterable {
     case fps24
     case fps25

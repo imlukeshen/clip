@@ -3,7 +3,7 @@ import Foundation
 
 /// The editable geometry shared by the photo canvas and its transform overlay.
 ///
-/// Frames use Clip's top-left, normalized canvas coordinate system. Rotation is
+/// Frames use clipx's top-left, normalized canvas coordinate system. Rotation is
 /// expressed clockwise in degrees, matching SwiftUI's visual coordinate space.
 public struct ImageLayerTransformState: Equatable, Sendable {
     public var frame: CGRect

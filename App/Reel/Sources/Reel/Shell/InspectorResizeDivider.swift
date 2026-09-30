@@ -42,7 +42,10 @@ struct InspectorResizeDivider: View {
     }
 
     private var drag: some Gesture {
-        DragGesture(minimumDistance: 1)
+        // Measured in window space: the grip moves as the panes resize, so a
+        // translation measured against the grip itself shifts under the
+        // pointer every frame and the divider jitters.
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .onChanged { value in
                 let start = widthAtDragStart ?? displayedWidth
                 widthAtDragStart = start
@@ -52,6 +55,7 @@ struct InspectorResizeDivider: View {
             }
             .onEnded { _ in
                 widthAtDragStart = nil
+                model.persistInspectorWidth()
                 syncCursor()
             }
     }

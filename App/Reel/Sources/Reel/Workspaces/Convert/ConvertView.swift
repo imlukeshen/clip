@@ -190,7 +190,7 @@ private struct ConversionQueueGroup: View {
                         }
                     }
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
                 .disabled(model.isConverting)
             }
@@ -334,7 +334,7 @@ private struct ConversionQueueRow: View {
             Image(systemName: "slider.horizontal.3")
                 .frame(width: 20, height: 20)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(ReelMenuStyle())
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(isConverting)

@@ -56,7 +56,7 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
                                     severity: .information,
                                     message: """
                                         Substituted glyphtounicode for XeTeX. \
-                                        \\pdfglyphtounicode is a pdfTeX command Clip's engine does \
+                                        \\pdfglyphtounicode is a pdfTeX command clipx's engine does \
                                         not provide, and XeTeX already writes Unicode-mapped PDFs \
                                         without it.
                                         """,
@@ -198,6 +198,10 @@ public struct TectonicEngine: TeXEngine, TeXEngineActivityAwaiting {
         let caches =
             FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
+        // Deliberately still "Clip": this holds LaTeX packages Tectonic
+        // downloaded, and renaming it only means fetching them all again. The
+        // path is inside ~/Library/Caches and is never shown, so there is
+        // nothing for the rename to make consistent.
         return caches.appendingPathComponent("Clip/Tectonic", isDirectory: true)
     }
 

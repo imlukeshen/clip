@@ -54,20 +54,20 @@ private struct SettingsContent: View {
                 )
                 .accessibilityIdentifier("settings-clipboard-capture")
                 Text(
-                    "Off by default. When enabled, Clip stores eligible copied text, images, "
+                    "Off by default. When enabled, clipx stores eligible copied text, images, "
                         + "and file locations locally for up to seven days. Sensitive, transient, "
                         + "and oversized pasteboard items are ignored. Disable this at any time to stop watching."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
                 Toggle(
-                    "Global Clip Clipboard shortcut (Command-Shift-C)",
+                    "Global clipx Clipboard shortcut (Command-Shift-C)",
                     isOn: clipboardShortcutBinding
                 )
                 .accessibilityIdentifier("settings-global-clipboard-shortcut")
                 Text(
                     "Turn this off if Maccy or another clipboard manager uses Command-Shift-C. "
-                        + "Clip Clipboard remains available from the sidebar and Capture menu."
+                        + "clipx Clipboard remains available from the sidebar and Capture menu."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -80,9 +80,9 @@ private struct SettingsContent: View {
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
                 Text(
-                    "While Clip is open, screenshots enter Clip Clipboard. Recordings can "
+                    "While clipx is open, screenshots enter clipx Clipboard. Recordings can "
                         + "open in the video editor, enter the clipboard, or stay untouched. "
-                        + "Clip stops watching when you quit, and the original macOS file stays put."
+                        + "clipx stops watching when you quit, and the original macOS file stays put."
                 )
                 .font(theme.type.caption.font)
                 .foregroundStyle(theme.palette.textTertiary)
@@ -139,7 +139,7 @@ private struct SettingsContent: View {
                     }
                 }
                 Text(
-                    "Clip first uses the PDF's embedded or installed font. If new text needs "
+                    "clipx first uses the PDF's embedded or installed font. If new text needs "
                         + "missing glyphs, it can download a pinned, SHA-256 verified open font "
                         + "from the Google Fonts repository. PDF-provided URLs are never opened."
                 )
@@ -166,12 +166,14 @@ private struct SettingsContent: View {
                         }
                     }
                     Text(
-                        "Ollama defaults to localhost:11434. Start Ollama and install the selected "
-                            + "model first (for example: `ollama pull llama3.2`). LM Studio also works "
-                            + "through its OpenAI-compatible server."
+                        "Ollama defaults to localhost:11434. LM Studio also works through its "
+                            + "OpenAI-compatible server, but manages its own models."
                     )
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    if settings.canInstallLocalModels {
+                        localModels
+                    }
                 } else {
                     HStack {
                         SecureField("API key", text: credentialBinding)
@@ -192,6 +194,18 @@ private struct SettingsContent: View {
                         .foregroundStyle(theme.palette.textSecondary)
                         .textSelection(.enabled)
                 }
+                Toggle(
+                    "Let the assistant see this window", isOn: $settings.sharesWindowWithAssistant)
+                Text(
+                    "Off by default. When on, each request includes a picture of the clipx window "
+                        + "so the assistant can tell what you mean by \"this\". It draws clipx's own "
+                        + "view, never the desktop or another app, and needs no screen recording "
+                        + "permission — but the window's contents do reach the provider you have "
+                        + "configured. The assistant still changes things only through tools."
+                )
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+
                 Picker("Confirm edits", selection: $settings.confirmationPolicy) {
                     Text("Destructive edits").tag(ConfirmationPolicy.confirmDestructive)
                     Text("Every edit").tag(ConfirmationPolicy.confirmAll)
@@ -225,6 +239,11 @@ private struct SettingsContent: View {
         .foregroundStyle(theme.palette.textPrimary)
         .background(theme.palette.surfaceBase)
         .task { await settings.refresh() }
+        // Re-read on every appearance and whenever the endpoint changes: Ollama
+        // is a separate process, so models can arrive or be removed without clipx
+        // hearing about it.
+        .task(id: settings.compatibleBaseURL) { await settings.refreshInstalledLocalModels() }
+        .task(id: settings.selectedProvider) { await settings.refreshInstalledLocalModels() }
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
                 .environment(\.theme, theme)
@@ -249,6 +268,111 @@ private struct SettingsContent: View {
         } message: {
             Text("PDFs and edits stay intact. Missing open fonts may be downloaded again.")
         }
+    }
+
+    /// Installing and choosing models on a local Ollama.
+    ///
+    /// Only the models that advertise tool calling are suggested. The assistant
+    /// drives clipx by emitting tool calls, so one without it will answer
+    /// questions and change nothing.
+    @ViewBuilder private var localModels: some View {
+        if !settings.installedLocalModels.isEmpty {
+            Picker("Editing model", selection: $settings.model) {
+                ForEach(settings.installedLocalModels, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            Picker("Vision model", selection: $settings.visionModel) {
+                Text("None").tag("")
+                ForEach(settings.installedLocalModels, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+        }
+
+        if let download = settings.localModelDownload {
+            switch download {
+            case .running(let name, let progress):
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    HStack {
+                        if let fraction = progress.fraction {
+                            ProgressView(value: fraction)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button("Cancel") { settings.cancelLocalModelDownload() }
+                    }
+                    Text(
+                        [name, progress.status, progress.byteSummary]
+                            .compactMap { $0 }
+                            .joined(separator: " · ")
+                    )
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                }
+            case .failed(let name, let message):
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(name): \(message)")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.danger)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { settings.dismissLocalModelDownloadFailure() }
+                }
+            }
+        } else {
+            if !settings.availableLocalModelPairings.isEmpty {
+                Menu("Install a pair…") {
+                    ForEach(settings.availableLocalModelPairings) { pairing in
+                        Button(Self.label(for: pairing)) { settings.installPairing(pairing) }
+                    }
+                }
+            }
+            if !settings.availableLocalModelSuggestions.isEmpty {
+                Menu("Download one model…") {
+                    ForEach(LocalModelRole.allCases, id: \.self) { role in
+                        let matching = settings.availableLocalModelSuggestions.filter {
+                            $0.role == role
+                        }
+                        if !matching.isEmpty {
+                            Section(role == .editing ? "Editing" : "Vision") {
+                                ForEach(matching) { suggestion in
+                                    Button(Self.label(for: suggestion)) {
+                                        settings.downloadLocalModel(suggestion.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let warning = settings.localModelWarning {
+            Text(warning)
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.danger)
+                .textSelection(.enabled)
+        }
+
+        Text(
+            "Locally these are two jobs: the editing model calls tools, the vision model "
+                + "reads the window, and almost no model does both. Install a pair and clipx "
+                + "uses each for what it can do. Ollama does the downloading; clipx only "
+                + "talks to your machine, and sizes are approximate."
+        )
+        .font(theme.type.caption.font)
+        .foregroundStyle(theme.palette.textTertiary)
+    }
+
+    private static func label(for suggestion: LocalModelSuggestion) -> String {
+        let size = String(format: "%.1f", suggestion.approximateGigabytes)
+        return "\(suggestion.name) — about \(size) GB · \(suggestion.summary)"
+    }
+
+    private static func label(for pairing: LocalModelPairing) -> String {
+        let size = String(format: "%.1f", pairing.approximateGigabytes)
+        return "\(pairing.title) — \(pairing.editing) + \(pairing.vision), about \(size) GB"
     }
 
     private var captureDestinationBinding: Binding<CaptureDestination> {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The appearance a person has chosen for Clip, independent of the macOS setting.
+/// The appearance a person has chosen for clipx, independent of the macOS setting.
 public enum AppearancePreference: String, CaseIterable, Sendable {
     case system
     case light
@@ -14,7 +14,7 @@ public enum AppearancePreference: String, CaseIterable, Sendable {
         }
     }
 
-    /// The scheme to impose on Clip's windows, or `nil` to follow macOS.
+    /// The scheme to impose on clipx's windows, or `nil` to follow macOS.
     public var colorScheme: ColorScheme? {
         switch self {
         case .system: nil

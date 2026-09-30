@@ -19,6 +19,11 @@ struct EditorView: View {
     @State private var previewDragOffset = CGSize.zero
     @State private var previewScale = 1.0
     @State private var liveTextSpans: [OCRSpan] = []
+    /// Whether dragging the preview selects recognized text instead of moving
+    /// the clip. The two gestures cannot share a drag: the overlay only claims
+    /// events over a recognized word, so a selection that starts on a gap also
+    /// panned the video underneath it.
+    @State private var isSelectingLiveText = false
     @State private var timelineReferenceDuration = 0.0
     @AppStorage("clip.timeline.zoom") private var timelineZoom = TimelineViewport.fitZoom
 
@@ -27,6 +32,7 @@ struct EditorView: View {
             editorContent(availableSize: proxy.size)
         }
         .background(theme.palette.surfaceBase)
+        .onDeleteCommand { editor.deleteSelected() }
         .sheet(isPresented: $showsExportSheet) {
             ExportDestinationSheet(
                 model: model,
@@ -58,6 +64,12 @@ struct EditorView: View {
             case .nothing: break
             }
         }
+        .onChange(of: liveTextSpans.isEmpty) { _, isEmpty in
+            if isEmpty { isSelectingLiveText = false }
+        }
+        .onChange(of: editor.isPlaying) { _, isPlaying in
+            if isPlaying { isSelectingLiveText = false }
+        }
         .task(id: liveTextRequestID) {
             await refreshLiveText()
         }
@@ -88,6 +100,16 @@ struct EditorView: View {
                         toolRail
                         Divider().overlay(theme.palette.line)
                         preview(isCompact: compact)
+                            .layoutPriority(1)
+                        // The rail belongs beside the preview, not beside the
+                        // whole editor: run it the full height of the window and
+                        // the timeline stops short of the edge.
+                        if model.showsVideoEditorInspector, model.isInspectorVisible {
+                            VideoInspectorRail(
+                                model: model,
+                                availableWindowWidth: availableSize.width
+                            )
+                        }
                     }
                     Divider().overlay(theme.palette.line)
                     timeline(isCompact: compact)
@@ -112,8 +134,12 @@ struct EditorView: View {
                 model.closeEditor()
             } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 30, height: 30)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            // Matches the back button in every other workspace: the plain style
+            // only dips opacity, so this one alone gave no hover fill and no
+            // press feedback.
+            .buttonStyle(ReelIconButtonStyle())
             .help("Back to video library")
 
             projectTitle
@@ -159,7 +185,7 @@ struct EditorView: View {
                     Label("Add media", systemImage: "plus")
                 }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help("Add video, photos, or audio to the targeted timeline track")
             .accessibilityIdentifier("video-add-media-menu")
@@ -219,7 +245,7 @@ struct EditorView: View {
                     Label(targetedTrackSummary, systemImage: "square.stack.3d.up")
                 }
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help(
                 "Target V and A tracks for new media, add tracks, or remove an empty unlocked track"
@@ -237,8 +263,9 @@ struct EditorView: View {
                 if isCompact {
                     Button(action: editor.cancelExport) {
                         Image(systemName: "xmark")
+                            .frame(width: 26, height: 26)
                     }
-                    .buttonStyle(ReelPlainButtonStyle())
+                    .buttonStyle(ReelIconButtonStyle())
                     .help("Cancel export")
                 } else {
                     Button("Cancel") { editor.cancelExport() }
@@ -265,8 +292,9 @@ struct EditorView: View {
                 editor.undo()
             } label: {
                 Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             .help("Undo")
@@ -276,8 +304,9 @@ struct EditorView: View {
                 editor.redo()
             } label: {
                 Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(!editor.undoManager.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("Redo")
@@ -285,6 +314,7 @@ struct EditorView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: EditorChromeMetrics.headerHeight)
+        .titlebarDoubleClick()
         .background(theme.palette.surfacePanel)
     }
 
@@ -432,6 +462,7 @@ struct EditorView: View {
                     if !editor.isPlaying, !liveTextSpans.isEmpty {
                         LiveTextOverlay(
                             spans: liveTextSpans,
+                            selectionMode: isSelectingLiveText ? .wholeSurface : .off,
                             onSearch: model.searchLibrary,
                             onRedact: { regions in
                                 editor.redactCurrentRegions(
@@ -483,7 +514,7 @@ struct EditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .clipped()
-                .gesture(previewPanGesture(in: contentSize))
+                .gesture(previewPanGesture(in: contentSize), isEnabled: !isSelectingLiveText)
                 .simultaneousGesture(previewMagnificationGesture)
                 .overlay(alignment: .topLeading) {
                     if editor.selectedItem != nil {
@@ -513,15 +544,38 @@ struct EditorView: View {
                 }
                 .overlay(alignment: .bottomLeading) {
                     if !editor.isPlaying, !liveTextSpans.isEmpty {
-                        Label("Live Text · Drag to select", systemImage: "text.viewfinder")
+                        Button {
+                            isSelectingLiveText.toggle()
+                        } label: {
+                            Label(
+                                isSelectingLiveText
+                                    ? "Live Text · Selecting" : "Live Text · Click to select",
+                                systemImage: isSelectingLiveText
+                                    ? "text.viewfinder" : "text.viewfinder"
+                            )
                             .font(theme.type.caption.font)
-                            .foregroundStyle(theme.palette.textPrimary)
+                            .foregroundStyle(
+                                isSelectingLiveText
+                                    ? theme.palette.accentOn : theme.palette.textPrimary
+                            )
                             .padding(.vertical, 6)
                             .padding(.horizontal, 9)
-                            .background(theme.palette.surfacePanel.opacity(0.9))
+                            .background(
+                                isSelectingLiveText
+                                    ? theme.palette.accent
+                                    : theme.palette.surfacePanel.opacity(0.9)
+                            )
                             .clipShape(Capsule())
-                            .padding(10)
-                            .allowsHitTesting(false)
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(ReelPlainButtonStyle())
+                        .padding(10)
+                        .help(
+                            isSelectingLiveText
+                                ? "Drag across the video to select text"
+                                : "Select recognized text instead of moving the clip"
+                        )
+                        .accessibilityIdentifier("video-live-text-toggle")
                     }
                 }
                 .accessibilityLabel("Video preview")
@@ -537,35 +591,46 @@ struct EditorView: View {
                     editor.togglePlayback()
                 } label: {
                     Image(systemName: editor.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 .help(editor.isPlaying ? "Pause · Space" : "Play · Space")
                 .accessibilityIdentifier("video-playback-toggle")
                 Button {
                     editor.shuttleBackward()
                 } label: {
                     Image(systemName: "backward.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 Button {
                     editor.shuttlePause()
                 } label: {
                     Image(systemName: "pause.fill")
-                        .frame(width: 18)
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
+                .buttonStyle(ReelIconButtonStyle())
                 Button {
                     editor.shuttleForward()
                 } label: {
                     Image(systemName: "forward.fill")
+                        .frame(width: 26, height: 26)
                 }
-                .buttonStyle(ReelPlainButtonStyle())
-                Button("I") { editor.setInPoint() }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .help("Set In point")
-                Button("O") { editor.setOutPoint() }
-                    .buttonStyle(ReelPlainButtonStyle())
-                    .help("Set Out point")
+                .buttonStyle(ReelIconButtonStyle())
+                Button {
+                    editor.setInPoint()
+                } label: {
+                    Text("I").frame(width: 26, height: 26)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .help("Set In point")
+                Button {
+                    editor.setOutPoint()
+                } label: {
+                    Text("O").frame(width: 26, height: 26)
+                }
+                .buttonStyle(ReelIconButtonStyle())
+                .help("Set Out point")
                 Spacer()
                 Text(timecode(editor.duration))
                     .frame(width: isCompact ? 68 : 78, alignment: .trailing)
@@ -711,8 +776,9 @@ struct EditorView: View {
                 )
             } label: {
                 Image(systemName: "minus.magnifyingglass")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom <= TimelineViewport.fitZoom)
             .keyboardShortcut("-", modifiers: .command)
             .help("Zoom out")
@@ -735,8 +801,9 @@ struct EditorView: View {
                 )
             } label: {
                 Image(systemName: "plus.magnifyingglass")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom >= TimelineViewport.maximumZoom)
             .keyboardShortcut("=", modifiers: .command)
             .help("Zoom in")
@@ -753,11 +820,12 @@ struct EditorView: View {
             } label: {
                 if isCompact {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
+                        .frame(width: 26, height: 26)
                 } else {
-                    Text("Fit")
+                    Text("Fit").frame(height: 26).padding(.horizontal, 6)
                 }
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(timelineZoom == TimelineViewport.fitZoom)
             .help("Fit the complete project")
             .accessibilityLabel("Fit complete project")
@@ -1061,6 +1129,7 @@ private struct SavedExportPreference: Codable {
 
 private struct ToolButton: View {
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     let systemName: String
     let title: String
@@ -1118,7 +1187,7 @@ private struct ToolButton: View {
             }
         }
         .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering }
+            withAnimation(reduceMotion ? nil : ReelMotion.buttonHover) { isHovered = hovering }
         }
         .help("\(title): \(detail)")
         .zIndex(isHovered ? 100 : 0)
@@ -1140,11 +1209,18 @@ struct EditorInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("Panel", selection: $panel) {
-                ForEach(Panel.allCases) { Text($0.rawValue).tag($0) }
+            // Sized to its content and centred in the header, rather than
+            // stretched to fill it: a switch between two panels does not need
+            // the height of a title bar.
+            HStack {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                // Sized to its labels: a two-item switch stretched across the
+                // whole rail reads as a banner rather than a control.
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 12)
             .frame(height: EditorChromeMetrics.headerHeight)
 
@@ -1192,7 +1268,7 @@ struct EditorInspector: View {
             SectionLabel("Project context")
             Text("\(editor.timelineMediaCount) items · \(durationText)")
                 .foregroundStyle(theme.palette.textSecondary)
-            Text("Ask Clip to trim, split, zoom, restyle, or caption this edit.")
+            Text("Ask clipx to trim, split, zoom, restyle, or caption this edit.")
                 .foregroundStyle(theme.palette.textTertiary)
         }
         .font(theme.type.caption.font)
@@ -1530,32 +1606,6 @@ private struct EffectInspectorRow: View {
     }
 }
 
-private struct PendingActionCard: View {
-    @Environment(\.theme) private var theme
-    @Bindable var model: AppModel
-    let action: PendingAssistantAction
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("Review \(action.name)").font(theme.type.label.font)
-            Text(action.result.message)
-                .font(theme.type.caption.font)
-                .foregroundStyle(theme.palette.textSecondary)
-            HStack {
-                Button("Apply") { model.approveAssistantAction(action.id) }
-                    .buttonStyle(ReelBorderedButtonStyle())
-                Button("Skip") { model.rejectAssistantAction(action.id) }
-                    .buttonStyle(ReelPlainButtonStyle())
-            }
-        }
-        .padding(9)
-        .background(theme.palette.surfaceRaised)
-        .clipShape(
-            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
-        )
-    }
-}
-
 private struct EffectButton: View {
     @Environment(\.theme) private var theme
     let title: String
@@ -1604,6 +1654,29 @@ private struct KeyframeSlider: View {
                 .help("Set keyframe at playhead")
             }
             Slider(value: $value, in: range)
+        }
+    }
+}
+
+/// Holds the rail, and the only read of its width.
+///
+/// Reading `inspectorWidth` from the editor's own body made the whole editor —
+/// tool rail, preview, transport controls and the timeline representable —
+/// re-evaluate on every frame of a resize, because an `@Observable` property
+/// invalidates every view that reads it. Keeping the read in a leaf means a
+/// drag rebuilds the rail and nothing else.
+private struct VideoInspectorRail: View {
+    @Bindable var model: AppModel
+    let availableWindowWidth: CGFloat
+
+    var body: some View {
+        let width = InspectorLayout.displayedWidth(
+            requestedWidth: model.inspectorWidth,
+            availableWindowWidth: availableWindowWidth
+        )
+        HStack(spacing: 0) {
+            InspectorResizeDivider(model: model, displayedWidth: width)
+            UnifiedInspector(model: model, width: width)
         }
     }
 }

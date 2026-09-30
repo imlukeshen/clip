@@ -1,27 +1,31 @@
-.PHONY: bootstrap generate xcode build run test test-packages test-frameworks test-app test-ui deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
+.PHONY: bootstrap generate xcode build run dmg test test-packages test-frameworks test-app test-ui deps shortcuts licence-audit distribution-check lint format ffmpeg licences release clean
 
 bootstrap:
 	@command -v xcodegen >/dev/null || { echo "Install XcodeGen before continuing"; exit 1; }
 
 generate:
-	@# Reel.xcodeproj predates the Clip rename. Keeping both projects open makes
-	@# Xcode load every local Swift package twice and report workspace conflicts.
-	@rm -rf Reel.xcodeproj
+	@# Reel.xcodeproj and Clip.xcodeproj predate the clipx rename. Keeping any of
+	@# them alongside the current project makes Xcode load every local Swift
+	@# package twice and report workspace conflicts.
+	@rm -rf Reel.xcodeproj Clip.xcodeproj
 	xcodegen generate
 	@# Seed Xcode with the reviewed lock for the complete generated project graph.
-	@mkdir -p Clip.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
-	@cp App/Clip.Package.resolved Clip.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+	@mkdir -p clipx.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+	@cp App/clipx.Package.resolved clipx.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 xcode: generate
-	open Clip.xcodeproj
+	open clipx.xcodeproj
 
 build: generate
-	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
-	xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreDebug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project clipx.xcodeproj -scheme clipx -configuration Debug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project clipx.xcodeproj -scheme clipx-AppStore -configuration AppStoreDebug -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
 
 run: generate
-	xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
-	open -n DerivedData/Build/Products/Debug/Clip.app
+	xcodebuild -project clipx.xcodeproj -scheme clipx -configuration Debug -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO -quiet build
+	open -n DerivedData/Build/Products/Debug/clipx.app
+
+dmg:
+	Scripts/make-dmg.sh
 
 test: test-packages deps shortcuts licence-audit
 
@@ -45,7 +49,7 @@ test-app:
 test-ui: generate
 	@rm -rf TestResults/ClipUITests.xcresult
 	@mkdir -p TestResults
-	xcodebuild test -project Clip.xcodeproj -scheme Clip -configuration Debug -destination 'platform=macOS' -disableAutomaticPackageResolution -resultBundlePath TestResults/ClipUITests.xcresult CODE_SIGNING_ALLOWED=NO
+	xcodebuild test -project clipx.xcodeproj -scheme clipx -configuration Debug -destination 'platform=macOS' -disableAutomaticPackageResolution -resultBundlePath TestResults/ClipUITests.xcresult CODE_SIGNING_ALLOWED=NO
 
 deps:
 	Scripts/check-aikit-dependencies.sh
@@ -75,4 +79,4 @@ release:
 	Scripts/release.sh
 
 clean:
-	rm -rf Clip.xcodeproj Reel.xcodeproj DerivedData
+	rm -rf clipx.xcodeproj Clip.xcodeproj Reel.xcodeproj DerivedData

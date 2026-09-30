@@ -8,14 +8,6 @@ import TextEngine
 import UniformTypeIdentifiers
 
 struct TextEditorWorkspace: View {
-    private enum EditorPane: Hashable, Identifiable {
-        case project
-        case source
-        case preview
-
-        var id: Self { self }
-    }
-
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: TextEditorViewModel
@@ -27,6 +19,8 @@ struct TextEditorWorkspace: View {
     @State private var texForwardSearch: TeXForwardSearchRequest?
     @State private var showsTeXOutput = false
     @State private var texOutputTab: TeXOutputTab = .problems
+    @State private var codeRun: CodeRunSession?
+    @State private var showsTerminal = false
     @State private var selectedRange = NSRange(location: 0, length: 0)
     @State private var markdownDocument: MarkdownDocumentSnapshot?
     @State private var markdownDocumentIdentity: CodeEditorDocumentIdentity?
@@ -52,14 +46,27 @@ struct TextEditorWorkspace: View {
                 }
                 editorSurface
                 if editor.language == .latex, showsTeXOutput {
-                    Divider().overlay(theme.palette.line)
-                    TeXDiagnosticsPanel(
-                        diagnostics: editor.texDiagnostics,
-                        log: editor.texLog,
-                        selectedTab: $texOutputTab,
-                        onSelectDiagnostic: navigateToDiagnostic,
-                        onClose: { showsTeXOutput = false }
-                    )
+                    ResizableOutputPanel { height in
+                        TeXDiagnosticsPanel(
+                            diagnostics: editor.texDiagnostics,
+                            log: editor.texLog,
+                            selectedTab: $texOutputTab,
+                            height: height,
+                            onSelectDiagnostic: navigateToDiagnostic,
+                            onClose: { showsTeXOutput = false }
+                        )
+                    }
+                }
+                if showsTerminal, let codeRun, codeRun.isRunnable(editor.language) {
+                    ResizableOutputPanel { height in
+                        CodeTerminalPanel(
+                            session: codeRun,
+                            height: height,
+                            fontSize: editor.settings.fontSize,
+                            onGoToLine: { sourceNavigation = TextEditorNavigation(line: $0) },
+                            onClose: { showsTerminal = false }
+                        )
+                    }
                 }
                 Divider().overlay(theme.palette.line)
                 statusBar
@@ -78,19 +85,28 @@ struct TextEditorWorkspace: View {
             }
         }
         .background(theme.palette.surfaceBase)
+        .background {
+            // Zero opacity rather than hidden: a removed view registers no key
+            // equivalent, and these must work while the inspector is collapsed.
+            ZStack {
+                Button("Increase editor text") { editor.adjustFontSize(by: 1) }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Increase editor text") { editor.adjustFontSize(by: 1) }
+                    .keyboardShortcut("=", modifiers: .command)
+                Button("Decrease editor text") { editor.adjustFontSize(by: -1) }
+                    .keyboardShortcut("-", modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+        .onChange(of: ObjectIdentifier(editor), initial: true) {
+            // Output belongs to the file that produced it.
+            codeRun = Self.makeCodeRunSession()
+            showsTerminal = false
+        }
         .onChange(of: editor.hasExternalConflict, initial: true) { _, hasConflict in
             if hasConflict { showsExternalConflictAlert = true }
-        }
-        .onChange(of: editor.texDiagnostics) { _, diagnostics in
-            guard !diagnostics.isEmpty else { return }
-            texOutputTab = .problems
-            showsTeXOutput = true
-        }
-        .onChange(of: editor.texCompilationState) { _, state in
-            if case .failed = state, editor.texDiagnostics.isEmpty, !editor.texLog.isEmpty {
-                texOutputTab = .log
-                showsTeXOutput = true
-            }
         }
         .alert("File Changed on Disk", isPresented: $showsExternalConflictAlert) {
             Button("Keep Mine", action: editor.keepCurrentVersion)
@@ -144,58 +160,26 @@ struct TextEditorWorkspace: View {
     private var texPackageAlertMessage: String {
         if let resource = editor.texPackageRecoveryResource {
             return
-                "\(resource) is not available in Clip's package cache. Allow downloads to fetch it and retry this build, or stay offline without retrying."
+                "\(resource) is not available in clipx's package cache. Allow downloads to fetch it and retry this build, or stay offline without retrying."
         }
         return
-            "Tectonic may need to download LaTeX packages. Clip records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
+            "Tectonic may need to download LaTeX packages. clipx records each allowed fetch in the egress ledger. You can keep compilation offline and use only cached packages instead."
     }
 
     private var editorSurface: some View {
-        // Stable pane IDs let SwiftUI move the native source editor without
-        // recreating it when LaTeX adds a preview or project navigator. Inactive
-        // panes are omitted instead of being represented by zero-width split
-        // children, which can collapse the source pane in NSSplitView.
-        HSplitView {
-            ForEach(editorPanes) { pane in
-                editorPane(pane)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
-    }
-
-    private var editorPanes: [EditorPane] {
-        guard editor.language == .latex else { return [.source] }
-        return editor.document.files.count > 1
-            ? [.project, .source, .preview] : [.source, .preview]
-    }
-
-    @ViewBuilder
-    private func editorPane(_ pane: EditorPane) -> some View {
-        switch pane {
-        case .project:
-            TeXProjectSidebar(editor: editor)
-                .frame(minWidth: 120, idealWidth: 160, maxWidth: 220)
-        case .source:
-            codeEditor
-                .frame(minWidth: latexPaneMinimumWidth, maxWidth: .infinity)
-                .layoutPriority(1)
-        case .preview:
-            TeXPDFPreview(
+        TeXSplitContainer(
+            showsProject: editor.language == .latex && editor.document.files.count > 1,
+            showsPreview: editor.language == .latex,
+            project: TeXProjectSidebar(editor: editor),
+            source: codeEditor,
+            preview: TeXPDFPreview(
                 editor: editor,
                 forwardSearch: texForwardSearch,
                 onInverseSearch: runInverseSearch
             )
-            .frame(minWidth: latexPaneMinimumWidth)
-        }
-    }
-
-    /// The shell guarantees editors 760 points beside the inspector. Leave
-    /// room for both source and preview when a TeX project also needs its file
-    /// navigator, rather than letting NSSplitView squeeze a native pane away.
-    private var latexPaneMinimumWidth: CGFloat {
-        guard editor.language == .latex else { return 0 }
-        return editor.document.files.count > 1 ? 300 : 340
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(editorSurfaceAccessibilityIdentifier)
     }
 
     private var editorSurfaceAccessibilityIdentifier: String {
@@ -285,10 +269,10 @@ struct TextEditorWorkspace: View {
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
                 .disabled(model.textEditorExportTargets.isEmpty)
-                .help("Export through Clip's conversion queue")
+                .help("Export through clipx's conversion queue")
                 .accessibilityIdentifier("markdown-export")
             }
 
@@ -341,6 +325,10 @@ struct TextEditorWorkspace: View {
                 }
             }
 
+            if let codeRun, codeRun.isRunnable(editor.language) {
+                runControls(codeRun)
+            }
+
             saveControl
 
             Button(action: editor.undo) {
@@ -361,7 +349,73 @@ struct TextEditorWorkspace: View {
         }
         .padding(.horizontal, theme.metrics.spacing.lg)
         .frame(height: EditorChromeMetrics.headerHeight)
+        .titlebarDoubleClick()
         .background(theme.palette.surfacePanel)
+    }
+
+    /// Every language with a grammar, programs first; the runnable ones get
+    /// a Run button.
+    private static let programmingLanguages: [LanguageID] = [
+        .python, .javascript, .typescript, .swift, .go, .rust, .c, .cpp, .java, .bash, .sql,
+    ]
+
+    private static let markupLanguages: [LanguageID] = [
+        .html, .css, .json, .yaml, .toml, .xml,
+    ]
+
+    @ViewBuilder
+    private func runControls(_ session: CodeRunSession) -> some View {
+        Button {
+            showsTerminal.toggle()
+        } label: {
+            Label("Terminal", systemImage: "terminal")
+        }
+        .buttonStyle(ReelBorderedButtonStyle())
+        .help("Show what the program printed")
+        .accessibilityIdentifier("code-terminal-toggle")
+
+        if session.isRunning {
+            Button(action: session.stop) {
+                Image(systemName: "stop.fill")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .help("Stop the program")
+            .accessibilityIdentifier("code-stop")
+        } else {
+            Button(action: runCode) {
+                Label("Run", systemImage: "play.fill")
+            }
+            .buttonStyle(ReelProminentButtonStyle())
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("Run this file (Command-Return)")
+            .accessibilityIdentifier("code-run")
+        }
+    }
+
+    /// Runs code only in the direct build; the App Store sandbox cannot launch
+    /// toolchains installed outside the app. See ADR 0015. Decided here
+    /// because the build conditions reach the app target, not the ReelAppCore
+    /// package.
+    private static func makeCodeRunSession() -> CodeRunSession {
+        #if DIRECT_BUILD
+            CodeRunSession(runner: SystemCodeRunner())
+        #else
+            CodeRunSession(runner: nil)
+        #endif
+    }
+
+    /// Runs the buffer as shown, unsaved edits included, from the file's own
+    /// folder so relative paths and sibling imports behave as in Terminal.
+    private func runCode() {
+        guard let codeRun else { return }
+        showsTerminal = true
+        codeRun.run(
+            source: editor.text,
+            language: editor.language,
+            fileName: activeFilename,
+            workingDirectory: editor.sourceURL?.deletingLastPathComponent()
+        )
     }
 
     private var activeFilename: String {
@@ -399,15 +453,13 @@ struct TextEditorWorkspace: View {
             languageButton("Markdown", language: .markdown)
             languageButton("LaTeX", language: .latex)
             Divider()
-            languageButton("Swift", language: .swift)
-            languageButton("JavaScript", language: .javascript)
-            languageButton("TypeScript", language: .typescript)
-            languageButton("Python", language: .python)
-            languageButton("JSON", language: .json)
-            languageButton("HTML", language: .html)
-            languageButton("CSS", language: .css)
-            languageButton("SQL", language: .sql)
-            languageButton("Shell", language: .bash)
+            ForEach(Self.programmingLanguages, id: \.self) { language in
+                languageButton(language.editorDisplayName, language: language)
+            }
+            Divider()
+            ForEach(Self.markupLanguages, id: \.self) { language in
+                languageButton(language.editorDisplayName, language: language)
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(
@@ -427,7 +479,7 @@ struct TextEditorWorkspace: View {
                 RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
             )
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(ReelMenuStyle())
         .fixedSize()
         .help(
             editor.activeFile?.languageIsExplicit == false
@@ -444,6 +496,7 @@ struct TextEditorWorkspace: View {
     private func languageButton(_ title: String, language: LanguageID) -> some View {
         Button {
             editor.setLanguage(language)
+            model.matchOpenTextFileName(to: language)
             // A language choice is an editing command. Return keyboard focus to
             // the source at the current caret so typing can continue immediately
             // after the menu closes, including while the LaTeX split is settling.
@@ -548,7 +601,7 @@ struct TextEditorWorkspace: View {
                     RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
                 )
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .fixedSize()
             .help("Turn the current line into body text or a heading")
             .accessibilityLabel(blockStyle.displayName)
@@ -654,7 +707,7 @@ struct TextEditorWorkspace: View {
                 Image(systemName: "plus")
                     .frame(width: 28, height: 28)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
             .help("Insert code, a table, image, footnote, math, or divider")
             .accessibilityLabel("Insert Markdown block")
@@ -746,8 +799,11 @@ struct TextEditorWorkspace: View {
             Image(systemName: "doc.on.clipboard")
                 .frame(width: 28, height: 28)
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(ReelMenuStyle())
         .menuIndicator(.hidden)
+        // Without this the pop-up stretches over the header's empty space,
+        // swallowing clicks meant for the bar itself.
+        .fixedSize()
         .disabled(selectedRange.length == 0 && editor.text.isEmpty)
         .help("Copy snippets or export this file")
         .accessibilityLabel("Snippet actions")
@@ -984,6 +1040,11 @@ extension LanguageID {
         case .sql: "SQL"
         case .xml: "XML"
         case .yaml: "YAML"
+        case .toml: "TOML"
+        case .javascript: "JavaScript"
+        case .typescript: "TypeScript"
+        case .latex: "LaTeX"
+        case .bash: "Shell"
         default: rawValue.capitalized
         }
     }

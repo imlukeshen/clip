@@ -1,4 +1,4 @@
-name: Clip
+name: clipx
 
 options:
   minimumXcodeGenVersion: 2.45.0
@@ -33,7 +33,7 @@ packages:
     path: Packages/SearchEngine
 
 targets:
-  Clip:
+  clipx:
     type: application
     platform: macOS
     sources:
@@ -41,12 +41,12 @@ targets:
     info:
       path: App/Reel/Config/Info.plist
       properties:
-        CFBundleDisplayName: Clip
+        CFBundleDisplayName: clipx
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.video
-        NSDesktopFolderUsageDescription: Clip watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.
-        NSSpeechRecognitionUsageDescription: Clip uses on-device speech recognition to generate captions for your clips.
+        NSDesktopFolderUsageDescription: clipx watches your macOS screenshot folder while the app is open so new screenshots and screen recordings can be imported automatically.
+        NSSpeechRecognitionUsageDescription: clipx uses on-device speech recognition to generate captions for your clips.
     dependencies:
       - package: ReelAppCore
         product: ReelAppCore
@@ -66,7 +66,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.reel.editor
-        PRODUCT_NAME: Clip
+        PRODUCT_NAME: clipx
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -132,18 +132,18 @@ targets:
     sources:
       - path: App/Reel/UITests/ReelUITests
     dependencies:
-      - target: Clip
+      - target: clipx
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.reel.editor.uitests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Clip
+        TEST_TARGET_NAME: clipx
 
 schemes:
-  Clip:
+  clipx:
     build:
       targets:
-        Clip: all
+        clipx: all
         ReelUITests: [test]
     test:
       config: Debug
@@ -153,10 +153,10 @@ schemes:
       config: Debug
     archive:
       config: Release
-  Clip-AppStore:
+  clipx-AppStore:
     build:
       targets:
-        Clip: all
+        clipx: all
     run:
       config: AppStoreDebug
     archive:

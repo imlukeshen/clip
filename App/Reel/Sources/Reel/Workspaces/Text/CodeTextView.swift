@@ -144,7 +144,33 @@ final class CodeTextView: NSTextView {
             super.insertText(list.continuation, replacementRange: selectedRange())
             return
         }
-        let indentation = String(beforeCaret.prefix { $0 == " " || $0 == "\t" })
+        let afterCaret: Character? =
+            caret < source.length
+            ? Character(source.substring(with: NSRange(location: caret, length: 1))) : nil
+        if !hasMarkedText(), selectedRange().length == 0,
+            let expansion = CodeIndentation.blockExpansion(
+                lineBeforeCaret: beforeCaret,
+                characterAfterCaret: afterCaret,
+                language: snippetLanguage,
+                width: tabWidth
+            )
+        {
+            apply(
+                TextEditResult(
+                    text: source.replacingCharacters(
+                        in: NSRange(location: caret, length: 0),
+                        with: expansion.text
+                    ),
+                    selectedRange: NSRange(location: caret + expansion.caretOffset, length: 0)
+                )
+            )
+            return
+        }
+        let indentation = CodeIndentation.newlineIndentation(
+            after: beforeCaret,
+            language: snippetLanguage,
+            width: tabWidth
+        )
         super.insertNewline(sender)
         if !indentation.isEmpty { super.insertText(indentation, replacementRange: selectedRange()) }
     }
@@ -170,10 +196,145 @@ final class CodeTextView: NSTextView {
                 return
             }
         }
+        if CodeIndentation.usesSoftTabs(for: snippetLanguage), !hasMarkedText(),
+            selection.length == 0
+        {
+            let source = string as NSString
+            let lineStart = source.lineRange(
+                for: NSRange(location: selection.location, length: 0)
+            ).location
+            let beforeCaret = source.substring(
+                with: NSRange(location: lineStart, length: selection.location - lineStart)
+            )
+            if let length = CodeIndentation.softTabDeletionLength(
+                lineBeforeCaret: beforeCaret,
+                width: tabWidth
+            ) {
+                let removal = NSRange(location: selection.location - length, length: length)
+                apply(
+                    TextEditResult(
+                        text: source.replacingCharacters(in: removal, with: ""),
+                        selectedRange: NSRange(location: removal.location, length: 0)
+                    )
+                )
+                return
+            }
+        }
         super.deleteBackward(sender)
     }
 
+    // MARK: Completion
+
+    override var rangeForUserCompletion: NSRange {
+        guard CodeCompletion.isAvailable(for: snippetLanguage) else {
+            return super.rangeForUserCompletion
+        }
+        let selection = selectedRange()
+        guard selection.length == 0,
+            let range = CodeCompletion.prefixRange(
+                endingAt: selection.location,
+                in: string as NSString
+            )
+        else { return NSRange(location: NSNotFound, length: 0) }
+        return range
+    }
+
+    override func completions(
+        forPartialWordRange charRange: NSRange,
+        indexOfSelectedItem index: UnsafeMutablePointer<Int>
+    ) -> [String]? {
+        guard CodeCompletion.isAvailable(for: snippetLanguage) else {
+            return super.completions(forPartialWordRange: charRange, indexOfSelectedItem: index)
+        }
+        index.pointee = 0
+        let source = string as NSString
+        guard NSMaxRange(charRange) <= source.length else { return nil }
+        let suggestions = CodeCompletion.suggestions(
+            forPrefix: source.substring(with: charRange),
+            in: string,
+            language: snippetLanguage
+        )
+        return suggestions.isEmpty ? nil : suggestions
+    }
+
+    /// Inserts only an accepted suggestion. AppKit otherwise writes each
+    /// highlighted candidate into the buffer while the list is open, which
+    /// would autosave, re-highlight, and undo text the user never chose.
+    override func insertCompletion(
+        _ word: String,
+        forPartialWordRange charRange: NSRange,
+        movement: Int,
+        isFinal flag: Bool
+    ) {
+        guard CodeCompletion.isAvailable(for: snippetLanguage) else {
+            super.insertCompletion(
+                word,
+                forPartialWordRange: charRange,
+                movement: movement,
+                isFinal: flag
+            )
+            return
+        }
+        let accepted = movement == NSReturnTextMovement || movement == NSTabTextMovement
+        guard flag, accepted else { return }
+        super.insertCompletion(
+            word, forPartialWordRange: charRange, movement: movement, isFinal: true)
+    }
+
+    private static func isIdentifierKeystroke(_ text: String) -> Bool {
+        guard text.count == 1, let character = text.first else { return false }
+        return character == "_" || (character.isASCII && character.isLetter)
+    }
+
+    /// Opens the suggestion list once the typed name is long enough to narrow it.
+    private func scheduleCompletion() {
+        Task { @MainActor [weak self] in
+            guard let self, window?.firstResponder === self, !hasMarkedText() else { return }
+            let selection = selectedRange()
+            guard selection.length == 0,
+                let range = CodeCompletion.prefixRange(
+                    endingAt: selection.location,
+                    in: string as NSString
+                ),
+                range.length >= 2,
+                !CodeCompletion.suggestions(
+                    forPrefix: (string as NSString).substring(with: range),
+                    in: string,
+                    language: snippetLanguage
+                ).isEmpty
+            else { return }
+            complete(nil)
+        }
+    }
+
+    /// Tab in a soft-tab language: spaces to the next stop for a caret, or one
+    /// level of indentation for every line of a multi-line selection.
+    private func insertSoftTab() {
+        let selection = selectedRange()
+        let source = string as NSString
+        let lineRange = source.lineRange(for: NSRange(location: selection.location, length: 0))
+        if selection.length > 0, NSMaxRange(selection) > NSMaxRange(lineRange) {
+            apply(
+                TextEditingOperations.indent(
+                    in: string,
+                    selectedRange: selection,
+                    width: tabWidth
+                )
+            )
+            return
+        }
+        let column = selection.location - lineRange.location
+        insertText(
+            CodeIndentation.softTab(atColumn: column, width: tabWidth),
+            replacementRange: selection
+        )
+    }
+
     override func insertTab(_ sender: Any?) {
+        if CodeIndentation.usesSoftTabs(for: snippetLanguage), !hasMarkedText() {
+            insertSoftTab()
+            return
+        }
         guard snippetLanguage == .markdown, !hasMarkedText() else {
             super.insertTab(sender)
             return
@@ -188,7 +349,9 @@ final class CodeTextView: NSTextView {
     }
 
     override func insertBacktab(_ sender: Any?) {
-        guard snippetLanguage == .markdown, !hasMarkedText() else {
+        let outdentsLines =
+            snippetLanguage == .markdown || CodeIndentation.usesSoftTabs(for: snippetLanguage)
+        guard outdentsLines, !hasMarkedText() else {
             super.insertBacktab(sender)
             return
         }
@@ -202,6 +365,10 @@ final class CodeTextView: NSTextView {
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let completesAfterInsertion =
+            CodeCompletion.isAvailable(for: snippetLanguage) && !hasMarkedText()
+            && (insertString as? String).map(Self.isIdentifierKeystroke) == true
+        defer { if completesAfterInsertion { scheduleCompletion() } }
         let sourceLengthBeforeInsertion = (string as NSString).length
         let replacedRange = validatedReplacementRange(replacementRange)
         if snippetLanguage == .latex, !hasMarkedText(), !sourceTypingAttributes.isEmpty {
@@ -258,6 +425,30 @@ final class CodeTextView: NSTextView {
         {
             apply(prepared)
             return
+        }
+        if selection.length == 0 {
+            let source = string as NSString
+            let lineStart = source.lineRange(
+                for: NSRange(location: selection.location, length: 0)
+            ).location
+            let beforeCaret = source.substring(
+                with: NSRange(location: lineStart, length: selection.location - lineStart)
+            )
+            if let removal = CodeIndentation.closingBracketDedent(
+                lineBeforeCaret: beforeCaret,
+                typed: inserted,
+                language: snippetLanguage,
+                width: tabWidth
+            ) {
+                let range = NSRange(location: selection.location - removal, length: removal)
+                apply(
+                    TextEditResult(
+                        text: source.replacingCharacters(in: range, with: inserted),
+                        selectedRange: NSRange(location: range.location + 1, length: 0)
+                    )
+                )
+                return
+            }
         }
         let pairs = ["(": ")", "[": "]", "{": "}", "\"": "\"", "'": "'"]
         if let closing = pairs[inserted] {

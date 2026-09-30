@@ -12,18 +12,18 @@ struct TeXDiagnosticsPanel: View {
     let diagnostics: [TeXDiagnostic]
     let log: String
     @Binding var selectedTab: TeXOutputTab
+    /// Supplied by the workspace so the panel can be dragged taller or shorter.
+    let height: Double
     let onSelectDiagnostic: (TeXDiagnostic) -> Void
     let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: theme.metrics.spacing.md) {
-                Picker("Build output", selection: $selectedTab) {
-                    ForEach(TeXOutputTab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
+                ReelSegmentedControl(
+                    selection: $selectedTab,
+                    options: TeXOutputTab.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
                 .frame(width: 220)
 
                 if selectedTab == .problems {
@@ -52,7 +52,7 @@ struct TeXDiagnosticsPanel: View {
                 rawLog
             }
         }
-        .frame(minHeight: 150, idealHeight: 210, maxHeight: 280)
+        .frame(height: height)
         .background(theme.palette.surfaceSunken)
         .accessibilityIdentifier("latex-build-output")
     }

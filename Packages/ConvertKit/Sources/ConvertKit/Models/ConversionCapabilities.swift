@@ -1,6 +1,6 @@
 import Foundation
 
-/// Capabilities that differ between Clip's direct and App Store channels.
+/// Capabilities that differ between clipx's direct and App Store channels.
 /// The App Store value never permits external process edges, even if the same
 /// machine has the corresponding application installed.
 public struct ConversionCapabilities: Sendable, Equatable {

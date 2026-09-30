@@ -12,6 +12,11 @@ struct PlayerSurface: NSViewRepresentable {
     }
 
     func updateNSView(_ view: PlayerView, context: Context) {
+        // Only when it actually differs. SwiftUI calls this on every upstream
+        // re-evaluation, which during a rail drag is every frame, and handing
+        // an AVPlayerLayer a player makes AVFoundation reconfigure its render
+        // pipeline even when it is the same player it already had.
+        guard view.playerLayer.player !== player else { return }
         view.playerLayer.player = player
     }
 

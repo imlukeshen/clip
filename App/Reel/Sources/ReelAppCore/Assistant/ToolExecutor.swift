@@ -58,6 +58,13 @@ public struct ToolExecutionContext: Sendable {
     public typealias BatchConverter =
         @Sendable ([BatchConversionJob]) async throws -> [BatchItemOutcome]
     public typealias TextCommander = @Sendable (TextToolRequest) async throws -> String
+    /// Runs a command belonging to a workspace that owns its own document.
+    ///
+    /// The PDF and photo editors have their own executors and their own patch
+    /// types, so their commands cannot produce a `GraphPatch` the way timeline
+    /// ones do. They are handed back whole and the workspace applies them
+    /// through its own mutation path, which keeps each edit a single undo.
+    public typealias WorkspaceCommander = @Sendable (ToolInvocation) async throws -> String
 
     public var document: ProjectDocument
     public var assets: [AssetID: AssetRecord]
@@ -73,6 +80,8 @@ public struct ToolExecutionContext: Sendable {
     public var conversionCapabilities: ConversionCapabilities
     public var converting: BatchConverter
     public var textCommand: TextCommander
+    public var pdfCommand: WorkspaceCommander
+    public var imageCommand: WorkspaceCommander
 
     public init(
         document: ProjectDocument,
@@ -100,8 +109,16 @@ public struct ToolExecutionContext: Sendable {
         },
         textCommand: @escaping TextCommander = { _ in
             throw ToolExecutorError.textUnavailable
+        },
+        pdfCommand: @escaping WorkspaceCommander = { _ in
+            throw ToolExecutorError.workspaceUnavailable("PDF")
+        },
+        imageCommand: @escaping WorkspaceCommander = { _ in
+            throw ToolExecutorError.workspaceUnavailable("photo")
         }
     ) {
+        self.pdfCommand = pdfCommand
+        self.imageCommand = imageCommand
         self.document = document
         self.assets = assets
         self.eventTracks = eventTracks
@@ -752,7 +769,21 @@ public struct ToolExecutor: Sendable {
                 label: "Assistant: Generate Captions", origin: .assistant(turnID: turnID))
             message = "Generated captions on device."
         default:
-            throw ToolExecutorError.unknownTool(invocation.name)
+            // By category, not name: the PDF and photo workspaces have their own
+            // executors and their own patch types, and enumerating their tools
+            // here would mean every new one silently failing as unknown until
+            // someone remembered to add a case. That is exactly how all ten PDF
+            // and seven photo tools came to be registered, exposed, and dead.
+            switch CommandRegistry.command(named: invocation.name)?.category {
+            case .pdf:
+                patch = nil
+                message = try await context.pdfCommand(invocation)
+            case .image:
+                patch = nil
+                message = try await context.imageCommand(invocation)
+            default:
+                throw ToolExecutorError.unknownTool(invocation.name)
+            }
         }
 
         return ToolResult(
@@ -788,6 +819,7 @@ public struct ToolExecutor: Sendable {
 /// User-actionable failures while resolving a tool call.
 public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     case unknownTool(String)
+    case workspaceUnavailable(String)
     case itemNotFound(ItemID)
     case effectNotFound(EffectID)
     case missingEventTrack(ItemID)
@@ -804,6 +836,8 @@ public enum ToolExecutorError: Error, Sendable, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unknownTool(let name): return "Unknown tool: \(name)."
+        case .workspaceUnavailable(let workspace):
+            return "Open a \(workspace) document before asking for that."
         case .itemNotFound(let id): return "Clip \(id.rawValue) is no longer on the timeline."
         case .effectNotFound(let id): return "Effect \(id.rawValue) no longer exists."
         case .missingEventTrack: return "This clip has no aligned click track."

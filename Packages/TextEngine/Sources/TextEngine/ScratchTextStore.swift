@@ -4,10 +4,21 @@ import Foundation
 /// Persists unnamed text buffers outside the immutable asset library.
 public actor ScratchTextStore {
     private let directory: URL
+    private let trashItem: @Sendable (URL) throws -> Void
 
     /// Creates a scratch store rooted at the supplied private library directory.
-    public init(directory: URL) {
+    ///
+    /// - Parameters:
+    ///   - directory: Where the buffers are kept.
+    ///   - trashItem: Moves one file to the Trash; tests substitute their own.
+    public init(
+        directory: URL,
+        trashItem: @escaping @Sendable (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+    ) {
         self.directory = directory.standardizedFileURL
+        self.trashItem = trashItem
     }
 
     /// Creates an empty scratch buffer and writes both halves immediately.
@@ -28,7 +39,7 @@ public actor ScratchTextStore {
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ).filter { $0.pathExtension == "reeltext" }
+        ).filter { $0.pathExtension == TextDocument.fileExtension }
         var records: [ScratchTextRecord] = []
         records.reserveCapacity(urls.count)
         for url in urls {
@@ -89,6 +100,22 @@ public actor ScratchTextStore {
         )
     }
 
+    /// Moves both halves of a scratch buffer to the Trash.
+    ///
+    /// The contents go first: once they are gone the buffer is no longer
+    /// listed, so a failure part-way never leaves a buffer that lists but
+    /// cannot open.
+    public func trash(_ id: DocumentID) throws {
+        for url in [contentURL(for: id), structureURL(for: id)]
+        where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try trashItem(url)
+            } catch {
+                throw TextEngineError.scratchBufferNotTrashed(url)
+            }
+        }
+    }
+
     /// Atomically persists the structural half of a scratch buffer.
     public func save(document: TextDocument) throws {
         try prepareDirectory()
@@ -111,7 +138,7 @@ public actor ScratchTextStore {
     }
 
     private func structureURL(for id: DocumentID) -> URL {
-        directory.appendingPathComponent("\(id.rawValue).reeltext")
+        directory.appendingPathComponent("\(id.rawValue).\(TextDocument.fileExtension)")
     }
 
     private func prepareDirectory() throws {

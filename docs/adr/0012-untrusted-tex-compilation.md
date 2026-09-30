@@ -6,13 +6,13 @@
 ## Context
 
 LaTeX source can request filesystem access, spawn commands through shell escape,
-run indefinitely, and produce unexpectedly large output. Clip also ships through
+run indefinitely, and produce unexpectedly large output. clipx also ships through
 both direct and App Store channels, so relying on a system TeX installation would
 make compilation unavailable or inconsistent for most users.
 
 ## Decision
 
-Clip bundles the pinned official arm64 Tectonic 0.16.9 executable as the default
+clipx bundles the pinned official arm64 Tectonic 0.16.9 executable as the default
 engine. Every compile runs in Tectonic's untrusted mode with shell escape
 disabled, restrictive `openin_any` and `openout_any` settings, an isolated copy
 of the explicitly declared project files, a hard timeout, cancellation by process
@@ -23,7 +23,7 @@ deadline. The App Store copy of the bundled command-line tool is signed with onl
 the App Sandbox and sandbox-inheritance entitlements, so the child retains the
 parent application's restrictions.
 
-Tectonic's package cache lives in the active Clip library. Network package
+Tectonic's package cache lives in the active clipx library. Network package
 resolution is disabled until the user makes an explicit, reversible choice; allowed
 attempts are recorded in the egress ledger. Missing offline packages pause and offer
 an explicit download-and-retry action. A local bundle may be supplied for

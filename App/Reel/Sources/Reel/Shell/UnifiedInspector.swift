@@ -15,7 +15,7 @@ struct UnifiedInspector: View {
             if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
                 PDFLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
-                ImageLayerInspector(editor: editor)
+                ImageLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .video, let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .text, let editor = model.textEditor {
@@ -46,7 +46,7 @@ struct AssistantChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
-            TextField("Ask Clip anything…", text: $draft, axis: .vertical)
+            TextField("Ask clipx anything…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(theme.type.body.font)
                 .lineLimit(1...5)
@@ -82,6 +82,11 @@ struct AssistantChatComposer: View {
         }
         .shadow(color: .black.opacity(0.14), radius: 8, y: 3)
         .padding(theme.metrics.spacing.md)
+        // The rail clips its contents, and the shadow falls below the box it
+        // surrounds, so without this the composer's lower edge is sliced flat
+        // against the bottom of the window. Enough clearance that it reads as
+        // sitting in the panel rather than wedged against its edge.
+        .padding(.bottom, theme.metrics.spacing.lg)
         .accessibilityIdentifier("assistant-chat-composer")
     }
 
@@ -127,16 +132,28 @@ private struct PDFLayerInspector: View {
     @Environment(\.theme) private var theme
     @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
+    @State private var panel: Panel = .inspector
+
+    private enum Panel: String, CaseIterable, Identifiable {
+        case inspector = "Inspector"
+        case chat = "Chat"
+
+        var id: Self { self }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("PDF Inspector")
-                    .font(theme.type.title.font)
-                Spacer()
+            HStack(spacing: theme.metrics.spacing.sm) {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                .fixedSize()
                 Text("Page \(editor.selectedPageNumber)")
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(theme.palette.surfaceRaised)
@@ -147,8 +164,65 @@ private struct PDFLayerInspector: View {
 
             Divider().overlay(theme.palette.line)
 
+            if panel == .chat {
+                pdfChat
+            } else {
+                inspectorBody
+            }
+        }
+        .background(theme.palette.surfacePanel)
+    }
+
+    /// The assistant already drives this editor through its PDF tools; without a
+    /// panel here the only way to reach it was to open a different workspace.
+    private var pdfChat: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if model.assistantMessages.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                SectionLabel("Document context")
+                                Text("\(editor.document.pages.count) pages")
+                                    .foregroundStyle(theme.palette.textSecondary)
+                                Text(
+                                    "Ask clipx to redact, highlight, recognise text, "
+                                        + "or rewrite what is on the page."
+                                )
+                                .foregroundStyle(theme.palette.textTertiary)
+                            }
+                            .font(theme.type.caption.font)
+                        }
+                        ForEach(model.assistantMessages) { message in
+                            AssistantChatBubble(message: message).id(message.id)
+                        }
+                        ForEach(model.pendingAssistantActions) { action in
+                            PendingActionCard(model: model, action: action)
+                        }
+                        if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                    }
+                    .padding(14)
+                }
+                .onChange(of: model.assistantMessages.count) {
+                    if let id = model.assistantMessages.last?.id {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            AssistantChatComposer(
+                draft: $model.assistantDraft,
+                isWorking: model.isAssistantWorking,
+                send: model.sendAssistantMessage
+            )
+        }
+    }
+
+    private var inspectorBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if editor.activeTool == .signature { signatureCard }
                     directTextCard
                     editsCard
                     fontsCard
@@ -158,6 +232,109 @@ private struct PDFLayerInspector: View {
             }
             .scrollIndicators(.visible)
         }
+    }
+
+    private var signatureCard: some View {
+        inspectorCard("Signature", symbol: "signature") {
+            VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
+                TextField("Full name", text: $editor.signatureName)
+                    .textFieldStyle(.plain)
+                    .font(theme.type.body.font)
+                    .padding(theme.metrics.spacing.sm)
+                    .background(theme.palette.surfaceRaised)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: theme.metrics.radius.input,
+                            style: .continuous
+                        )
+                    )
+                    .accessibilityIdentifier("pdf-signature-name")
+
+                ReelSegmentedControl(
+                    selection: $editor.signatureStyle,
+                    options: PDFSignatureStyle.allCases.map {
+                        .init(value: $0, title: $0.title)
+                    }
+                )
+
+                signaturePreview
+
+                Button("Save signature", action: editor.adoptSignature)
+                    .buttonStyle(ReelBorderedButtonStyle())
+                    .disabled(
+                        editor.signatureName
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("pdf-signature-adopt")
+
+                if !editor.savedSignatures.isEmpty {
+                    SectionLabel("Saved")
+                    VStack(spacing: theme.metrics.spacing.xs) {
+                        ForEach(editor.savedSignatures) { signature in
+                            savedSignatureRow(signature)
+                        }
+                    }
+                }
+
+                Text("Click the page to place it, then drag to position.")
+                    .font(theme.type.micro.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+            }
+        }
+    }
+
+    /// One adopted signature, stamped with a single click.
+    private func savedSignatureRow(_ signature: SavedSignature) -> some View {
+        let isSelected = editor.selectedSignatureID == signature.id
+        return HStack(spacing: theme.metrics.spacing.sm) {
+            Button {
+                editor.useSignature(signature.id)
+            } label: {
+                Text(signature.name)
+                    .font(.custom(signature.style.fontDescriptor.postScriptName, size: 20))
+                    .foregroundStyle(theme.palette.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, theme.metrics.spacing.xs)
+                    .padding(.horizontal, theme.metrics.spacing.sm)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(ReelPlainButtonStyle())
+            .help("Use this signature, then click the page")
+
+            Button {
+                editor.removeSignature(signature.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(theme.type.micro.font)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .help("Remove this saved signature")
+        }
+        .background(isSelected ? theme.palette.accentDim : .clear)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.control, style: .continuous)
+        )
+    }
+
+    /// Shows the name in the chosen face before it is committed to the page.
+    private var signaturePreview: some View {
+        let trimmed = editor.signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Text(trimmed.isEmpty ? "Your name" : trimmed)
+            .font(.custom(editor.signatureStyle.fontDescriptor.postScriptName, size: 26))
+            .foregroundStyle(
+                trimmed.isEmpty ? theme.palette.textTertiary : theme.palette.textPrimary
+            )
+            .lineLimit(1)
+            .minimumScaleFactor(0.4)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(theme.palette.surfaceSunken)
+            .clipShape(
+                RoundedRectangle(cornerRadius: theme.metrics.radius.card, style: .continuous)
+            )
+            .accessibilityLabel("Signature preview")
     }
 
     @ViewBuilder private var directTextCard: some View {
@@ -364,8 +541,17 @@ private struct PDFLayerInspector: View {
 
 private struct ImageLayerInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: ImageEditorViewModel
+    @State private var panel: Panel = .inspector
     @State private var isSmartActionsExpanded = false
+
+    private enum Panel: String, CaseIterable, Identifiable {
+        case inspector = "Inspector"
+        case chat = "Chat"
+
+        var id: Self { self }
+    }
     @State private var textDraft = ""
     @State private var strokeValue = 4.0
     @State private var textSizeValue = 28.0
@@ -378,13 +564,18 @@ private struct ImageLayerInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Inspector")
-                    .font(theme.type.title.font)
-                Spacer()
+            HStack(spacing: theme.metrics.spacing.sm) {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                .fixedSize()
+                Spacer(minLength: theme.metrics.spacing.xs)
                 Text(editor.activeTool.title)
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.vertical, 4)
                     .padding(.horizontal, 7)
                     .background(theme.palette.surfaceRaised)
@@ -395,6 +586,60 @@ private struct ImageLayerInspector: View {
 
             Divider().overlay(theme.palette.line)
 
+            if panel == .chat {
+                photoChat
+            } else {
+                inspectorBody
+            }
+        }
+    }
+
+    /// The assistant already crops, annotates, redacts and writes alt text for
+    /// this editor; without a panel here there was no way to ask it to.
+    private var photoChat: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if model.assistantMessages.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                SectionLabel("Image context")
+                                Text("\(editor.document.layers.count) layers")
+                                    .foregroundStyle(theme.palette.textSecondary)
+                                Text(
+                                    "Ask clipx to crop, annotate, redact, add padding, "
+                                        + "number steps, or describe this image."
+                                )
+                                .foregroundStyle(theme.palette.textTertiary)
+                            }
+                            .font(theme.type.caption.font)
+                        }
+                        ForEach(model.assistantMessages) { message in
+                            AssistantChatBubble(message: message).id(message.id)
+                        }
+                        ForEach(model.pendingAssistantActions) { action in
+                            PendingActionCard(model: model, action: action)
+                        }
+                        if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                    }
+                    .padding(14)
+                }
+                .onChange(of: model.assistantMessages.count) {
+                    if let id = model.assistantMessages.last?.id {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            AssistantChatComposer(
+                draft: $model.assistantDraft,
+                isWorking: model.isAssistantWorking,
+                send: model.sendAssistantMessage
+            )
+        }
+    }
+
+    private var inspectorBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     transformSection
@@ -469,7 +714,7 @@ private struct ImageLayerInspector: View {
                     Image(systemName: "ellipsis")
                         .frame(width: 24, height: 24)
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(ReelMenuStyle())
                 .fixedSize()
             }
 

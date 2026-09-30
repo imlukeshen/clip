@@ -6,8 +6,8 @@ cd "$ROOT_DIR"
 
 make generate >/dev/null
 
-direct_settings="$(xcodebuild -project Clip.xcodeproj -scheme Clip -configuration Release -disableAutomaticPackageResolution -showBuildSettings 2>/dev/null)"
-store_settings="$(xcodebuild -project Clip.xcodeproj -scheme Clip-AppStore -configuration AppStoreRelease -disableAutomaticPackageResolution -showBuildSettings 2>/dev/null)"
+direct_settings="$(xcodebuild -project clipx.xcodeproj -scheme clipx -configuration Release -disableAutomaticPackageResolution -showBuildSettings 2>/dev/null)"
+store_settings="$(xcodebuild -project clipx.xcodeproj -scheme clipx-AppStore -configuration AppStoreRelease -disableAutomaticPackageResolution -showBuildSettings 2>/dev/null)"
 
 require_setting() {
     local settings="$1"

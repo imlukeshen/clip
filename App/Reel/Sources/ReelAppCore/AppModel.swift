@@ -62,7 +62,24 @@ public final class AppModel {
     public var selectedFolderPath: String? = "Inbox"
     public var browserViewMode: BrowserViewMode = .grid
     public var assetSort: AssetSort = .modified
-    public var isInspectorVisible = true
+    /// Whether the right rail is shown.
+    ///
+    /// Starts hidden so a workspace opens at full width; the titlebar toggle and
+    /// commands that prepare something in the rail reveal it.
+    public var isInspectorVisible = false
+    /// Whether the inbox shows its capture status and shortcut rows.
+    ///
+    /// The grid is what people come to the inbox for; the capture chrome above
+    /// it is reference material most of the time, so it collapses and stays
+    /// collapsed until it is asked for.
+    public var showsCaptureTools: Bool {
+        didSet {
+            guard showsCaptureTools != oldValue else { return }
+            UserDefaults.standard.set(showsCaptureTools, forKey: Self.captureToolsKey)
+        }
+    }
+
+    static let captureToolsKey = "clip.inbox.showsCaptureTools"
     public private(set) var inspectorWidth = InspectorLayout.defaultWidth
     public var appearance: AppearancePreference {
         didSet {
@@ -118,9 +135,9 @@ public final class AppModel {
     public private(set) var captureHistory: [CaptureHistoryItem] = []
     public private(set) var isAddingTimelineMedia = false
     public var isCaptureHistoryPresented = false
-    /// Whether Clip owns the system-wide Command-Shift-C shortcut. This stays
+    /// Whether clipx owns the system-wide Command-Shift-C shortcut. This stays
     /// separate from clipboard capture so users can keep Maccy or another
-    /// clipboard manager on that key combination without disabling Clip's
+    /// clipboard manager on that key combination without disabling clipx's
     /// history itself.
     public var isGlobalClipboardShortcutEnabled: Bool {
         didSet {
@@ -131,7 +148,7 @@ public final class AppModel {
             )
         }
     }
-    /// Whether Clip records eligible system clipboard changes into its local history.
+    /// Whether clipx records eligible system clipboard changes into its local history.
     /// This privacy-sensitive feature is independent from the panel shortcut and is
     /// disabled until the user explicitly enables it.
     public var isClipboardCaptureEnabled: Bool {
@@ -150,7 +167,7 @@ public final class AppModel {
             }
         }
     }
-    /// Allows Clip to fetch only pinned, hash-verified open fonts when a PDF's
+    /// Allows clipx to fetch only pinned, hash-verified open fonts when a PDF's
     /// embedded subset cannot represent newly typed characters.
     public var isPDFFontAutoDownloadEnabled: Bool {
         didSet {
@@ -259,6 +276,8 @@ public final class AppModel {
         self.isPDFFontAutoDownloadEnabled =
             UserDefaults.standard.object(forKey: Self.pdfFontAutoDownloadPreferenceKey)
             as? Bool ?? true
+        self.showsCaptureTools =
+            UserDefaults.standard.object(forKey: Self.captureToolsKey) as? Bool ?? false
         self.inspectorWidth = InspectorLayout.restoredWidth()
         self.undoManager.groupsByEvent = false
     }
@@ -289,15 +308,21 @@ public final class AppModel {
         return preferredAppDirectory(in: support)
     }
 
+    /// Names this app has shipped under, newest first.
+    ///
+    /// A library built under an earlier name keeps working where it is. Pointing
+    /// at a fresh `clipx` folder beside it would look, from the outside, exactly
+    /// like the library having been emptied.
+    static let legacyAppDirectoryNames = ["Clip", "Reel"]
+
     static func preferredAppDirectory(in parent: URL) -> URL {
-        let current = parent.appendingPathComponent("Clip", isDirectory: true)
-        let legacy = parent.appendingPathComponent("Reel", isDirectory: true)
-        if FileManager.default.fileExists(atPath: current.path)
-            || !FileManager.default.fileExists(atPath: legacy.path)
-        {
-            return current
+        let current = parent.appendingPathComponent("clipx", isDirectory: true)
+        guard !FileManager.default.fileExists(atPath: current.path) else { return current }
+        for name in legacyAppDirectoryNames {
+            let legacy = parent.appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
         }
-        return legacy
+        return current
     }
 
     public var visibleAssets: [AssetRecord] {
@@ -539,8 +564,8 @@ public final class AppModel {
                 await refreshCaptureHistory()
                 lastMessage =
                     kind == .video
-                    ? "Recording added to Clip Clipboard."
-                    : "Screenshot added to Clip Clipboard."
+                    ? "Recording added to clipx Clipboard."
+                    : "Screenshot added to clipx Clipboard."
             } catch {
                 // A format the history cannot hold is not worth interrupting for;
                 // the file is still exactly where the system put it.
@@ -1067,7 +1092,15 @@ public final class AppModel {
     public func renameOpenTextFile(to name: String) {
         guard let textEditor, let activeFile = textEditor.activeFile else { return }
         if let assetID = activeFile.assetID {
-            renameAsset(assetID, to: name)
+            // The extension names the language, as it does for scratch files.
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let (fileName, language) = TextEditorViewModel.nameAndLanguage(
+                forProposedName: trimmed,
+                currentLanguage: activeFile.language
+            )
+            renameAsset(assetID, to: fileName)
+            if language != activeFile.language { textEditor.setLanguage(language) }
             return
         }
 
@@ -1081,6 +1114,51 @@ public final class AppModel {
         } else {
             lastMessage = textEditor.notice ?? "The file could not be renamed."
         }
+    }
+
+    /// Keeps a still-untitled file's extension in step with the language
+    /// detected as the user types, so a new scratch file holding Go becomes
+    /// `Untitled.go`. A name the user chose is never touched, and neither is a
+    /// rename that would collide with another file in the same folder.
+    private func matchUntitledFileName(_ assetID: AssetID, to language: LanguageID) {
+        guard let asset = assets.first(where: { $0.id == assetID }),
+            Self.isUntitledFileName(asset.displayName)
+        else { return }
+        let matching = LanguageDetector.fileName(asset.displayName, matching: language)
+        let folder = (asset.relativePath as NSString).deletingLastPathComponent
+        let isTaken = assets.contains {
+            $0.id != assetID
+                && ($0.relativePath as NSString).deletingLastPathComponent == folder
+                && ($0.relativePath as NSString).lastPathComponent
+                    .caseInsensitiveCompare(matching) == .orderedSame
+        }
+        guard matching != asset.displayName, !isTaken else { return }
+        scheduleAssetRename(assetID, to: matching, registersUndoOnSuccess: false)
+    }
+
+    /// `Untitled.txt`, `Untitled 2.py`, and the like: names clipx gave a new
+    /// file, which the user has not replaced with one of their own.
+    static func isUntitledFileName(_ name: String) -> Bool {
+        let fileExtension = (name as NSString).pathExtension
+        guard LanguageDetector.language(forExtension: fileExtension) != nil else { return false }
+        let stem = (name as NSString).deletingPathExtension.lowercased()
+        if stem == "untitled" { return true }
+        guard stem.hasPrefix("untitled ") else { return false }
+        return Int(stem.dropFirst("untitled ".count)).map { $0 >= 2 } == true
+    }
+
+    /// Makes the open text file's name match a language the user just chose,
+    /// so a library file set to Go becomes `name.go` on disk as well.
+    ///
+    /// Only explicit choices rename a library file; automatic detection never
+    /// renames anything on disk.
+    public func matchOpenTextFileName(to language: LanguageID) {
+        guard let textEditor, let activeFile = textEditor.activeFile,
+            let assetID = activeFile.assetID,
+            let displayName = assets.first(where: { $0.id == assetID })?.displayName
+        else { return }
+        let matching = LanguageDetector.fileName(displayName, matching: language)
+        if matching != displayName { renameAsset(assetID, to: matching) }
     }
 
     private func relocateOpenEditorSource(
@@ -1169,9 +1247,26 @@ public final class AppModel {
     /// Only the media editors carry a dedicated inspector (PDF layers, image
     /// layers, timeline effects). While browsing the library, "Get Info" on an
     /// item replaces the pane, so both the rail and its toolbar toggle hide.
-    public var showsEditorInspector: Bool {
+    /// Whether the open workspace offers an inspector rail at all.
+    ///
+    /// Drives the titlebar toggle, and is deliberately separate from where the
+    /// rail is mounted: gating the toggle on the shell's own flag hid the
+    /// button in the video editor and left no way to bring the rail back.
+    public var hasEditorInspector: Bool {
         editor != nil || imageEditor != nil || pdfEditor != nil || textEditor != nil
     }
+
+    /// Whether the shell mounts the rail beside the workspace.
+    ///
+    /// The video editor is excluded because it places the rail itself, beside
+    /// its preview only. A shell-level rail runs the full height of the window
+    /// and would cut the timeline short of the edge.
+    public var showsEditorInspector: Bool {
+        imageEditor != nil || pdfEditor != nil || textEditor != nil
+    }
+
+    /// Whether the video editor should place the rail inside its own layout.
+    public var showsVideoEditorInspector: Bool { editor != nil }
 
     /// Resizes the inspector column, holding it inside the draggable range and
     /// remembering the result for the next launch.
@@ -1179,11 +1274,21 @@ public final class AppModel {
     /// Clamping lives here rather than in a `didSet`: `@Observable` turns the
     /// property into a computed one, so assigning to it from its own observer
     /// recurses until the stack runs out.
+    /// Resizes the rail. Deliberately does not persist.
+    ///
+    /// A drag calls this on every frame, and writing the preference each time
+    /// meant a disk-backed store was hit sixty to a hundred and twenty times a
+    /// second while the pointer moved, which is what made resizing stutter.
+    /// ``persistInspectorWidth()`` records the result once the drag ends.
     public func setInspectorWidth(_ width: Double) {
         let width = InspectorLayout.clamped(width)
         guard width != inspectorWidth else { return }
         inspectorWidth = width
-        InspectorLayout.store(width)
+    }
+
+    /// Remembers the width the user settled on.
+    public func persistInspectorWidth() {
+        InspectorLayout.store(inspectorWidth)
     }
 
     /// The sidebar shows the library's folder name rather than its full path,
@@ -1244,7 +1349,7 @@ public final class AppModel {
 
     public func deferMigration() {
         pendingMigrationPlan = nil
-        lastMessage = "The library was left unchanged. Reopen Clip when you're ready to upgrade."
+        lastMessage = "The library was left unchanged. Reopen clipx when you're ready to upgrade."
     }
 
     public func revertLibraryMigration() {
@@ -1258,7 +1363,7 @@ public final class AppModel {
                 canRevertMigration = false
                 assets = []
                 isWatching = false
-                lastMessage = "Migration reverted. Quit Clip before opening this library with v1."
+                lastMessage = "Migration reverted. Quit clipx before opening this library with v1."
             } catch {
                 runtime = activeRuntime
                 lastMessage = "The migration could not be reverted."
@@ -1297,7 +1402,7 @@ public final class AppModel {
                 lastMessage = "Watching \(status.url.lastPathComponent) for new captures."
             } catch {
                 isCaptureDirectoryWatched = false
-                lastMessage = "Clip couldn't access that capture folder."
+                lastMessage = "clipx couldn't access that capture folder."
             }
         }
     }
@@ -1327,6 +1432,45 @@ public final class AppModel {
 
     public func acceptDrop(_ urls: [URL]) {
         accept(urls, source: .drop)
+    }
+
+    /// Imports dropped files straight into `folder` instead of the inbox.
+    ///
+    /// Ingest has no notion of a destination, so this imports and then files the
+    /// results through the same move the Move To menu uses. Doing it that way
+    /// rather than teaching the pipeline about folders keeps path validation,
+    /// event-track relocation, and the undo entry in one place. It also stays on
+    /// the library workspace: a drop onto a folder is filing, not opening, so
+    /// routing to the video or photo editor the way ``accept(_:source:)`` does
+    /// would throw the person out of what they were organising.
+    public func accept(_ urls: [URL], source: IngestSource, into folder: String) {
+        guard !urls.isEmpty else { return }
+        ingestCount += urls.count
+
+        Task {
+            defer { ingestCount -= urls.count }
+            guard let runtime else {
+                lastMessage = "The library is still opening. Try the drop again in a moment."
+                return
+            }
+            var imported: [AssetID] = []
+            for url in urls {
+                do {
+                    imported.append(try await runtime.ingest(url, source: source).id)
+                } catch {
+                    lastMessage =
+                        "Couldn't read \(url.lastPathComponent). It may still be writing — try again in a moment."
+                }
+            }
+            guard !imported.isEmpty else { return }
+            do {
+                _ = try await runtime.moveAssets(imported, to: folder)
+                selectFolder(folder)
+            } catch {
+                lastMessage = "The files were imported but could not be filed into that folder."
+            }
+            await refreshAssets()
+        }
     }
 
     public func selectAsset(_ id: AssetID, modifiers: EventModifiers = []) {
@@ -1438,7 +1582,7 @@ public final class AppModel {
                     )
                 }
             } catch {
-                lastMessage = "Clip couldn't check whether those files are in a project."
+                lastMessage = "clipx couldn't check whether those files are in a project."
             }
         }
     }
@@ -1763,9 +1907,27 @@ public final class AppModel {
 
     public func sendAssistantMessage() {
         let prompt = assistantDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isAssistantWorking, let runtime,
-            let session = assistantSession(runtime: runtime)
-        else { return }
+        guard !prompt.isEmpty, !isAssistantWorking else { return }
+        // Say why rather than returning quietly. A composer that swallows the
+        // Return key and leaves the text sitting there reads as the app being
+        // broken, which is what an unreachable session used to look like in the
+        // PDF and photo workspaces.
+        guard let runtime else {
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status,
+                    text: "The library is still opening. Try again in a moment."
+                ))
+            return
+        }
+        guard let session = assistantSession(runtime: runtime) else {
+            assistantMessages.append(
+                AssistantMessage(
+                    role: .status,
+                    text: "Open a document first — the assistant works inside an editor."
+                ))
+            return
+        }
         assistantDraft = ""
         assistantMessages.append(AssistantMessage(role: .user, text: prompt))
         isAssistantWorking = true
@@ -1774,6 +1936,14 @@ public final class AppModel {
         let context = session.context
         let sessionToken = session.token
         let settings = aiSettings
+        let categories = openWorkspaceCommandCategories
+        // Rendered here, on the main actor and before the turn detaches, so the
+        // model sees the window as it looked when the question was asked rather
+        // than after whatever the turn itself changes.
+        let frame =
+            settings.sharesWindowWithAssistant
+            ? WindowFrameRenderer.pngOfActiveWindow().map(ChatImage.png)
+            : nil
         let operationID = UUID()
         assistantOperationID = operationID
         assistantAwaitingProviderOperationID = operationID
@@ -1783,13 +1953,26 @@ public final class AppModel {
             defer { self.finishAssistantOperation(operationID) }
             do {
                 let provider = try await settings.provider()
+                // When the editing model cannot see, a vision model reads the
+                // window first and its answer travels as text. Best effort: if
+                // the describe pass fails, the turn still runs blind rather than
+                // failing the request the person actually made.
+                var attachedFrame = frame
+                var windowDescription: String?
+                if let frame, let seeing = await settings.visionProvider() {
+                    windowDescription = await WindowDescriber().describe(frame, using: seeing)
+                    attachedFrame = nil
+                }
                 let turn = try await AssistantTurnRunner().run(
                     prompt: prompt,
                     turnID: turnID,
                     provider: provider,
                     policy: settings.confirmationPolicy,
                     digest: digest,
-                    context: context
+                    context: context,
+                    frame: attachedFrame,
+                    windowDescription: windowDescription,
+                    expanding: categories
                 )
                 self.assistantAwaitingProviderOperationID = nil
                 try Task.checkCancellation()
@@ -1976,10 +2159,57 @@ public final class AppModel {
                 )
             )
         }
-        guard let textEditor,
+        if let textEditor {
+            return documentSession(
+                runtime: runtime,
+                name: textEditor.activeFile?.relativePath ?? "Text document",
+                canvas: "text:\(textEditor.language.rawValue)",
+                document: .text(textEditor.document.id),
+                revision: assistantRevision(textEditor.document, text: textEditor.text)
+            )
+        }
+        // The PDF and photo workspaces have the same chat panel as the others.
+        // Without these the composer sent into nothing: no session meant an
+        // early return that left the draft in the box and said nothing.
+        if let pdfEditor {
+            return documentSession(
+                runtime: runtime,
+                name: pdfEditor.document.title,
+                canvas: "pdf:\(pdfEditor.document.pages.count)pp",
+                document: .pdf(pdfEditor.document.id),
+                revision: assistantRevision(pdfEditor.document)
+            )
+        }
+        if let imageEditor {
+            return documentSession(
+                runtime: runtime,
+                name: assets.first { $0.id == imageEditor.document.sourceAssetID }?.displayName
+                    ?? "Image",
+                canvas: "image:\(Int(imageEditor.document.canvas.width))x"
+                    + "\(Int(imageEditor.document.canvas.height))",
+                document: .image(imageEditor.document.id),
+                revision: assistantRevision(imageEditor.document)
+            )
+        }
+        return nil
+    }
+
+    /// A session for a workspace whose document is not a timeline.
+    ///
+    /// These share one shape: the library-wide tools still apply, but there is
+    /// no timeline to describe, so the digest carries the document's identity
+    /// and nothing else.
+    private func documentSession(
+        runtime: AppRuntime,
+        name: String,
+        canvas: String,
+        document: AssistantSessionToken.Document,
+        revision: Data
+    ) -> (digest: ContextDigest, context: ToolExecutionContext, token: AssistantSessionToken)? {
+        guard
             let emptyProject = try? ProjectDocument(
                 id: .generate(),
-                name: textEditor.activeFile?.relativePath ?? "Text document",
+                name: name,
                 createdAt: .now,
                 modifiedAt: .now
             )
@@ -1991,22 +2221,34 @@ public final class AppModel {
             resolving: { assetID in try await runtime.url(for: assetID) }
         )
         configureSharedAssistantServices(&context, runtime: runtime)
-        let digest = ContextDigest(
-            projectName: textEditor.activeFile?.relativePath ?? "Text document",
-            duration: 0,
-            canvas: "text:\(textEditor.language.rawValue)",
-            selectedItemID: nil,
-            items: []
-        )
         return (
-            digest,
+            ContextDigest(
+                projectName: name,
+                duration: 0,
+                canvas: canvas,
+                selectedItemID: nil,
+                items: []
+            ),
             context,
             AssistantSessionToken(
-                document: .text(textEditor.document.id),
+                document: document,
                 generation: assistantDocumentGeneration,
-                revision: assistantRevision(textEditor.document, text: textEditor.text)
+                revision: revision
             )
         )
+    }
+
+    /// The command categories offered directly, rather than left behind
+    /// meta-tool discovery.
+    ///
+    /// Every editing category, not just the open workspace's. Discovery costs a
+    /// round trip and asks the model to guess at a name it was never shown, and
+    /// a request that spans workspaces — redact this photo, then put it on the
+    /// timeline — needs both sets at once. The open workspace is listed first so
+    /// the tools for what is actually on screen appear earliest in the schema
+    /// list, which is where a model's attention is best.
+    private var openWorkspaceCommandCategories: Set<CommandCategory> {
+        [.clip, .effect, .audio, .timeline, .pdf, .image, .text, .asset, .file]
     }
 
     private func assistantDocumentDidChange() {
@@ -2024,6 +2266,8 @@ public final class AppModel {
     private func currentAssistantDocument() -> AssistantSessionToken.Document? {
         if let editor { return .timeline(editor.document.id) }
         if let textEditor { return .text(textEditor.document.id) }
+        if let pdfEditor { return .pdf(pdfEditor.document.id) }
+        if let imageEditor { return .image(imageEditor.document.id) }
         return nil
     }
 
@@ -2032,6 +2276,8 @@ public final class AppModel {
         if let textEditor {
             return assistantRevision(textEditor.document, text: textEditor.text)
         }
+        if let pdfEditor { return assistantRevision(pdfEditor.document) }
+        if let imageEditor { return assistantRevision(imageEditor.document) }
         return nil
     }
 
@@ -2113,6 +2359,19 @@ public final class AppModel {
         context.searchingSimilar = { assetID, limit in
             try await runtime.similarAssets(to: assetID, limit: limit)
         }
+        // Bound to whichever editor is open, so a PDF or photo tool the model
+        // calls reaches the document the person is looking at. Without these the
+        // whole category answered "Unknown tool".
+        if let pdfEditor {
+            context.pdfCommand = { @MainActor invocation in
+                try await pdfEditor.runAssistantCommand(invocation)
+            }
+        }
+        if let imageEditor {
+            context.imageCommand = { @MainActor invocation in
+                try await imageEditor.runAssistantCommand(invocation)
+            }
+        }
         context.conversionDestination = conversionDestinationFolder
         context.conversionCapabilities = conversionCapabilities
         context.converting = { jobs in
@@ -2174,32 +2433,27 @@ public final class AppModel {
             guard Int64(contents.utf8.count) <= TextFileLoader.maximumByteSize else {
                 throw ToolExecutorError.invalidArguments("Initial text exceeds the 20 MB limit")
             }
-            var buffer = try await runtime.createScratchTextBuffer()
-            var document = buffer.document
-            guard let fileID = document.files.first?.id else {
-                throw ToolExecutorError.textUnavailable
-            }
-            let safeName = try validatedTextFileName(name ?? "Untitled.txt")
-            _ = try document.apply(.renameFile(fileID, safeName))
+            let proposedName = try validatedTextFileName(name ?? "Untitled.txt")
             let language =
                 rawLanguage.map(normalizedLanguage)
-                ?? LanguageDetector.detect(path: safeName, contents: contents)
-            _ = try document.apply(
-                .setLanguage(fileID, language, explicit: rawLanguage != nil)
+                ?? LanguageDetector.detect(path: proposedName, contents: contents)
+            // The library only holds text files it can recognise by extension,
+            // so a bare "notes" becomes "notes.txt" (or "notes.py", and so on).
+            let safeName =
+                LanguageDetector.language(
+                    forExtension: (proposedName as NSString).pathExtension
+                ) == nil
+                ? LanguageDetector.fileName(proposedName, matching: language)
+                : proposedName
+            let record = try await runtime.createTextFile(
+                named: safeName,
+                contents: Data(contents.utf8)
             )
-            try await runtime.saveScratchTextDocument(document)
-            try await runtime.saveScratchTextContents(Data(contents.utf8), for: document.id)
-            buffer = ScratchTextBuffer(
-                document: document,
-                contents: LoadedTextFile(
-                    text: contents,
-                    encoding: .utf8,
-                    lineEnding: TextFileLoader.lineEnding(in: contents)
-                )
-            )
-            openScratchTextEditor(buffer, runtime: runtime)
-            await refreshScratchBuffers()
-            return "Created \(safeName) as \(language.rawValue)."
+            await refreshAssets()
+            await loadTextEditor(record, runtime: runtime)
+            guard let opened = self.textEditor else { throw ToolExecutorError.textUnavailable }
+            if rawLanguage != nil { opened.setLanguage(language) }
+            return "Created \(record.displayName) as \(language.rawValue)."
         case .setLanguage(let rawLanguage):
             guard let textEditor else { throw ToolExecutorError.textUnavailable }
             let language = normalizedLanguage(rawLanguage)
@@ -2517,74 +2771,83 @@ public final class AppModel {
             let asset = assets.first(where: { $0.id == assetID && $0.kind == .text }),
             let runtime
         else { return }
-        Task {
-            do {
-                let sourceURL = try await runtime.url(for: assetID)
-                if ["tex", "latex", "sty", "cls", "bib"].contains(
-                    sourceURL.pathExtension.lowercased()
-                ) {
-                    try await openTeXProjectEditor(
-                        sourceURL: sourceURL,
-                        runtime: runtime
-                    )
-                    return
-                }
-                let loaded = try await runtime.loadTextContents(for: assetID)
-                let document =
-                    try await runtime.textDocument(for: assetID)
-                    ?? TextDocument(
-                        files: [
-                            TextFile(
-                                assetID: assetID,
-                                relativePath: asset.displayName,
-                                language: LanguageDetector.detect(
-                                    path: asset.displayName,
-                                    contents: loaded.text
-                                ),
-                                encoding: loaded.encoding,
-                                lineEnding: loaded.lineEnding,
-                                byteOrderMark: loaded.byteOrderMark
-                            )
-                        ]
-                    )
-                let textEditor = TextEditorViewModel(
-                    document: document,
-                    text: loaded.text,
+        Task { await loadTextEditor(asset, runtime: runtime) }
+    }
+
+    /// Opens a library text file, reporting any failure in the status line.
+    private func loadTextEditor(_ asset: AssetRecord, runtime: AppRuntime) async {
+        let assetID = asset.id
+        do {
+            let sourceURL = try await runtime.url(for: assetID)
+            if ["tex", "latex", "sty", "cls", "bib"].contains(
+                sourceURL.pathExtension.lowercased()
+            ) {
+                try await openTeXProjectEditor(
                     sourceURL: sourceURL,
-                    hashingWith: { SampledFileHasher.hash($0) },
-                    persistingStructure: { document in
-                        try await runtime.saveTextDocument(document, for: assetID)
-                    },
-                    persistingContents: { data, contentHash in
-                        try await runtime.saveTextContents(
-                            data,
-                            for: assetID,
-                            contentHash: contentHash
-                        )
-                    }
+                    runtime: runtime
                 )
-                textEditor.configureTeXEngine(makeTeXEngine())
-                textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
-                self.textEditor = textEditor
-                selectedWorkspace = .text
-                try await runtime.saveTextDocument(document, for: assetID)
-                textEditor.start()
-            } catch let error as TextEngineError {
-                switch error {
-                case .binaryFile:
-                    lastMessage = "This looks like a binary file, so Clip did not open it as text."
-                case .tooLarge:
-                    lastMessage = "This file is larger than 20 MB. Open it in an external editor."
-                case .undecodable:
-                    lastMessage = "Clip could not detect a supported text encoding."
-                case .unreadable:
-                    lastMessage = "The selected text file could not be read."
-                case .unencodable, .invalidScratchBuffer:
-                    lastMessage = "The selected text file could not be opened."
+                return
+            }
+            let loaded = try await runtime.loadTextContents(for: assetID)
+            let document =
+                try await runtime.textDocument(for: assetID)
+                ?? TextDocument(
+                    files: [
+                        TextFile(
+                            assetID: assetID,
+                            relativePath: asset.displayName,
+                            language: LanguageDetector.detect(
+                                path: asset.displayName,
+                                contents: loaded.text
+                            ),
+                            encoding: loaded.encoding,
+                            lineEnding: loaded.lineEnding,
+                            byteOrderMark: loaded.byteOrderMark
+                        )
+                    ]
+                )
+            let textEditor = TextEditorViewModel(
+                document: document,
+                text: loaded.text,
+                sourceURL: sourceURL,
+                hashingWith: { SampledFileHasher.hash($0) },
+                persistingStructure: { document in
+                    try await runtime.saveTextDocument(document, for: assetID)
+                },
+                persistingContents: { data, contentHash in
+                    try await runtime.saveTextContents(
+                        data,
+                        for: assetID,
+                        contentHash: contentHash
+                    )
                 }
-            } catch {
+            )
+            textEditor.configureTeXEngine(makeTeXEngine())
+            textEditor.setTeXPackageCacheResetting(isTeXPackageCacheResetting)
+            textEditor.onLibraryLanguageDetected = { [weak self] assetID, language in
+                self?.matchUntitledFileName(assetID, to: language)
+            }
+            self.textEditor = textEditor
+            selectedWorkspace = .text
+            try await runtime.saveTextDocument(document, for: assetID)
+            textEditor.start()
+        } catch let error as TextEngineError {
+            switch error {
+            case .binaryFile:
+                lastMessage = "This looks like a binary file, so clipx did not open it as text."
+            case .tooLarge:
+                lastMessage = "This file is larger than 20 MB. Open it in an external editor."
+            case .undecodable:
+                lastMessage = "clipx could not detect a supported text encoding."
+            case .unreadable:
+                lastMessage = "The selected text file could not be read."
+            case .unencodable, .invalidScratchBuffer, .scratchBufferNotTrashed,
+                .runToolchainUnavailable,
+                .runLaunchFailed, .runTimedOut, .runOutputTooLarge:
                 lastMessage = "The selected text file could not be opened."
             }
+        } catch {
+            lastMessage = "The selected text file could not be opened."
         }
     }
 
@@ -2716,18 +2979,25 @@ public final class AppModel {
         Task { await refreshScratchBuffers() }
     }
 
-    /// Creates, persists, and opens a new unnamed text buffer.
+    /// Creates a new `Untitled.txt` in the library inbox and opens it.
+    ///
+    /// A scratch file is an ordinary text asset from the start, so it shows up
+    /// in the library, can be filed into folders, and moves to the Trash like
+    /// any other file.
     public func createScratchTextEditor() {
         guard textEditor == nil, editor == nil, imageEditor == nil, pdfEditor == nil,
             let runtime
         else { return }
         Task {
             do {
-                let buffer = try await runtime.createScratchTextBuffer()
-                openScratchTextEditor(buffer, runtime: runtime)
-                await refreshScratchBuffers()
+                let record = try await runtime.createTextFile(
+                    named: "Untitled.txt",
+                    contents: Data()
+                )
+                await refreshAssets()
+                await loadTextEditor(record, runtime: runtime)
             } catch {
-                lastMessage = "A new scratch buffer could not be created."
+                lastMessage = "A new text file could not be created."
             }
         }
     }
@@ -2751,6 +3021,26 @@ public final class AppModel {
         }
     }
 
+    /// Moves a scratch buffer from before scratch files joined the library
+    /// to the Trash.
+    public func trashScratchBuffer(_ id: DocumentID) {
+        guard let runtime else { return }
+        if let textEditor, textEditor.sourceURL == nil, textEditor.document.id == id {
+            closeTextEditor()
+            // An open buffer autosaves, which would write the files straight back.
+            guard self.textEditor == nil else { return }
+        }
+        Task {
+            do {
+                try await runtime.trashScratchTextBuffer(id)
+                lastMessage = "Moved to Trash"
+            } catch {
+                lastMessage = "clipx couldn't move that scratch file to Trash."
+            }
+            await refreshScratchBuffers()
+        }
+    }
+
     private func closeOpenEditors() {
         closeEditor()
         closeImageEditor()
@@ -2769,7 +3059,7 @@ public final class AppModel {
             await refreshFolderTree()
         } catch {
             guard generation == assetRefreshGeneration else { return }
-            lastMessage = "The library index could not be read. Reopen Clip to rebuild it."
+            lastMessage = "The library index could not be read. Reopen clipx to rebuild it."
         }
     }
 
@@ -2884,7 +3174,12 @@ public final class AppModel {
 
     private func refreshFolderTree() async {
         guard let runtime else { return }
-        folderTree = try? await runtime.folderTree(expanding: expandedFolders)
+        // Keep the tree that is on screen if a refresh fails. Replacing it with
+        // nil leaves the sidebar showing a spinner with no way back, and the
+        // expansion state that caused the failure is persisted.
+        if let tree = try? await runtime.folderTree(expanding: expandedFolders) {
+            folderTree = tree
+        }
         folderDestinations = [""] + ((try? await runtime.folderDestinations()) ?? ["Inbox"])
     }
 
@@ -2950,7 +3245,7 @@ public final class AppModel {
             }
             lastMessage = ids.count == 1 ? "Moved to Trash" : "Moved \(ids.count) items to Trash"
         } catch {
-            lastMessage = "Clip couldn't move the selected files to Trash."
+            lastMessage = "clipx couldn't move the selected files to Trash."
         }
     }
 
@@ -2969,7 +3264,7 @@ public final class AppModel {
             }
             lastMessage = ids.count == 1 ? "Restored from Trash" : "Restored \(ids.count) items"
         } catch {
-            lastMessage = "Clip couldn't restore the files. They may have been removed from Trash."
+            lastMessage = "clipx couldn't restore the files. They may have been removed from Trash."
         }
     }
 

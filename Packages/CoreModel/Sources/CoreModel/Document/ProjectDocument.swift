@@ -1,6 +1,6 @@
 import Foundation
 
-/// A complete, deterministic, non-destructive Clip edit graph.
+/// A complete, deterministic, non-destructive clipx edit graph.
 public struct ProjectDocument: Codable, Sendable, Equatable {
     public static let currentSchemaVersion = 2
 

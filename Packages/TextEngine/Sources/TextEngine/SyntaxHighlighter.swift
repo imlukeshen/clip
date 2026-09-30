@@ -176,9 +176,10 @@ public actor SyntaxHighlighter {
         guard lowerByte < upperByte else { return [] }
         var tokens: [SyntaxToken] = []
         var seen: Set<TokenKey> = []
+        let language = language ?? .plainText
         tree.enumerateNodes(in: lowerByte..<upperByte) { node in
             guard tokens.count < Self.maximumTokenCount, let type = node.nodeType,
-                let kind = TreeSitterTokenClassifier.kind(for: type)
+                let kind = classify(node, type: type, language: language)
             else { return }
             let range = NSIntersectionRange(node.range, styledRange)
             guard range.length > 0 else { return }
@@ -187,6 +188,26 @@ public actor SyntaxHighlighter {
             tokens.append(SyntaxToken(range: range, kind: kind))
         }
         return tokens.sorted(by: tokenOrdering)
+    }
+
+    private func classify(_ node: Node, type: String, language: LanguageID) -> SyntaxTokenKind? {
+        if language == .xml, type == "Name", let parentType = node.parent?.nodeType {
+            switch parentType {
+            case "STag", "ETag", "EmptyElemTag": return .tag
+            case "Attribute": return .property
+            default: return nil
+            }
+        }
+        if TreeSitterTokenClassifier.nameNodeTypes.contains(type), let parent = node.parent,
+            let parentType = parent.nodeType,
+            let kind = TreeSitterTokenClassifier.nameKind(parentType: parentType),
+            parent.child(byFieldName: TreeSitterTokenClassifier.nameField(of: parentType))?.range
+                == node.range
+        {
+            return kind
+        }
+        if language == .python, type == "identifier" { return nil }
+        return TreeSitterTokenClassifier.kind(for: type, language: language)
     }
 
     private func tokenOrdering(_ lhs: SyntaxToken, _ rhs: SyntaxToken) -> Bool {

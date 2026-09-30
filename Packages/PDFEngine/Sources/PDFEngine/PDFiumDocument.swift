@@ -10,17 +10,26 @@ public struct PDFTextGlyph: Sendable, Equatable {
     public var bounds: CGRect?
     public var font: PDFFontDescriptor?
     public var fontSize: Double
+    /// Index of the text object that drew this glyph, matching
+    /// ``PDFTextBlock/pageObjectIndex``.
+    ///
+    /// Without it a glyph cannot be traced back to the block it belongs to, so
+    /// a click on the page can be resolved to a position but not to a caret
+    /// offset inside a specific editable object.
+    public var pageObjectIndex: Int?
 
     public init(
         text: String,
         bounds: CGRect?,
         font: PDFFontDescriptor?,
-        fontSize: Double
+        fontSize: Double,
+        pageObjectIndex: Int? = nil
     ) {
         self.text = text
         self.bounds = bounds
         self.font = font
         self.fontSize = fontSize
+        self.pageObjectIndex = pageObjectIndex
     }
 }
 
@@ -32,6 +41,14 @@ public struct PDFTextBlock: Sendable, Equatable, Identifiable {
     public var bounds: CGRect
     public var font: PDFFontDescriptor
     public var fontSize: Double
+    /// Vertical scale of the text object's transformation matrix.
+    ///
+    /// `fontSize` is reported in text space and ignores this matrix, so a page
+    /// that sets its type through a scaled matrix renders at
+    /// `fontSize * matrixScale`. Anything measuring the drawn size must apply
+    /// it; anything *writing* a replacement object must not, because the
+    /// original matrix is copied onto the replacement and would apply it twice.
+    public var matrixScale: Double
     public var color: RGBA
 
     public init(
@@ -40,6 +57,7 @@ public struct PDFTextBlock: Sendable, Equatable, Identifiable {
         bounds: CGRect,
         font: PDFFontDescriptor,
         fontSize: Double,
+        matrixScale: Double = 1,
         color: RGBA
     ) {
         self.pageObjectIndex = pageObjectIndex
@@ -47,8 +65,12 @@ public struct PDFTextBlock: Sendable, Equatable, Identifiable {
         self.bounds = bounds
         self.font = font
         self.fontSize = fontSize
+        self.matrixScale = matrixScale
         self.color = color
     }
+
+    /// Font size as actually drawn on the page, in PDF points.
+    public var renderedFontSize: Double { fontSize * matrixScale }
 }
 
 public struct PDFPageAnalysis: Sendable, Equatable {
@@ -147,17 +169,24 @@ public final class PDFiumDocument: @unchecked Sendable {
         }
     }
 
+    /// Rasterizes a page, optionally with edits applied and objects withheld.
+    ///
+    /// `suppressedObjectIndexes` removes objects from the content stream before
+    /// rasterizing. Editing a text object in place renders the page without it,
+    /// so the glyphs being edited are genuinely absent from the image rather
+    /// than hidden behind something drawn over them.
     public func renderPage(
         at index: Int,
         maxPixelDimension: Int = 1_600,
         rotation: PDFPageRotation = .degrees0,
         sourceTextEdits: [PDFTextLayer] = [],
+        suppressedObjectIndexes: Set<Int> = [],
         fontData: (@Sendable (String) -> Data?)? = nil
     ) throws -> CGImage {
         try synchronized {
             let renderDocument: FPDF_DOCUMENT
             let ownsDocument: Bool
-            if sourceTextEdits.isEmpty {
+            if sourceTextEdits.isEmpty && suppressedObjectIndexes.isEmpty {
                 renderDocument = handle
                 ownsDocument = false
             } else {
@@ -179,6 +208,9 @@ public final class PDFiumDocument: @unchecked Sendable {
                     in: renderDocument,
                     fontData: fontData
                 )
+            }
+            if !suppressedObjectIndexes.isEmpty {
+                try suppressObjects(suppressedObjectIndexes, on: page)
             }
             let pageWidth = max(Double(FPDF_GetPageWidthF(page)), 1)
             let pageHeight = max(Double(FPDF_GetPageHeightF(page)), 1)
@@ -236,10 +268,43 @@ public final class PDFiumDocument: @unchecked Sendable {
         }
     }
 
-    public func analyzePage(at index: Int) throws -> PDFPageAnalysis {
+    /// Reads the text structure of a page, optionally with edits applied.
+    ///
+    /// Passing the current source edits analyses the page as it is drawn rather
+    /// than as it was authored. Analysing the untouched source instead left the
+    /// paragraph model describing text the reader could no longer see, so
+    /// reopening an edited paragraph restored the version before the edit.
+    public func analyzePage(
+        at index: Int,
+        applying sourceTextEdits: [PDFTextLayer] = [],
+        fontData: (@Sendable (String) -> Data?)? = nil
+    ) throws -> PDFPageAnalysis {
         try synchronized {
-            let page = try loadPage(index)
+            let analysisDocument: FPDF_DOCUMENT
+            let ownsDocument: Bool
+            if sourceTextEdits.isEmpty {
+                analysisDocument = handle
+                ownsDocument = false
+            } else {
+                guard let copy = FPDF_LoadMemDocument64(source.bytes, source.length, nil) else {
+                    throw PDFEngineError.unreadableDocument(code: FPDF_GetLastError())
+                }
+                analysisDocument = copy
+                ownsDocument = true
+            }
+            defer {
+                if ownsDocument { FPDF_CloseDocument(analysisDocument) }
+            }
+            let page = try loadPage(index, from: analysisDocument)
             defer { FPDF_ClosePage(page) }
+            if !sourceTextEdits.isEmpty {
+                try applySourceTextEdits(
+                    sourceTextEdits,
+                    to: page,
+                    in: analysisDocument,
+                    fontData: fontData
+                )
+            }
             guard let textPage = FPDFText_LoadPage(page) else {
                 return PDFPageAnalysis(text: "", glyphs: [], fonts: [], textBlocks: [])
             }
@@ -253,6 +318,7 @@ public final class PDFiumDocument: @unchecked Sendable {
             let pageHeight = max(Double(FPDF_GetPageHeightF(page)), 1)
             var glyphs: [PDFTextGlyph] = []
             var fonts: [PDFFontDescriptor] = []
+            let objectIndexByHandle = textObjectIndexes(on: page)
             for characterIndex in 0..<count {
                 let unicode = FPDFText_GetUnicode(textPage, Int32(characterIndex))
                 let character = UnicodeScalar(unicode).map(String.init) ?? ""
@@ -268,7 +334,11 @@ public final class PDFiumDocument: @unchecked Sendable {
                             pageHeight: pageHeight
                         ),
                         font: font,
-                        fontSize: FPDFText_GetFontSize(textPage, Int32(characterIndex))
+                        fontSize: FPDFText_GetFontSize(textPage, Int32(characterIndex)),
+                        pageObjectIndex: FPDFText_GetTextObject(
+                            textPage,
+                            Int32(characterIndex)
+                        ).flatMap { objectIndexByHandle[$0] }
                     )
                 )
             }
@@ -354,6 +424,23 @@ public final class PDFiumDocument: @unchecked Sendable {
         return page
     }
 
+    /// Maps each text object handle on the page to its object index.
+    ///
+    /// PDFium reports the owning object of a character as a handle, while every
+    /// edit addresses objects by index, so the two have to be reconciled once
+    /// per analysis rather than searched per glyph.
+    private func textObjectIndexes(on page: FPDF_PAGE) -> [OpaquePointer: Int] {
+        let count = max(Int(FPDFPage_CountObjects(page)), 0)
+        var indexes: [OpaquePointer: Int] = [:]
+        for objectIndex in 0..<count {
+            guard let object = FPDFPage_GetObject(page, Int32(objectIndex)),
+                FPDFPageObj_GetType(object) == FPDF_PAGEOBJ_TEXT
+            else { continue }
+            indexes[object] = objectIndex
+        }
+        return indexes
+    }
+
     private func pageTextBlocks(
         page: FPDF_PAGE,
         textPage: FPDF_TEXTPAGE,
@@ -375,12 +462,18 @@ public final class PDFiumDocument: @unchecked Sendable {
             else { return nil }
             var size: Float = 12
             _ = FPDFTextObj_GetFontSize(object, &size)
+            var matrix = FS_MATRIX()
+            let matrixScale =
+                FPDFPageObj_GetMatrix(object, &matrix) != 0
+                ? Double((matrix.b * matrix.b + matrix.d * matrix.d).squareRoot())
+                : 1
             return PDFTextBlock(
                 pageObjectIndex: objectIndex,
                 text: text,
                 bounds: bounds,
                 font: fontDescriptor(font: fontHandle),
                 fontSize: Double(size),
+                matrixScale: matrixScale > 0 ? matrixScale : 1,
                 color: fillColor(object)
             )
         }
@@ -483,6 +576,7 @@ public final class PDFiumDocument: @unchecked Sendable {
                 _ = withPDFiumWideString(edit.text) { FPDFText_SetText(object, $0) }
                 _ = FPDFTextObj_SetFontSize(object, Float(edit.fontSize))
                 setFillColor(edit.color, on: object)
+                applyTranslation(edit, reference: reference, to: object, on: page)
                 continue
             }
             guard let data = fontData?(edit.font.postScriptName),
@@ -498,6 +592,7 @@ public final class PDFiumDocument: @unchecked Sendable {
                 continue
             }
             setFillColor(edit.color, on: replacement)
+            applyTranslation(edit, reference: reference, to: replacement, on: page)
             guard FPDFPage_RemoveObject(page, object) != 0 else {
                 FPDFPageObj_Destroy(replacement)
                 continue
@@ -512,6 +607,45 @@ public final class PDFiumDocument: @unchecked Sendable {
         guard FPDFPage_GenerateContent(page) != 0 else {
             throw PDFEngineError.renderFailed
         }
+    }
+
+    /// Deactivates page objects so they are not drawn.
+    ///
+    /// Indexes address the original object order, so removal happens after any
+    /// edits have already been applied in place and cannot shift them.
+    private func suppressObjects(_ indexes: Set<Int>, on page: FPDF_PAGE) throws {
+        var changed = false
+        for index in indexes.sorted() {
+            guard let object = FPDFPage_GetObject(page, Int32(index)) else { continue }
+            _ = FPDFPageObj_SetIsActive(object, 0)
+            changed = true
+        }
+        guard changed else { return }
+        guard FPDFPage_GenerateContent(page) != 0 else {
+            throw PDFEngineError.renderFailed
+        }
+    }
+
+    /// Moves an edited object by however far its frame was dragged.
+    ///
+    /// The delta is taken against the frame recorded when the edit was created,
+    /// never against the object's live bounds, so an edit that only changed text
+    /// translates by exactly zero. PDF user space puts the origin at the bottom
+    /// left, so a downward drag in the editor is a negative `y` translation.
+    private func applyTranslation(
+        _ edit: PDFTextLayer,
+        reference: PDFSourceTextReference,
+        to object: FPDF_PAGEOBJECT,
+        on page: FPDF_PAGE
+    ) {
+        guard let origin = reference.originalFrame else { return }
+        let pageWidth = Double(FPDF_GetPageWidthF(page))
+        let pageHeight = Double(FPDF_GetPageHeightF(page))
+        guard pageWidth > 0, pageHeight > 0 else { return }
+        let dx = Double(edit.frame.minX - origin.minX) * pageWidth
+        let dy = Double(origin.maxY - edit.frame.maxY) * pageHeight
+        guard abs(dx) > 0.001 || abs(dy) > 0.001 else { return }
+        FPDFPageObj_Transform(object, 1, 0, 0, 1, dx, dy)
     }
 
     private func makeTextObject(

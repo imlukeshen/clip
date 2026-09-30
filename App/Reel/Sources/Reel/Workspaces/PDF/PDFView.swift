@@ -54,10 +54,15 @@ private struct PDFEditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: PDFEditorViewModel
     @State private var dragStart: CGPoint?
-    @State private var editingTextObjectID: Int?
+    @State private var dragCurrent: CGPoint?
+    @State private var movingLayerID: PDFLayerID?
+    @State private var movingLayerOrigin: CGPoint?
+    @State private var editingParagraphID: Int?
     @State private var textDraft = ""
+    @State private var inlineCaretOffset: Int?
     @State private var zoomLevel = CanvasZoom.fit
     @FocusState private var isInlineTextFocused: Bool
+    @FocusState private var isFindFieldFocused: Bool
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -90,8 +95,12 @@ private struct PDFEditorView: View {
                 model.closePDFEditor()
             } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 30, height: 30)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            // Matches the back button in every other workspace: the plain style
+            // only dips opacity, so this one alone gave no hover fill and no
+            // press feedback.
+            .buttonStyle(ReelIconButtonStyle())
             .help("Back to PDF library")
             EditableFileTitle(
                 name: model.assets.first(where: {
@@ -118,28 +127,37 @@ private struct PDFEditorView: View {
             Button(editor.derivativeURL == nil ? "Save As PDF…" : "Save PDF", action: savePDF)
                 .buttonStyle(ReelBorderedButtonStyle())
                 .disabled(editor.isExporting)
-                .keyboardShortcut("s", modifiers: .command)
+                .keyboardShortcut("s", modifiers: [.command, .shift])
                 .accessibilityIdentifier("pdf-save")
                 .help(
                     editor.derivativeURL == nil
                         ? "Choose a safe destination for the edited copy"
                         : "Save to \(editor.derivativeURL?.lastPathComponent ?? "the edited copy")"
                 )
-            Menu {
-                Button("Save As PDF…", action: saveAsPDF)
-            } label: {
-                Image(systemName: "ellipsis")
+            // Only worth showing once a destination exists: until then it
+            // repeats the button beside it word for word.
+            if editor.derivativeURL != nil {
+                Menu {
+                    Button("Save As PDF…", action: saveAsPDF)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 28, height: 28)
+                }
+                .menuStyle(ReelMenuStyle())
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(theme.palette.textSecondary)
+                .disabled(editor.isExporting)
+                .help("Save the edited PDF to a different destination")
+                .accessibilityIdentifier("pdf-more")
             }
-            .menuStyle(.borderlessButton)
-            .frame(width: 24)
-            .disabled(editor.isExporting)
-            .help("Save the edited PDF to a different destination")
             Button {
                 editor.undo()
             } label: {
                 Image(systemName: "arrow.uturn.backward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(
                 model.renamingAssetIDs.contains(editor.document.sourceAssetID)
                     || !editor.undoManager.canUndo
@@ -149,8 +167,9 @@ private struct PDFEditorView: View {
                 editor.redo()
             } label: {
                 Image(systemName: "arrow.uturn.forward")
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .disabled(
                 model.renamingAssetIDs.contains(editor.document.sourceAssetID)
                     || !editor.undoManager.canRedo
@@ -159,6 +178,7 @@ private struct PDFEditorView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: EditorChromeMetrics.headerHeight)
+        .titlebarDoubleClick()
         .background(theme.palette.surfacePanel)
     }
 
@@ -184,12 +204,14 @@ private struct PDFEditorView: View {
                     editor.addBlankPage()
                 } label: {
                     Image(systemName: "plus")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Add a blank page")
                 Button {
                     editor.duplicateSelectedPage()
                 } label: {
                     Image(systemName: "plus.square.on.square")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Duplicate selected page")
                 .accessibilityLabel("Duplicate selected page")
@@ -198,10 +220,11 @@ private struct PDFEditorView: View {
                     editor.deleteSelectedPage()
                 } label: {
                     Image(systemName: "trash")
+                        .frame(width: 26, height: 26)
                 }
                 .help("Delete selected page")
             }
-            .buttonStyle(ReelPlainButtonStyle())
+            .buttonStyle(ReelIconButtonStyle())
             .padding(.bottom, 10)
         }
         .frame(width: 124)
@@ -310,6 +333,23 @@ private struct PDFEditorView: View {
                         zoomControls(scroller: scroller)
                             .padding(.bottom, 14)
                     }
+                    .overlay(alignment: .top) {
+                        if editor.showsFindBar {
+                            findBar
+                                .padding(.top, 12)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.16), value: editor.showsFindBar)
+                    // Focus the field as it opens, and again when Command-F is
+                    // pressed while it is already showing — which is how a find
+                    // bar is expected to behave.
+                    .onChange(of: editor.showsFindBar) { _, shows in
+                        isFindFieldFocused = shows
+                    }
+                    .onChange(of: editor.findBarFocusRequests) {
+                        isFindFieldFocused = true
+                    }
                 }
             } else {
                 ZStack {
@@ -319,10 +359,128 @@ private struct PDFEditorView: View {
             }
         }
         .onChange(of: isInlineTextFocused) { _, focused in
-            if !focused { commitInlineTextEdit() }
+            if !focused { commitParagraphEdit() }
         }
         .onExitCommand {
-            cancelInlineTextEdit()
+            // Escape closes the find bar before anything else, which is what it
+            // does in every other find bar on the system.
+            if editor.showsFindBar {
+                editor.showsFindBar = false
+                return
+            }
+            cancelParagraphEdit()
+        }
+        .onDeleteCommand {
+            // While a paragraph is open the key belongs to the text view.
+            guard editingParagraphID == nil else { return }
+            editor.removeSelectedLayer()
+        }
+        .background {
+            // Command-S belongs to Save, not to Save As. Kept at zero opacity
+            // rather than hidden so the key equivalent still registers.
+            Button("Save") {
+                // Fold any open paragraph into the document first, or the save
+                // writes a document that predates what is on screen.
+                commitParagraphEdit()
+                editor.saveEdits()
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
+    /// Find bar, matching the composer and zoom controls that float over the page.
+    private var findBar: some View {
+        HStack(spacing: theme.metrics.spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(theme.type.caption.font)
+                .foregroundStyle(theme.palette.textTertiary)
+            TextField("Find in document", text: $editor.findQuery)
+                .textFieldStyle(.plain)
+                .font(theme.type.body.font)
+                .frame(width: 180)
+                .focused($isFindFieldFocused)
+                .onSubmit { editor.stepFind(by: 1) }
+                .onChange(of: editor.findQuery) { editor.runFind() }
+                .accessibilityIdentifier("pdf-find-field")
+
+            if editor.isFinding {
+                ProgressView().controlSize(.small)
+            } else {
+                Text(
+                    editor.findMatches.isEmpty
+                        ? "None" : "\(editor.findIndex + 1) of \(editor.findMatches.count)"
+                )
+                .font(theme.type.numeric.font)
+                .foregroundStyle(theme.palette.textTertiary)
+                .frame(minWidth: 56, alignment: .trailing)
+                .monospacedDigit()
+            }
+
+            Button {
+                editor.stepFind(by: -1)
+            } label: {
+                Image(systemName: "chevron.up").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(editor.findMatches.isEmpty)
+            Button {
+                editor.stepFind(by: 1)
+            } label: {
+                Image(systemName: "chevron.down").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+            .disabled(editor.findMatches.isEmpty)
+
+            Divider().frame(height: 18)
+            Button("Redact All") { editor.redactFindMatches() }
+                .buttonStyle(ReelBorderedButtonStyle())
+                .disabled(editor.findMatches.isEmpty)
+            Button {
+                editor.showsFindBar = false
+            } label: {
+                Image(systemName: "xmark").frame(width: 24, height: 24)
+            }
+            .buttonStyle(ReelIconButtonStyle())
+        }
+        .padding(.horizontal, theme.metrics.spacing.md)
+        .padding(.vertical, theme.metrics.spacing.sm)
+        .background(theme.palette.surfaceRaised)
+        .clipShape(
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: theme.metrics.radius.sheet, style: .continuous)
+                .strokeBorder(theme.palette.lineStrong, lineWidth: theme.metrics.hairline)
+        }
+        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+    }
+
+    /// Draws every match on this page, with the stepped-to one emphasized.
+    @ViewBuilder private func findHighlights(in frame: CGRect) -> some View {
+        let current = editor.currentFindMatch
+        ForEach(Array(editor.findMatchesOnSelectedPage.enumerated()), id: \.offset) { _, match in
+            let isCurrent = match == current
+            Rectangle()
+                .fill(theme.palette.accent.opacity(isCurrent ? 0.38 : 0.18))
+                .overlay {
+                    Rectangle()
+                        .strokeBorder(
+                            theme.palette.accent.opacity(isCurrent ? 0.9 : 0.4),
+                            lineWidth: isCurrent ? 1.5 : 0.5
+                        )
+                }
+                .frame(
+                    width: max(match.rect.width * frame.width, 2),
+                    height: max(match.rect.height * frame.height, 2)
+                )
+                .position(
+                    x: frame.minX + (match.rect.midX * frame.width),
+                    y: frame.minY + (match.rect.midY * frame.height)
+                )
+                .allowsHitTesting(false)
         }
     }
 
@@ -342,10 +500,18 @@ private struct PDFEditorView: View {
                             handlePageTap(value.location, in: size)
                         }
                 )
-            if editor.activeTool == .select {
-                ForEach(editor.editableTextBlocks) { block in
-                    sourceTextOverlay(block, pageFrame: frame)
-                }
+            selectedMarkOutline(in: frame)
+            if editor.showsFindBar {
+                findHighlights(in: frame)
+            }
+            if let region = dragPreviewRect(in: frame) {
+                dragPreview(region)
+            }
+            ForEach(placedTextLayers, id: \.id) { layer in
+                placedLayerHandle(layer, pageFrame: frame)
+            }
+            if editor.activeTool == .select, let paragraph = editingParagraph {
+                paragraphEditor(paragraph, pageFrame: frame)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -354,170 +520,470 @@ private struct PDFEditorView: View {
     }
 
     private func handlePageTap(_ point: CGPoint, in size: CGSize) {
-        commitInlineTextEdit()
-        editor.selectSourceTextBlock(nil)
+        commitParagraphEdit()
         if editor.activeTool == .text {
+            editor.selectSourceTextBlock(nil)
             _ = editor.addText(at: normalized(point, in: size))
-        } else {
-            editor.selectLayer(nil)
+            return
         }
+        if editor.activeTool == .signature {
+            editor.selectSourceTextBlock(nil)
+            _ = editor.addSignature(
+                editor.signatureName,
+                style: editor.signatureStyle,
+                at: normalized(point, in: size)
+            )
+            return
+        }
+        // Marks first, and topmost first: a redaction sits over the text it
+        // hides, so a click inside one is aimed at the redaction rather than at
+        // the paragraph underneath. Without this they could not be selected at
+        // all, and Delete had nothing to remove.
+        if editor.activeTool == .select,
+            let hit = markHit(at: normalized(point, in: size))
+        {
+            editor.selectSourceTextBlock(nil)
+            editor.selectMark(hit)
+            return
+        }
+        // Clicking type puts the caret where it was aimed, in the whole
+        // paragraph; clicking away from text dismisses instead of opening an
+        // empty editor. Editing waits for the page index so a click resolves
+        // against finished paragraphs rather than a half-built page.
+        if editor.activeTool == .select, editor.isPageIndexed,
+            let hit = editor.paragraphHit(at: normalized(point, in: size)),
+            let paragraph = editor.pageTextIndex.paragraphs.first(
+                where: { $0.id == hit.paragraphID }
+            )
+        {
+            beginParagraphEdit(paragraph, caretOffset: hit.characterOffset)
+            return
+        }
+        editor.selectSourceTextBlock(nil)
+        editor.selectLayer(nil)
     }
 
-    private func sourceTextOverlay(
-        _ block: PDFTextBlock,
-        pageFrame: CGRect
-    ) -> some View {
-        let normalizedBounds = displayBounds(
-            block.bounds,
+    /// The topmost redaction or highlight under a point, in display space.
+    ///
+    /// Compared after `displayBounds` so the hit follows a rotated page, and
+    /// given a small margin because these are often only a few points tall and
+    /// a thin strip is hard to hit exactly.
+    private func markHit(at point: CGPoint) -> PDFMarkHit? {
+        PDFMarkHitTest.topmost(
+            at: point,
+            in: editor.selectedPage?.layers ?? [],
             rotation: editor.selectedPage?.rotation ?? .degrees0
         )
-        let blockFrame = CGRect(
-            x: pageFrame.minX + normalizedBounds.minX * pageFrame.width,
-            y: pageFrame.minY + normalizedBounds.minY * pageFrame.height,
-            width: max(normalizedBounds.width * pageFrame.width, 18),
-            height: max(normalizedBounds.height * pageFrame.height, 16)
-        )
-        let isSelected = editor.selectedSourceTextBlockID == block.pageObjectIndex
-        return ZStack {
-            if editingTextObjectID == block.pageObjectIndex {
-                TextField("PDF text", text: $textDraft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: max(min(blockFrame.height * 0.72, 24), 11)))
-                    .foregroundStyle(theme.palette.textPrimary)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 5)
+    }
+
+    private func markRegions(of layer: PDFLayer) -> [CGRect] {
+        PDFMarkHitTest.regions(of: layer)
+    }
+
+    /// Outlines the selected mark, so a click that landed is visible before
+    /// Delete is pressed.
+    @ViewBuilder private func selectedMarkOutline(in frame: CGRect) -> some View {
+        let rotation = editor.selectedPage?.rotation ?? .degrees0
+        if editor.selectedLayer != nil {
+            // Only the clicked region, so a batch redaction does not look as
+            // though Delete is about to take the whole page with it.
+            ForEach(Array(editor.selectedMarkRegions.enumerated()), id: \.offset) { _, region in
+                let bounds = displayBounds(region, rotation: rotation)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .strokeBorder(theme.palette.accent, lineWidth: 1.5)
                     .frame(
-                        minWidth: max(blockFrame.width, 150),
-                        minHeight: max(blockFrame.height, 30),
-                        alignment: .leading
+                        width: max(bounds.width * frame.width, 6) + 4,
+                        height: max(bounds.height * frame.height, 6) + 4
                     )
-                    .background(theme.palette.surfaceRaised.opacity(0.98))
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: theme.metrics.radius.control,
-                            style: .continuous
-                        )
+                    .position(
+                        x: frame.minX + bounds.midX * frame.width,
+                        y: frame.minY + bounds.midY * frame.height
                     )
-                    .overlay {
-                        RoundedRectangle(
-                            cornerRadius: theme.metrics.radius.control,
-                            style: .continuous
-                        )
-                        .strokeBorder(theme.palette.accent, lineWidth: 1.5)
-                    }
-                    .shadow(color: .black.opacity(0.24), radius: 10, y: 4)
-                    .focused($isInlineTextFocused)
-                    .onSubmit(commitInlineTextEdit)
-                    .accessibilityIdentifier("pdf-inline-text-editor")
-            } else {
-                RoundedRectangle(
-                    cornerRadius: theme.metrics.radius.small,
-                    style: .continuous
-                )
-                .fill(isSelected ? theme.palette.accentDim.opacity(0.28) : Color.clear)
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: theme.metrics.radius.small,
-                        style: .continuous
-                    )
-                    .strokeBorder(
-                        isSelected ? theme.palette.accent : Color.clear,
-                        lineWidth: 1
-                    )
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    TapGesture(count: 2)
-                        .exclusively(before: TapGesture())
-                        .onEnded { value in
-                            switch value {
-                            case .first:
-                                beginInlineTextEdit(block)
-                            case .second:
-                                commitInlineTextEdit()
-                                editor.selectSourceTextBlock(block.pageObjectIndex)
-                            }
-                        }
-                )
-                .accessibilityAction {
-                    commitInlineTextEdit()
-                    editor.selectSourceTextBlock(block.pageObjectIndex)
-                }
-                .help("Double-click to edit “\(block.text.prefix(60))”")
-                .accessibilityLabel("PDF text: \(block.text)")
-                .accessibilityHint("Double-click to edit this text in place")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .allowsHitTesting(false)
             }
         }
-        .frame(width: blockFrame.width, height: blockFrame.height)
-        .position(x: blockFrame.midX, y: blockFrame.midY)
-        .zIndex(editingTextObjectID == block.pageObjectIndex ? 4 : 2)
     }
 
-    private func beginInlineTextEdit(_ block: PDFTextBlock) {
-        commitInlineTextEdit()
-        editor.selectSourceTextBlock(block.pageObjectIndex)
-        editingTextObjectID = block.pageObjectIndex
-        textDraft = block.text
-        Task { @MainActor in isInlineTextFocused = true }
+    /// Text layers the user placed, which can be dragged around the page.
+    private var placedTextLayers: [PDFTextLayer] {
+        editor.selectedPage?.layers.compactMap { layer in
+            guard case .text(let text) = layer, text.sourceReference == nil else { return nil }
+            return text
+        } ?? []
     }
 
-    private func commitInlineTextEdit() {
-        guard let editingTextObjectID else { return }
+    /// A drag target over a placed layer, so a signature can be positioned by
+    /// hand after it lands.
+    private func placedLayerHandle(
+        _ layer: PDFTextLayer,
+        pageFrame: CGRect
+    ) -> some View {
+        let bounds = displayBounds(
+            layer.frame,
+            rotation: editor.selectedPage?.rotation ?? .degrees0
+        )
+        let box = CGRect(
+            x: pageFrame.minX + bounds.minX * pageFrame.width,
+            y: pageFrame.minY + bounds.minY * pageFrame.height,
+            width: max(bounds.width * pageFrame.width, 16),
+            height: max(bounds.height * pageFrame.height, 16)
+        )
+        let isSelected = editor.selectedLayerID == layer.id
+        return Rectangle()
+            .fill(Color.clear)
+            .contentShape(Rectangle())
+            .overlay {
+                Rectangle().strokeBorder(
+                    isSelected ? theme.palette.accentLine : Color.clear,
+                    lineWidth: theme.metrics.hairline
+                )
+            }
+            .frame(width: box.width, height: box.height)
+            .position(x: box.midX, y: box.midY)
+            .gesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .local)
+                    .onChanged { value in
+                        if movingLayerID != layer.id {
+                            movingLayerID = layer.id
+                            movingLayerOrigin = layer.frame.origin
+                            editor.selectLayer(layer.id)
+                        }
+                        guard let origin = movingLayerOrigin else { return }
+                        editor.moveLayer(
+                            layer.id,
+                            to: CGPoint(
+                                x: origin.x + value.translation.width / pageFrame.width,
+                                y: origin.y + value.translation.height / pageFrame.height
+                            )
+                        )
+                    }
+                    .onEnded { _ in
+                        movingLayerID = nil
+                        movingLayerOrigin = nil
+                    }
+            )
+            .onTapGesture { editor.selectLayer(layer.id) }
+            .accessibilityLabel("Placed text: \(layer.text)")
+            .zIndex(3)
+    }
+
+    private var editingParagraph: PDFTextParagraph? {
+        guard let editingParagraphID else { return nil }
+        return editor.pageTextIndex.paragraphs.first { $0.id == editingParagraphID }
+    }
+
+    /// The paragraph under edit, drawn in place of the glyphs the renderer is
+    /// withholding.
+    private func paragraphEditor(
+        _ paragraph: PDFTextParagraph,
+        pageFrame: CGRect
+    ) -> some View {
+        let bounds = displayBounds(
+            paragraph.bounds,
+            rotation: editor.selectedPage?.rotation ?? .degrees0
+        )
+        let box = CGRect(
+            x: pageFrame.minX + bounds.minX * pageFrame.width,
+            y: pageFrame.minY + bounds.minY * pageFrame.height,
+            width: max(bounds.width * pageFrame.width, 24),
+            height: max(bounds.height * pageFrame.height, 16)
+        )
+        // Substituted faces are rarely the exact width of the embedded ones, so
+        // the container is given slack past the measured column. Tracking keeps
+        // each line the width the page drew it; the slack only stops a rounding
+        // difference from clipping the final glyph.
+        let slack = pageFrame.maxX - box.minX
+        return PDFInlineTextEditor(
+            text: $textDraft,
+            attributed: attributedParagraph(paragraph, pageFrame: pageFrame),
+            caretOffset: inlineCaretOffset,
+            onCommit: commitParagraphEdit,
+            onCancel: cancelParagraphEdit
+        )
+        .frame(width: max(box.width, slack), alignment: .topLeading)
+        // Height follows the text: constraining it to the measured paragraph
+        // clipped the last line whenever the substituted metrics ran taller.
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("pdf-inline-text-editor")
+        .frame(
+            width: max(box.width, slack),
+            height: box.height,
+            alignment: .topLeading
+        )
+        .position(x: box.minX + max(box.width, slack) / 2, y: box.midY)
+        .zIndex(4)
+    }
+
+    /// The paragraph styled run by run.
+    ///
+    /// Attributes are applied over ``PDFTextParagraph/text`` using the span
+    /// placements, so the styled string and the string the edit is diffed
+    /// against are the same string by construction.
+    private func attributedParagraph(
+        _ paragraph: PDFTextParagraph,
+        pageFrame: CGRect
+    ) -> NSAttributedString {
+        let text = paragraph.text
+        let result = NSMutableAttributedString(string: text)
+        for placement in paragraph.spanPlacements {
+            guard
+                let start = text.index(
+                    text.startIndex,
+                    offsetBy: placement.start,
+                    limitedBy: text.endIndex
+                ),
+                let end = text.index(start, offsetBy: placement.length, limitedBy: text.endIndex)
+            else { continue }
+            result.addAttributes(
+                [
+                    .font: resolvedFont(
+                        descriptor: placement.span.font,
+                        pdfSize: placement.span.fontSize,
+                        pageFrame: pageFrame
+                    ),
+                    .foregroundColor: NSColor(Color(pdfRGBA: placement.span.color)),
+                ],
+                range: NSRange(start..<end, in: text)
+            )
+        }
+        applyLineGeometry(paragraph, to: result, pageFrame: pageFrame)
+        return result
+    }
+
+    /// Pins each line to the leading and indent the page drew it with.
+    ///
+    /// Without this the editor lays the text out with its own metrics, so the
+    /// paragraph visibly shifts the moment it is clicked. Locking line height
+    /// to the measured leading and indenting each line to its own left edge
+    /// keeps the text where it already was.
+    private func applyLineGeometry(
+        _ paragraph: PDFTextParagraph,
+        to string: NSMutableAttributedString,
+        pageFrame: CGRect
+    ) {
+        let text = string.string
+        let placements = paragraph.linePlacements
+        let leading = measuredLeading(placements, pageFrame: pageFrame)
+        for placement in placements {
+            guard
+                let start = text.index(
+                    text.startIndex,
+                    offsetBy: placement.start,
+                    limitedBy: text.endIndex
+                ),
+                let end = text.index(start, offsetBy: placement.length, limitedBy: text.endIndex)
+            else { continue }
+            let range = NSRange(start..<end, in: text)
+            // Fit the run to the width the page gave it. An embedded face is
+            // almost never the same width as its substitute, so without this a
+            // line either overruns the column and gets clipped or falls short
+            // of where it originally ended.
+            let target = placement.line.bounds.width * pageFrame.width
+            let measured = string.attributedSubstring(from: range).size().width
+            if measured > 0, target > 0, abs(measured - target) > 0.5 {
+                let spread = CGFloat(max(placement.length - 1, 1))
+                string.addAttribute(.kern, value: (target - measured) / spread, range: range)
+            }
+
+            let style = NSMutableParagraphStyle()
+            if let leading {
+                // Add the shortfall between the face's natural line height and
+                // the page's leading, rather than overriding the line height.
+                // Clamping it compressed every line the substituted face drew
+                // taller than the original and lifted the whole paragraph.
+                let natural = naturalLineHeight(of: string, in: range)
+                if leading > natural {
+                    style.lineSpacing = leading - natural
+                } else {
+                    style.maximumLineHeight = leading
+                    style.minimumLineHeight = leading
+                }
+            }
+            let indent = max(
+                (placement.line.bounds.minX - paragraph.bounds.minX) * pageFrame.width,
+                0
+            )
+            style.firstLineHeadIndent = indent
+            style.headIndent = indent
+            // The page already decided where these lines break.
+            style.lineBreakMode = .byClipping
+            string.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+    }
+
+    /// Line height the face in this range lays out with by default.
+    private func naturalLineHeight(of string: NSAttributedString, in range: NSRange) -> CGFloat {
+        guard range.length > 0,
+            let font = string.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        else { return 0 }
+        return NSLayoutManager().defaultLineHeight(for: font)
+    }
+
+    /// Distance between consecutive baselines, in view points.
+    private func measuredLeading(
+        _ placements: [PDFTextParagraph.LinePlacement],
+        pageFrame: CGRect
+    ) -> CGFloat? {
+        // Centres rather than tops: a line's top moves with whichever ascender
+        // or capital happens to be on it, which is noise against the leading.
+        let centres = placements.map(\.line.bounds.midY)
+        guard centres.count > 1 else { return nil }
+        let gaps = zip(centres.dropFirst(), centres).map { $0 - $1 }.sorted()
+        let median = gaps[gaps.count / 2]
+        let points = median * pageFrame.height
+        return points > 1 ? points : nil
+    }
+
+    private func beginParagraphEdit(_ paragraph: PDFTextParagraph, caretOffset: Int? = nil) {
+        commitParagraphEdit()
+        editingParagraphID = paragraph.id
+        textDraft = paragraph.text
+        inlineCaretOffset = caretOffset
+        editor.setEditingSourceObjects(Set(paragraph.pageObjectIndexes))
+    }
+
+    private func commitParagraphEdit() {
+        guard let paragraph = editingParagraph else { return }
         let value = textDraft
-        self.editingTextObjectID = nil
+        editingParagraphID = nil
+        inlineCaretOffset = nil
         isInlineTextFocused = false
-        editor.replaceSourceText(objectIndex: editingTextObjectID, with: value)
+        editor.setEditingSourceObjects([])
+        editor.replaceParagraphText(paragraph, with: value)
     }
 
-    private func cancelInlineTextEdit() {
-        editingTextObjectID = nil
+    private func cancelParagraphEdit() {
+        editingParagraphID = nil
+        inlineCaretOffset = nil
         textDraft = ""
         isInlineTextFocused = false
+        editor.setEditingSourceObjects([])
+    }
+
+    /// Screen points per PDF point at the current rendered page size.
+    private func pageScale(_ pageFrame: CGRect) -> CGFloat {
+        guard let page = editor.selectedPage else { return 1 }
+        let isQuarterTurn = page.rotation == .degrees90 || page.rotation == .degrees270
+        let pageHeight = isQuarterTurn ? page.size.width : page.size.height
+        guard pageHeight > 0, pageFrame.height > 0 else { return 1 }
+        return pageFrame.height / pageHeight
+    }
+
+    /// The block's own typeface at its own size, mapped onto the rendered page.
+    ///
+    /// Matching the source font is the point of editing in place. Deriving the
+    /// size from the box height instead made every edit render visibly larger
+    /// than the text it replaced, and a wrapped block guessed worst of all.
+    /// Subset-embedded faces cannot be instantiated under their prefixed
+    /// PostScript name, so the base name and family are tried in turn before
+    /// falling back to the system face at the correct size.
+    private func resolvedFont(
+        descriptor: PDFFontDescriptor,
+        pdfSize: Double,
+        pageFrame: CGRect
+    ) -> NSFont {
+        let size = max(pdfSize * pageScale(pageFrame), 1)
+        var candidates = [descriptor.postScriptName, descriptor.baseFontName]
+        if let family = descriptor.familyName { candidates.append(family) }
+        for name in candidates where !name.isEmpty {
+            if let font = NSFont(name: name, size: size) { return font }
+        }
+        return fallbackFont(matching: descriptor, size: size)
+    }
+
+    /// System font standing in for a face the machine does not have.
+    ///
+    /// Subset-embedded PDF fonts are rarely installed, so most edits land here.
+    /// Falling straight through to the plain system font dropped the weight and
+    /// slant, which made an edit inside a bold run render as body text; the
+    /// traits are recovered from the face name so the substitute still reads
+    /// like the type it replaces.
+    private func fallbackFont(matching descriptor: PDFFontDescriptor, size: CGFloat) -> NSFont {
+        let system = NSFont.systemFont(ofSize: size)
+        let name = (descriptor.familyName ?? descriptor.baseFontName).lowercased()
+        var traits: NSFontDescriptor.SymbolicTraits = []
+        if name.contains("bold") || name.contains("black") || name.contains("heavy") {
+            traits.insert(.bold)
+        }
+        if name.contains("italic") || name.contains("oblique") { traits.insert(.italic) }
+        guard !traits.isEmpty else { return system }
+        let traited = system.fontDescriptor.withSymbolicTraits(traits)
+        return NSFont(descriptor: traited, size: size) ?? system
     }
 
     private func displayBounds(_ rect: CGRect, rotation: PDFPageRotation) -> CGRect {
-        switch rotation {
-        case .degrees0:
-            return rect
-        case .degrees90:
-            return CGRect(
-                x: 1 - rect.maxY,
-                y: rect.minX,
-                width: rect.height,
-                height: rect.width
-            )
-        case .degrees180:
-            return CGRect(
-                x: 1 - rect.maxX,
-                y: 1 - rect.maxY,
-                width: rect.width,
-                height: rect.height
-            )
-        case .degrees270:
-            return CGRect(
-                x: rect.minY,
-                y: 1 - rect.maxX,
-                width: rect.height,
-                height: rect.width
-            )
-        }
+        PDFMarkHitTest.displayBounds(rect, rotation: rotation)
     }
 
     private func editGesture(in frame: CGRect) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
                 if dragStart == nil { dragStart = normalized(value.startLocation, in: frame.size) }
+                dragCurrent = normalized(value.location, in: frame.size)
             }
             .onEnded { value in
+                defer {
+                    dragStart = nil
+                    dragCurrent = nil
+                }
                 guard let start = dragStart else { return }
                 editor.commitGesture(
                     from: start,
                     to: normalized(value.location, in: frame.size)
                 )
-                dragStart = nil
             }
+    }
+
+    /// The region under the pointer mid-drag, in page-view coordinates.
+    ///
+    /// Highlight and redact used to commit blind: nothing was drawn until the
+    /// mouse came up, so the size of the mark was a guess. Previewing it makes
+    /// the drag legible without changing what gets committed.
+    private func dragPreviewRect(in frame: CGRect) -> CGRect? {
+        guard toolDrawsDragPreview, let start = dragStart, let current = dragCurrent
+        else { return nil }
+        let rect = CGRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        return CGRect(
+            x: frame.minX + rect.minX * frame.width,
+            y: frame.minY + rect.minY * frame.height,
+            width: rect.width * frame.width,
+            height: rect.height * frame.height
+        )
+    }
+
+    /// Whether the active tool commits a dragged region worth previewing.
+    private var toolDrawsDragPreview: Bool {
+        switch editor.activeTool {
+        case .highlight, .redact, .text: true
+        case .select, .signature: false
+        }
+    }
+
+    @ViewBuilder
+    private func dragPreview(_ region: CGRect) -> some View {
+        let fill: Color =
+            switch editor.activeTool {
+            case .highlight: Color(pdfRGBA: PDFHighlightLayer.defaultColor)
+            // Held back from full opacity so the content being covered stays
+            // readable while it is being framed.
+            case .redact: Color(pdfRGBA: PDFRedactionLayer.defaultColor).opacity(0.55)
+            default: Color.clear
+            }
+        Rectangle()
+            .fill(fill)
+            .overlay {
+                Rectangle()
+                    .strokeBorder(theme.palette.accentLine, lineWidth: theme.metrics.hairline)
+            }
+            .frame(width: region.width, height: region.height)
+            .position(x: region.midX, y: region.midY)
+            .allowsHitTesting(false)
     }
 
     private func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
@@ -807,5 +1273,11 @@ private struct PDFToolButton: View {
         .accessibilityLabel(title)
         .accessibilityHint(help)
         .accessibilityIdentifier(accessibilityIdentifier ?? "pdf-action-\(title)")
+    }
+}
+
+extension Color {
+    fileprivate init(pdfRGBA color: RGBA) {
+        self.init(.sRGB, red: color.r, green: color.g, blue: color.b, opacity: color.a)
     }
 }

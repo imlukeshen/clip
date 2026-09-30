@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 
-// Draws Clip's app icon at every size the asset catalogue asks for.
+// Draws clipx's app icon at every size the asset catalogue asks for.
 //
 // The icon is generated rather than hand-drawn so it has a reviewable source:
 // the shape, the palette, and the optical adjustments below are the design, and
@@ -20,6 +20,9 @@ private enum Ink {
     static let bottom = CGColor(red: 0.043, green: 0.043, blue: 0.047, alpha: 1)  // surfaceBase
     static let mark = CGColor(red: 0.929, green: 0.929, blue: 0.937, alpha: 1)  // textPrimary
     static let rim = CGColor(red: 1, green: 1, blue: 1, alpha: 0.14)
+    /// The x of clipx. The only hue in an otherwise monochrome mark, which is
+    /// what makes it read as a suffix rather than part of the letter.
+    static let accent = CGColor(red: 1, green: 0.353, blue: 0.212, alpha: 1)  // #FF5A36
 }
 
 /// macOS sits its icons inside the canvas rather than filling it, so a Dock
@@ -45,6 +48,21 @@ private func strokeFraction(forPixelSize size: Int) -> CGFloat {
 /// stops reading.
 private func markFraction(forPixelSize size: Int) -> CGFloat {
     size < 40 ? 0.62 : 0.56
+}
+
+/// Width of the x, as a fraction of the body.
+///
+/// Held larger at small sizes for the same reason the C is: below about 32
+/// points two thin diagonals stop resolving as a letter and turn into a smudge.
+private func crossFraction(forPixelSize size: Int) -> CGFloat {
+    size < 40 ? 0.20 : 0.155
+}
+
+/// Stroke of the x, as a fraction of the body. Set a little lighter than the C
+/// so the two marks look the same weight; a diagonal reads heavier than a curve
+/// at matching width.
+private func crossStrokeFraction(forPixelSize size: Int) -> CGFloat {
+    size < 40 ? 0.105 : 0.078
 }
 
 /// A superellipse, which is what gives Apple's icons their continuous corner.
@@ -155,13 +173,45 @@ private func drawIcon(size: Int, into context: CGContext) {
     context.setStrokeColor(Ink.mark)
     context.setLineWidth(stroke)
     context.setLineCap(.round)
+    // Set up and to the left of centre rather than in it. The source mark does
+    // the same: a centred C leaves the x nowhere to sit but on top of its lower
+    // terminal, and the pair has to read as two marks.
+    let markCenter = CGPoint(
+        x: bodyRect.midX - body * 0.04,
+        y: bodyRect.midY + body * 0.04
+    )
     context.addArc(
-        center: CGPoint(x: bodyRect.midX, y: bodyRect.midY),
+        center: markCenter,
         radius: radius,
         startAngle: gap / 2 * .pi / 180,
         endAngle: (360 - gap / 2) * .pi / 180,
         clockwise: false
     )
+    context.strokePath()
+    context.restoreGState()
+
+    // The x of clipx, set low and to the right of the C like a subscript.
+    //
+    // Drawn as two crossed strokes rather than set as a letter, for the same
+    // reason the C is an arc: the weight stays even and the terminals stay
+    // clean at 16 points. The source mark is dark on white; on this body the C
+    // takes the light ink and only the x keeps its hue, which is what carries
+    // the logo across to a dark icon.
+    let cross = body * crossFraction(forPixelSize: size)
+    let crossStroke = body * crossStrokeFraction(forPixelSize: size)
+    let crossCenter = CGPoint(
+        x: bodyRect.midX + body * 0.30,
+        y: bodyRect.midY - body * 0.26
+    )
+    let arm = cross / 2
+    context.saveGState()
+    context.setStrokeColor(Ink.accent)
+    context.setLineWidth(crossStroke)
+    context.setLineCap(.round)
+    context.move(to: CGPoint(x: crossCenter.x - arm, y: crossCenter.y - arm))
+    context.addLine(to: CGPoint(x: crossCenter.x + arm, y: crossCenter.y + arm))
+    context.move(to: CGPoint(x: crossCenter.x + arm, y: crossCenter.y - arm))
+    context.addLine(to: CGPoint(x: crossCenter.x - arm, y: crossCenter.y + arm))
     context.strokePath()
     context.restoreGState()
 }

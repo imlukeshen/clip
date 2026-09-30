@@ -1,13 +1,13 @@
 # Third-party acknowledgements
 
-Clip's conversion framework includes the following dynamically linked
+clipx's conversion framework includes the following dynamically linked
 components. The complete corresponding source is available from the linked
 upstream release and can be rebuilt with [`Scripts/build-ffmpeg.sh`](Scripts/build-ffmpeg.sh).
 
 ## FFmpeg 7.1.2
 
 Copyright © the FFmpeg developers. Licensed under the GNU Lesser General Public
-License 2.1 or later. Clip's build disables GPL and nonfree components and does
+License 2.1 or later. clipx's build disables GPL and nonfree components and does
 not include x264 or x265.
 
 - Source: <https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz>
@@ -48,7 +48,7 @@ Copyright © 2015–2025 Gwendal Roué. Licensed under the MIT License.
 
 Copyright © the PDFium authors. Licensed under the three-clause BSD license;
 the pinned non-V8 binary also includes permissively licensed third-party
-components whose complete notices are shipped with Clip.
+components whose complete notices are shipped with clipx.
 
 - Source: <https://pdfium.googlesource.com/pdfium/>
 - Binary: <https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F7961>
@@ -56,7 +56,7 @@ components whose complete notices are shipped with Clip.
 
 ## Tree-sitter syntax engine
 
-Clip bundles SwiftTreeSitter 0.25.0, the Tree-sitter 0.25.10 runtime, and pinned
+clipx bundles SwiftTreeSitter 0.25.0, the Tree-sitter 0.25.10 runtime, and pinned
 grammars for Bash, C, C++, CSS, Go, HTML, Java, JavaScript, JSON, LaTeX,
 Markdown, Python, Rust, SQL, Swift, TOML, TypeScript, XML, and YAML. They run
 entirely on-device and do not download grammars or source text.
@@ -73,7 +73,7 @@ grammars are licensed under the MIT license.
 
 Copyright © 2021–2026 Apple Inc. and the Swift project authors. Swift Markdown
 and its Swift cmark dependency are licensed under the Apache License 2.0 with
-the Swift Runtime Library Exception. Clip uses the parser entirely on-device.
+the Swift Runtime Library Exception. clipx uses the parser entirely on-device.
 
 - Source: <https://github.com/swiftlang/swift-markdown/releases/tag/0.8.0>
 - License: [`Vendor/licenses/SWIFT-MARKDOWN-LICENSE`](Vendor/licenses/SWIFT-MARKDOWN-LICENSE)
@@ -81,7 +81,7 @@ the Swift Runtime Library Exception. Clip uses the parser entirely on-device.
 ## KaTeX 0.17.0
 
 Copyright © 2013–2020 Khan Academy and other contributors. Licensed under the
-MIT License. Clip bundles the minified renderer and WOFF2 fonts for offline math
+MIT License. clipx bundles the minified renderer and WOFF2 fonts for offline math
 preview; no CDN or runtime download is used.
 
 - Source: <https://github.com/KaTeX/KaTeX/releases/tag/v0.17.0>
@@ -91,7 +91,7 @@ preview; no CDN or runtime download is used.
 ## Tectonic 0.16.9
 
 Copyright © 2016–2026 the Tectonic Project contributors. Licensed under the
-MIT License. Clip bundles the official static Apple silicon executable and runs
+MIT License. clipx bundles the official static Apple silicon executable and runs
 it in untrusted mode inside a scoped temporary workspace. TeX package network
 access requires explicit consent.
 

@@ -47,7 +47,7 @@ struct WorkspaceDropZone: View {
 
     private var detail: String {
         switch workspace {
-        case .inbox: "MOV, MP4, PNG, JPEG, HEIC"
+        case .inbox: "Video, images, PDFs, text — anything clipx opens"
         case .video: "MOV, MP4, M4V, WebM, MKV"
         case .photo: "PNG, JPEG, HEIC, TIFF, WebP"
         case .pdf: "PDF"
@@ -59,6 +59,9 @@ struct WorkspaceDropZone: View {
     private var allowedContentTypes: [UTType] {
         switch workspace {
         case .text: [.text, .sourceCode, .plainText]
+        // The library takes anything; the media workspaces stay narrow so their
+        // picker cannot offer a file the editor behind it could not open.
+        case .inbox: [.movie, .image, .audio, .pdf, .text, .sourceCode, .plainText]
         default: [.movie, .image, .audio, .pdf]
         }
     }
@@ -66,6 +69,12 @@ struct WorkspaceDropZone: View {
     private func accept(_ urls: [URL], source: IngestSource) {
         if workspace == .convert {
             model.enqueueForConversion(urls, source: source)
+        } else if workspace == .inbox, let folder = model.selectedFolderPath, folder != "Inbox" {
+            // Dropping onto a folder someone has open should file the arrivals
+            // there. Only the library browses folders, so every other workspace
+            // keeps the plain inbox import. A nil path is the Recent view, which
+            // spans folders and so has no destination to file into.
+            model.accept(urls, source: source, into: folder)
         } else {
             model.accept(urls, source: source)
         }

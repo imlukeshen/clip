@@ -7,7 +7,7 @@ import os
 /// Registers with Carbon's `RegisterEventHotKey`, the same mechanism clipboard
 /// managers such as Maccy rely on. Unlike a `CGEvent` tap it needs no
 /// Accessibility permission and works inside the App Store sandbox, so the
-/// shortcut reaches Clip even when another app is frontmost.
+/// shortcut reaches clipx even when another app is frontmost.
 ///
 /// The handler is delivered on the main thread, because Carbon dispatches hot
 /// key events through the application's run loop.
@@ -128,7 +128,7 @@ private final class HotKeyContext: @unchecked Sendable {
         handler.withLock { $0 = nil }
     }
 
-    /// Runs the stored handler synchronously. Clip registers exactly one global
+    /// Runs the stored handler synchronously. clipx registers exactly one global
     /// hotkey, so there is nothing to disambiguate against.
     fileprivate func fire() {
         let handler = handler.withLock { $0 }
@@ -140,7 +140,7 @@ private final class HotKeyContext: @unchecked Sendable {
             && hotKeyID.id == self.hotKeyID.id
     }
 
-    /// A four-char signature identifying Clip's hotkey registration.
+    /// A four-char signature identifying clipx's hotkey registration.
     private static let signature = "clip".utf8.reduce(OSType(0)) { ($0 << 8) + OSType($1) }
 }
 

@@ -54,6 +54,16 @@ public struct PDFFontDescriptor: Codable, Sendable, Equatable {
         self.isSubset = isSubset ?? Self.hasSubsetPrefix(postScriptName)
     }
 
+    /// The PostScript name with any subset prefix removed.
+    ///
+    /// PDF writers tag subset-embedded faces with a six-letter prefix, as in
+    /// `SDIUIR+Noto-Sans`. Nothing on the system is registered under that name,
+    /// so callers matching the source typeface must ask for the base name.
+    public var baseFontName: String {
+        guard Self.hasSubsetPrefix(postScriptName) else { return postScriptName }
+        return String(postScriptName.dropFirst(7))
+    }
+
     public static func hasSubsetPrefix(_ name: String) -> Bool {
         guard name.count > 7 else { return false }
         let prefix = name.prefix(6)
@@ -108,19 +118,33 @@ public struct PDFSourceTextReference: Codable, Sendable, Equatable {
     public var pageObjectIndex: Int
     public var originalText: String
     public var originalFontPostScriptName: String
+    /// Bounds the object occupied before any edit, in the same normalized
+    /// upper-left space as ``PDFTextLayer/frame``.
+    ///
+    /// Moving an object is expressed as the difference between `frame` and this
+    /// value. Comparing against the object's live bounds instead would turn
+    /// every rounding difference into a silent nudge, so an edit that was never
+    /// dragged has to produce an exactly zero delta. Optional because documents
+    /// written before object moves existed do not carry it.
+    public var originalFrame: CGRect?
 
     public init(
         pageObjectIndex: Int,
         originalText: String,
-        originalFontPostScriptName: String
+        originalFontPostScriptName: String,
+        originalFrame: CGRect? = nil
     ) {
         self.pageObjectIndex = pageObjectIndex
         self.originalText = originalText
         self.originalFontPostScriptName = originalFontPostScriptName
+        self.originalFrame = originalFrame
     }
 }
 
 public struct PDFHighlightLayer: Codable, Sendable, Equatable {
+    /// Shared with the live drag preview so what is dragged matches what lands.
+    public static let defaultColor = RGBA(r: 1, g: 0.84, b: 0.12, a: 0.35)
+
     public var id: PDFLayerID
     public var regions: [CGRect]
     public var color: RGBA
@@ -128,7 +152,7 @@ public struct PDFHighlightLayer: Codable, Sendable, Equatable {
     public init(
         id: PDFLayerID = .generate(),
         regions: [CGRect],
-        color: RGBA = RGBA(r: 1, g: 0.84, b: 0.12, a: 0.35)
+        color: RGBA = PDFHighlightLayer.defaultColor
     ) {
         self.id = id
         self.regions = regions
@@ -137,6 +161,9 @@ public struct PDFHighlightLayer: Codable, Sendable, Equatable {
 }
 
 public struct PDFRedactionLayer: Codable, Sendable, Equatable {
+    /// Shared with the live drag preview so what is dragged matches what lands.
+    public static let defaultColor = RGBA.black
+
     public var id: PDFLayerID
     public var regions: [CGRect]
     public var color: RGBA
@@ -144,7 +171,7 @@ public struct PDFRedactionLayer: Codable, Sendable, Equatable {
     public init(
         id: PDFLayerID = .generate(),
         regions: [CGRect],
-        color: RGBA = .black
+        color: RGBA = PDFRedactionLayer.defaultColor
     ) {
         self.id = id
         self.regions = regions
@@ -165,11 +192,18 @@ public enum PDFLayer: Codable, Sendable, Equatable, Identifiable {
         }
     }
 
+    /// Short label for a list of edits.
+    ///
+    /// Text layers quote what they say: a page of edits that all read "Text"
+    /// tells the reader nothing about which one they are about to select.
     public var name: String {
         switch self {
-        case .text: "Text"
-        case .highlight: "Highlight"
-        case .redaction: "Redaction"
+        case .text(let text):
+            let trimmed = text.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return "Empty text" }
+            return trimmed.count > 28 ? "\(trimmed.prefix(28))…" : trimmed
+        case .highlight: return "Highlight"
+        case .redaction: return "Redaction"
         }
     }
 }

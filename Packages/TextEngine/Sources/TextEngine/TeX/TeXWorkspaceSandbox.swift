@@ -53,7 +53,7 @@ struct TeXWorkspaceSandbox {
         try? FileManager.default.removeItem(at: root)
     }
 
-    /// File name whose contents Clip substitutes when compiling with XeTeX.
+    /// File name whose contents clipx substitutes when compiling with XeTeX.
     static let xeTeXCompatibilityShimName = "glyphtounicode.tex"
 
     /// `glyphtounicode.tex` builds a PDF glyph-to-Unicode table by calling
@@ -67,7 +67,7 @@ struct TeXWorkspaceSandbox {
     /// there rather than missing. Absorbing the pdfTeX spelling therefore
     /// costs the document nothing and lets it compile unchanged.
     private static let xeTeXCompatibilityShim = """
-        % Substituted by Clip. \\pdfglyphtounicode is a pdfTeX primitive that
+        % Substituted by clipx. \\pdfglyphtounicode is a pdfTeX primitive that
         % XeTeX does not provide, and XeTeX already writes Unicode-mapped PDFs
         % without this table. Absorb the pdfTeX spelling so a document written
         % for pdfLaTeX compiles unchanged.

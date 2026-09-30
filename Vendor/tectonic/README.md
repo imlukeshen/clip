@@ -1,6 +1,6 @@
 # Tectonic
 
-Clip bundles the official macOS arm64 build of Tectonic 0.16.9 for LaTeX
+clipx bundles the official macOS arm64 build of Tectonic 0.16.9 for LaTeX
 compilation in both distribution channels.
 
 Run `Scripts/vendor-tectonic.sh` to download the pinned release archive, verify
