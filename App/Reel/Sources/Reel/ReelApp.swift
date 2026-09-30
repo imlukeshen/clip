@@ -46,7 +46,13 @@ struct ClipApp: App {
         Window("clipx", id: "main") {
             MainWindow(model: model)
                 .frame(minWidth: 1024, minHeight: 680)
-                .onAppear { appDelegate.install(model: model) }
+                .onAppear {
+                    appDelegate.install(model: model)
+                    ApplicationAppearance.apply(model.appearance, to: .shared)
+                }
+                .onChange(of: model.appearance) { _, appearance in
+                    ApplicationAppearance.apply(appearance, to: .shared)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
