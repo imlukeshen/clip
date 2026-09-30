@@ -1188,9 +1188,26 @@ public final class AppModel {
     /// Only the media editors carry a dedicated inspector (PDF layers, image
     /// layers, timeline effects). While browsing the library, "Get Info" on an
     /// item replaces the pane, so both the rail and its toolbar toggle hide.
-    public var showsEditorInspector: Bool {
+    /// Whether the open workspace offers an inspector rail at all.
+    ///
+    /// Drives the titlebar toggle, and is deliberately separate from where the
+    /// rail is mounted: gating the toggle on the shell's own flag hid the
+    /// button in the video editor and left no way to bring the rail back.
+    public var hasEditorInspector: Bool {
         editor != nil || imageEditor != nil || pdfEditor != nil || textEditor != nil
     }
+
+    /// Whether the shell mounts the rail beside the workspace.
+    ///
+    /// The video editor is excluded because it places the rail itself, beside
+    /// its preview only. A shell-level rail runs the full height of the window
+    /// and would cut the timeline short of the edge.
+    public var showsEditorInspector: Bool {
+        imageEditor != nil || pdfEditor != nil || textEditor != nil
+    }
+
+    /// Whether the video editor should place the rail inside its own layout.
+    public var showsVideoEditorInspector: Bool { editor != nil }
 
     /// Resizes the inspector column, holding it inside the draggable range and
     /// remembering the result for the next launch.

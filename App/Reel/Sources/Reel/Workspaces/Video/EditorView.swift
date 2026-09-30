@@ -89,6 +89,26 @@ struct EditorView: View {
                         toolRail
                         Divider().overlay(theme.palette.line)
                         preview(isCompact: compact)
+                            .layoutPriority(1)
+                        // The rail belongs beside the preview, not beside the
+                        // whole editor: run it the full height of the window and
+                        // the timeline stops short of the edge.
+                        if model.showsVideoEditorInspector, model.isInspectorVisible {
+                            InspectorResizeDivider(
+                                model: model,
+                                displayedWidth: InspectorLayout.displayedWidth(
+                                    requestedWidth: model.inspectorWidth,
+                                    availableWindowWidth: availableSize.width
+                                )
+                            )
+                            UnifiedInspector(
+                                model: model,
+                                width: InspectorLayout.displayedWidth(
+                                    requestedWidth: model.inspectorWidth,
+                                    availableWindowWidth: availableSize.width
+                                )
+                            )
+                        }
                     }
                     Divider().overlay(theme.palette.line)
                     timeline(isCompact: compact)

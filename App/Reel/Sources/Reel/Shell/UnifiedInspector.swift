@@ -15,7 +15,7 @@ struct UnifiedInspector: View {
             if model.selectedWorkspace == .pdf, let editor = model.pdfEditor {
                 PDFLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .photo, let editor = model.imageEditor {
-                ImageLayerInspector(editor: editor)
+                ImageLayerInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .video, let editor = model.editor {
                 EditorInspector(model: model, editor: editor)
             } else if model.selectedWorkspace == .text, let editor = model.textEditor {
@@ -541,8 +541,17 @@ private struct PDFLayerInspector: View {
 
 private struct ImageLayerInspector: View {
     @Environment(\.theme) private var theme
+    @Bindable var model: AppModel
     @Bindable var editor: ImageEditorViewModel
+    @State private var panel: Panel = .inspector
     @State private var isSmartActionsExpanded = false
+
+    private enum Panel: String, CaseIterable, Identifiable {
+        case inspector = "Inspector"
+        case chat = "Chat"
+
+        var id: Self { self }
+    }
     @State private var textDraft = ""
     @State private var strokeValue = 4.0
     @State private var textSizeValue = 28.0
@@ -555,13 +564,18 @@ private struct ImageLayerInspector: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("Inspector")
-                    .font(theme.type.title.font)
-                Spacer()
+            HStack(spacing: theme.metrics.spacing.sm) {
+                ReelSegmentedControl(
+                    selection: $panel,
+                    options: Panel.allCases.map { .init(value: $0, title: $0.rawValue) }
+                )
+                .fixedSize()
+                Spacer(minLength: theme.metrics.spacing.xs)
                 Text(editor.activeTool.title)
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.vertical, 4)
                     .padding(.horizontal, 7)
                     .background(theme.palette.surfaceRaised)
@@ -572,6 +586,60 @@ private struct ImageLayerInspector: View {
 
             Divider().overlay(theme.palette.line)
 
+            if panel == .chat {
+                photoChat
+            } else {
+                inspectorBody
+            }
+        }
+    }
+
+    /// The assistant already crops, annotates, redacts and writes alt text for
+    /// this editor; without a panel here there was no way to ask it to.
+    private var photoChat: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 9) {
+                        if model.assistantMessages.isEmpty {
+                            VStack(alignment: .leading, spacing: 7) {
+                                SectionLabel("Image context")
+                                Text("\(editor.document.layers.count) layers")
+                                    .foregroundStyle(theme.palette.textSecondary)
+                                Text(
+                                    "Ask Clip to crop, annotate, redact, add padding, "
+                                        + "number steps, or describe this image."
+                                )
+                                .foregroundStyle(theme.palette.textTertiary)
+                            }
+                            .font(theme.type.caption.font)
+                        }
+                        ForEach(model.assistantMessages) { message in
+                            AssistantChatBubble(message: message).id(message.id)
+                        }
+                        ForEach(model.pendingAssistantActions) { action in
+                            PendingActionCard(model: model, action: action)
+                        }
+                        if model.isAssistantWorking { ProgressView().controlSize(.small) }
+                    }
+                    .padding(14)
+                }
+                .onChange(of: model.assistantMessages.count) {
+                    if let id = model.assistantMessages.last?.id {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+            AssistantChatComposer(
+                draft: $model.assistantDraft,
+                isWorking: model.isAssistantWorking,
+                send: model.sendAssistantMessage
+            )
+        }
+    }
+
+    private var inspectorBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     transformSection

@@ -92,11 +92,71 @@ struct EditorTimeline: NSViewRepresentable {
         view.onTrim = onTrim
         view.onRazor = onRazor
         view.onZoom = onZoom
+
+        // Repaint only when something drawable actually differs.
+        //
+        // SwiftUI calls this whenever anything upstream re-evaluates, which
+        // during a rail resize is every frame. Forcing a full timeline repaint
+        // that often — every clip, waveform, ruler tick and label — is what made
+        // dragging the divider stutter. Callbacks are excluded from the
+        // comparison: they take a new identity on every evaluation and never
+        // affect a pixel.
+        let inputs = TimelineRenderInputs(
+            timeline: timeline,
+            names: names,
+            assetDurations: assetDurations,
+            audioAssetIDs: audioAssetIDs,
+            missingAssetIDs: missingAssetIDs,
+            selection: selection,
+            playhead: playhead,
+            duration: duration,
+            fixedPointsPerSecond: fixedPointsPerSecond,
+            inPoint: inPoint,
+            outPoint: outPoint,
+            clickMarkers: clickMarkers,
+            isSnappingEnabled: isSnappingEnabled,
+            activeTool: activeTool,
+            targetedVideoTrackID: targetedVideoTrackID,
+            targetedAudioTrackID: targetedAudioTrackID,
+            targetedTrackKind: targetedTrackKind,
+            clipCornerRadius: clipCornerRadius
+        )
+        guard view.renderInputs != inputs else { return }
+        view.renderInputs = inputs
         view.needsDisplay = true
     }
 }
 
+/// The inputs that decide what the timeline draws.
+///
+/// Deliberately excludes the callbacks and the theme colours: the first change
+/// identity constantly without changing any pixel, and the second only change
+/// when the appearance does, which forces a redraw through its own path.
+struct TimelineRenderInputs: Equatable {
+    var timeline: Timeline
+    var names: [AssetID: String]
+    var assetDurations: [AssetID: RationalTime]
+    var audioAssetIDs: Set<AssetID>
+    var missingAssetIDs: Set<AssetID>
+    var selection: Set<ItemID>
+    var playhead: RationalTime
+    var duration: RationalTime
+    var fixedPointsPerSecond: CGFloat
+    var inPoint: RationalTime?
+    var outPoint: RationalTime?
+    var clickMarkers: [TimelineClickMarker]
+    var isSnappingEnabled: Bool
+    var activeTool: TimelineTool
+    var targetedVideoTrackID: TrackID?
+    var targetedAudioTrackID: TrackID?
+    var targetedTrackKind: TrackKind
+    var clipCornerRadius: CGFloat
+}
+
 final class TimelineCanvas: NSView {
+    /// What the canvas was last told to draw, so an update that changes nothing
+    /// does not cost a repaint.
+    var renderInputs: TimelineRenderInputs?
     var timeline = Timeline()
     var names: [AssetID: String] = [:]
     var assetDurations: [AssetID: RationalTime] = [:]

@@ -56,7 +56,7 @@ struct Titlebar: View {
                 }
                 .help("Command Palette")
 
-                if model.showsEditorInspector {
+                if model.hasEditorInspector {
                     Button {
                         model.isInspectorVisible.toggle()
                     } label: {
