@@ -3,9 +3,22 @@ import CoreModel
 import SearchEngine
 import SwiftUI
 
+/// How much of the surface an overlay claims from the views behind it.
+enum LiveTextSelectionMode: Equatable {
+    /// Only recognized text takes the mouse, so empty canvas still reaches the
+    /// layer tools underneath. Used where selection is always available.
+    case overText
+    /// The whole surface takes the mouse, so a drag selects text instead of
+    /// moving whatever is behind it. Used where selection is explicitly armed.
+    case wholeSurface
+    /// Inert: clicks, hover, and the I-beam cursor all fall through.
+    case off
+}
+
 /// A lightweight AppKit overlay so OCR selection participates in the native responder chain.
 struct LiveTextOverlay: NSViewRepresentable {
     let spans: [OCRSpan]
+    var selectionMode: LiveTextSelectionMode = .overText
     let onSearch: (String) -> Void
     let onRedact: ([NormalizedRect]) -> Void
     let onEdit: (String, [NormalizedRect]) -> Void
@@ -15,6 +28,7 @@ struct LiveTextOverlay: NSViewRepresentable {
         view.onSearch = onSearch
         view.onRedact = onRedact
         view.onEdit = onEdit
+        view.selectionMode = selectionMode
         view.setSpans(spans)
         return view
     }
@@ -23,6 +37,11 @@ struct LiveTextOverlay: NSViewRepresentable {
         view.onSearch = onSearch
         view.onRedact = onRedact
         view.onEdit = onEdit
+        view.selectionMode = selectionMode
+        // Rebuilding the text frame lays out every recognized span, and SwiftUI
+        // calls this on any upstream re-evaluation — every frame while the rail
+        // is being dragged. The spans only change when the frame does.
+        guard view.spans != spans else { return }
         view.setSpans(spans)
     }
 }
@@ -40,10 +59,27 @@ final class LiveTextSelectionView: NSView {
     private var hoveredIndex: Int?
     private var tracking: NSTrackingArea?
 
+    /// How much of the surface this overlay claims. Changing it re-evaluates the
+    /// cursor, because an I-beam over text that cannot be selected reads as a bug.
+    var selectionMode: LiveTextSelectionMode = .overText {
+        didSet {
+            guard selectionMode != oldValue else { return }
+            if selectionMode == .off, hoveredIndex != nil {
+                hoveredIndex = nil
+                needsDisplay = true
+            }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
+    /// The spans this view was last given, so an unchanged update costs nothing.
+    private(set) var spans: [OCRSpan] = []
+
     func setSpans(_ spans: [OCRSpan]) {
+        self.spans = spans
         let next = LiveTextFrame(spans: spans)
         guard next != textFrame else { return }
         textFrame = next
@@ -59,8 +95,17 @@ final class LiveTextSelectionView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0 else { return nil }
-        if selectionAnchor != nil || regionIndex(at: point) != nil { return self }
+        guard selectionMode != .off, !isHidden, alphaValue > 0 else { return nil }
+        // `point` arrives in the superview's coordinate space, while every rect
+        // this view knows is in its own flipped bounds. Comparing the two
+        // directly meant an overlay that sat anywhere but its superview's origin
+        // never claimed a click, so selection fell through to the clip-drag
+        // gesture behind it. Hover still worked, because tracking areas are
+        // delivered to their owner without consulting hit testing.
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        if selectionMode == .wholeSurface { return self }
+        if selectionAnchor != nil || regionIndex(at: local) != nil { return self }
         return nil
     }
 
@@ -78,13 +123,16 @@ final class LiveTextSelectionView: NSView {
 
     override func resetCursorRects() {
         super.resetCursorRects()
+        guard selectionMode != .off else { return }
         for index in textFrame.spans.indices {
             addCursorRect(displayRect(at: index).insetBy(dx: -2, dy: -2), cursor: .iBeam)
         }
     }
 
     override func mouseMoved(with event: NSEvent) {
-        let next = regionIndex(at: convert(event.locationInWindow, from: nil))
+        let next =
+            selectionMode == .off
+            ? nil : regionIndex(at: convert(event.locationInWindow, from: nil))
         guard next != hoveredIndex else { return }
         hoveredIndex = next
         needsDisplay = true
@@ -97,15 +145,14 @@ final class LiveTextSelectionView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let index = regionIndex(at: point) else {
-            selection = nil
-            selectionAnchor = nil
-            needsDisplay = true
-            return
-        }
         window?.makeFirstResponder(self)
-        selectionAnchor = index
-        selection = index...index
+        // Anchor to the nearest span even when the press lands between words, so
+        // a drag that starts in whitespace still selects. The selection itself
+        // only appears once the press is on text or the drag reaches some, which
+        // keeps a plain click on empty canvas a deselect.
+        let hit = regionIndex(at: point)
+        selectionAnchor = hit ?? nearestRegionIndex(to: point)
+        selection = hit.map { $0...$0 }
         needsDisplay = true
     }
 

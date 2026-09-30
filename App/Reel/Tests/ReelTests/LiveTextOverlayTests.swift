@@ -26,6 +26,45 @@ struct LiveTextOverlayTests {
         #expect(pasteboard.string(forType: .string) == "first\nsecond")
     }
 
+    @Test("A click over recognized text reaches an overlay that is offset in its superview")
+    func hitTestUsesSuperviewCoordinates() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let view = LiveTextSelectionView(frame: NSRect(x: 200, y: 150, width: 400, height: 200))
+        container.addSubview(view)
+        view.setSpans([span("first", x: 0.1)])
+
+        // The span occupies (40, 80, 80, 20) in the overlay's own flipped bounds.
+        let onText = view.convert(NSPoint(x: 80, y: 90), to: container)
+        #expect(container.hitTest(onText) === view)
+
+        let offText = view.convert(NSPoint(x: 320, y: 20), to: container)
+        #expect(container.hitTest(offText) !== view)
+    }
+
+    @Test("An armed overlay claims the whole surface so a drag cannot move the clip behind it")
+    func wholeSurfaceModeClaimsEmptyCanvas() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let view = LiveTextSelectionView(frame: NSRect(x: 200, y: 150, width: 400, height: 200))
+        container.addSubview(view)
+        view.selectionMode = .wholeSurface
+        view.setSpans([span("first", x: 0.1)])
+
+        let offText = view.convert(NSPoint(x: 320, y: 20), to: container)
+        #expect(container.hitTest(offText) === view)
+    }
+
+    @Test("An unarmed overlay is inert rather than half-live")
+    func offModeDeclinesEvenOverText() {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let view = LiveTextSelectionView(frame: NSRect(x: 200, y: 150, width: 400, height: 200))
+        container.addSubview(view)
+        view.selectionMode = .off
+        view.setSpans([span("first", x: 0.1)])
+
+        let onText = view.convert(NSPoint(x: 80, y: 90), to: container)
+        #expect(container.hitTest(onText) !== view)
+    }
+
     @Test("Index progress invalidates the open photo Live Text request")
     func delayedIndexProgressChangesRefreshIdentity() {
         let assetID = AssetID(rawValue: "delayed-live-text")

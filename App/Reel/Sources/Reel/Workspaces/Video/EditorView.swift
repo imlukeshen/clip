@@ -454,6 +454,7 @@ struct EditorView: View {
                     if !editor.isPlaying, !liveTextSpans.isEmpty {
                         LiveTextOverlay(
                             spans: liveTextSpans,
+                            selectionMode: isSelectingLiveText ? .wholeSurface : .off,
                             onSearch: model.searchLibrary,
                             onRedact: { regions in
                                 editor.redactCurrentRegions(
@@ -465,7 +466,6 @@ struct EditorView: View {
                         .frame(width: contentSize.width, height: contentSize.height)
                         .scaleEffect(previewScale)
                         .offset(previewDragOffset)
-                        .allowsHitTesting(isSelectingLiveText)
                     }
 
                     if editor.isBuilding {
