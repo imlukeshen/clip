@@ -26,19 +26,24 @@ public final class AISettingsModel {
     public private(set) var egressEntries: [EgressEntry] = []
     public private(set) var notice: String?
     public private(set) var isCheckingCompatibleProvider = false
+    public private(set) var installedLocalModels: [String] = []
+    public private(set) var localModelDownload: LocalModelDownloadState?
 
     public let credentialStore: CredentialStore
     public let ledger: EgressLedger
     private let defaults: UserDefaults
     private let compatiblePreflight: any CompatibleProviderPreflighting
+    private let modelInstaller: any LocalModelInstalling
     private var isRestoringProvider = false
+    private var downloadTask: Task<Void, Never>?
 
     public convenience init(libraryRoot: URL) {
         self.init(
             libraryRoot: libraryRoot,
             defaults: .standard,
             credentialStore: CredentialStore(),
-            compatiblePreflight: CompatibleProviderPreflight()
+            compatiblePreflight: CompatibleProviderPreflight(),
+            modelInstaller: OllamaModelInstaller()
         )
     }
 
@@ -46,11 +51,13 @@ public final class AISettingsModel {
         libraryRoot: URL,
         defaults: UserDefaults,
         credentialStore: CredentialStore,
-        compatiblePreflight: any CompatibleProviderPreflighting
+        compatiblePreflight: any CompatibleProviderPreflighting,
+        modelInstaller: any LocalModelInstalling = OllamaModelInstaller()
     ) {
         self.defaults = defaults
         self.credentialStore = credentialStore
         self.compatiblePreflight = compatiblePreflight
+        self.modelInstaller = modelInstaller
         self.ledger = EgressLedger(
             storageURL: libraryRoot.appendingPathComponent("EgressLedger.json"))
         let restoredProvider =
@@ -169,6 +176,110 @@ public final class AISettingsModel {
         default:
             throw AIKitError.invalidResponse("Unsupported provider")
         }
+    }
+
+    /// Whether the configured compatible server is a local Ollama, which is the
+    /// only one Clip can install models into.
+    public var canInstallLocalModels: Bool {
+        guard selectedProvider == .openAICompatible,
+            let configuration = try? compatibleConfiguration()
+        else { return false }
+        return OllamaEndpoint.isLocalOllama(configuration.url)
+    }
+
+    /// Suggestions that are not installed yet.
+    public var availableLocalModelSuggestions: [LocalModelSuggestion] {
+        let installed = Set(installedLocalModels.map(Self.withoutLatestTag))
+        return LocalModelSuggestion.catalog.filter {
+            !installed.contains(Self.withoutLatestTag($0.name))
+        }
+    }
+
+    /// Re-reads which models the local server already has.
+    public func refreshInstalledLocalModels() async {
+        guard canInstallLocalModels, let native = nativeBaseURL() else {
+            installedLocalModels = []
+            return
+        }
+        installedLocalModels =
+            (try? await modelInstaller.installedModels(nativeBaseURL: native)) ?? []
+    }
+
+    /// Installs `name` through the local server, reporting progress as it goes.
+    ///
+    /// Clip only ever talks to loopback here. Ollama does the downloading, so no
+    /// model bytes and no request for them leave through Clip, and nothing is
+    /// written to the library.
+    public func downloadLocalModel(_ name: String) {
+        let requested = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requested.isEmpty, localModelDownload?.isRunning != true,
+            let native = nativeBaseURL()
+        else { return }
+
+        notice = nil
+        localModelDownload = .running(
+            model: requested,
+            progress: LocalModelDownloadProgress(status: "starting")
+        )
+        downloadTask = Task { [modelInstaller] in
+            do {
+                for try await event in modelInstaller.pull(requested, nativeBaseURL: native) {
+                    switch event {
+                    case .progress(let progress):
+                        localModelDownload = .running(model: requested, progress: progress)
+                    case .finished:
+                        localModelDownload = nil
+                        model = requested
+                        await refreshInstalledLocalModels()
+                        notice = "Installed `\(requested)`. It is now the assistant's model."
+                        return
+                    case .failed(let message):
+                        localModelDownload = .failed(model: requested, message: message)
+                        return
+                    }
+                }
+                // The stream ended without a success line, which happens when
+                // the server closes mid-transfer. Treating that as done would
+                // leave a model selected that is not actually installed.
+                if localModelDownload?.isRunning == true {
+                    localModelDownload = .failed(
+                        model: requested,
+                        message: "The download ended before it finished."
+                    )
+                }
+            } catch is CancellationError {
+                localModelDownload = nil
+            } catch {
+                localModelDownload = .failed(
+                    model: requested,
+                    message: "Ollama is not reachable. Start it and try again."
+                )
+            }
+        }
+    }
+
+    public func cancelLocalModelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        localModelDownload = nil
+    }
+
+    public func dismissLocalModelDownloadFailure() {
+        guard localModelDownload?.isRunning == false else { return }
+        localModelDownload = nil
+    }
+
+    private func nativeBaseURL() -> URL? {
+        guard let configuration = try? compatibleConfiguration(),
+            OllamaEndpoint.isLocalOllama(configuration.url)
+        else { return nil }
+        return OllamaEndpoint.nativeBaseURL(forCompatible: configuration.url)
+    }
+
+    /// Ollama reports an untagged install as `name:latest`, so the two spellings
+    /// have to compare equal or every suggestion looks uninstalled.
+    private static func withoutLatestTag(_ name: String) -> String {
+        name.hasSuffix(":latest") ? String(name.dropLast(":latest".count)) : name
     }
 
     private func compatibleConfiguration() throws -> (url: URL, model: String) {

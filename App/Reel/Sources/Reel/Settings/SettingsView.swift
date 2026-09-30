@@ -166,12 +166,14 @@ private struct SettingsContent: View {
                         }
                     }
                     Text(
-                        "Ollama defaults to localhost:11434. Start Ollama and install the selected "
-                            + "model first (for example: `ollama pull llama3.2`). LM Studio also works "
-                            + "through its OpenAI-compatible server."
+                        "Ollama defaults to localhost:11434. LM Studio also works through its "
+                            + "OpenAI-compatible server, but manages its own models."
                     )
                     .font(theme.type.caption.font)
                     .foregroundStyle(theme.palette.textTertiary)
+                    if settings.canInstallLocalModels {
+                        localModels
+                    }
                 } else {
                     HStack {
                         SecureField("API key", text: credentialBinding)
@@ -225,6 +227,11 @@ private struct SettingsContent: View {
         .foregroundStyle(theme.palette.textPrimary)
         .background(theme.palette.surfaceBase)
         .task { await settings.refresh() }
+        // Re-read on every appearance and whenever the endpoint changes: Ollama
+        // is a separate process, so models can arrive or be removed without Clip
+        // hearing about it.
+        .task(id: settings.compatibleBaseURL) { await settings.refreshInstalledLocalModels() }
+        .task(id: settings.selectedProvider) { await settings.refreshInstalledLocalModels() }
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
                 .environment(\.theme, theme)
@@ -249,6 +256,75 @@ private struct SettingsContent: View {
         } message: {
             Text("PDFs and edits stay intact. Missing open fonts may be downloaded again.")
         }
+    }
+
+    /// Installing and choosing models on a local Ollama.
+    ///
+    /// Only the models that advertise tool calling are suggested. The assistant
+    /// drives Clip by emitting tool calls, so one without it will answer
+    /// questions and change nothing.
+    @ViewBuilder private var localModels: some View {
+        if !settings.installedLocalModels.isEmpty {
+            Picker("Installed", selection: $settings.model) {
+                ForEach(settings.installedLocalModels, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+        }
+
+        if let download = settings.localModelDownload {
+            switch download {
+            case .running(let name, let progress):
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    HStack {
+                        if let fraction = progress.fraction {
+                            ProgressView(value: fraction)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button("Cancel") { settings.cancelLocalModelDownload() }
+                    }
+                    Text(
+                        [name, progress.status, progress.byteSummary]
+                            .compactMap { $0 }
+                            .joined(separator: " · ")
+                    )
+                    .font(theme.type.caption.font)
+                    .foregroundStyle(theme.palette.textTertiary)
+                }
+            case .failed(let name, let message):
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(name): \(message)")
+                        .font(theme.type.caption.font)
+                        .foregroundStyle(theme.palette.danger)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { settings.dismissLocalModelDownloadFailure() }
+                }
+            }
+        } else if !settings.availableLocalModelSuggestions.isEmpty {
+            Menu("Download a model…") {
+                ForEach(settings.availableLocalModelSuggestions) { suggestion in
+                    Button(Self.label(for: suggestion)) {
+                        settings.downloadLocalModel(suggestion.name)
+                    }
+                }
+            }
+            .menuStyle(ReelMenuStyle())
+        }
+
+        Text(
+            "Ollama downloads the model; Clip only talks to your machine. Sizes are "
+                + "approximate, and any other Ollama model can be installed by typing its "
+                + "name above. Only models that support tool calling can edit for you."
+        )
+        .font(theme.type.caption.font)
+        .foregroundStyle(theme.palette.textTertiary)
+    }
+
+    private static func label(for suggestion: LocalModelSuggestion) -> String {
+        let size = String(format: "%.1f", suggestion.approximateGigabytes)
+        return "\(suggestion.name) — about \(size) GB · \(suggestion.summary)"
     }
 
     private var captureDestinationBinding: Binding<CaptureDestination> {
