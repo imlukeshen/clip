@@ -73,7 +73,8 @@ public enum TimelineEditPlanner {
         in document: ProjectDocument,
         itemID: ItemID,
         to requestedRange: TimeRange,
-        assetDuration: RationalTime
+        assetDuration: RationalTime,
+        minimumDuration: RationalTime = RationalTime(seconds: 0.1)
     ) throws -> GraphPatch {
         let location = try itemLocation(in: document, itemID: itemID)
         let item = location.track.items[location.index]
@@ -86,6 +87,11 @@ public enum TimelineEditPlanner {
         }
         let assetRange = TimeRange(start: .zero, duration: assetDuration)
         let range = requestedRange.clamped(to: assetRange)
+        // A range outside the asset clamps to nothing; an empty clip would be
+        // invisible and impossible to select.
+        guard range.duration.scaled(by: 1 / item.speed) >= minimumDuration else {
+            throw ModelError.invalidEdit("Trim would make the clip too short.")
+        }
         var items = location.track.items
         let previousDuration = item.timelineDuration
         items[location.index] = trimming(item, to: range)

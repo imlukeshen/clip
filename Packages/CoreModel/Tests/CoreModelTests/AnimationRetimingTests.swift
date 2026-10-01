@@ -154,3 +154,37 @@ struct SpeedRoundingTests {
         #expect(video[0].timelineEnd == video[1].timelineStart)
     }
 }
+
+@Suite("Small timeline guards")
+struct TimelineGuardTests {
+    @Test("A zoom shorter than its ramps is still a valid document", arguments: [0.84, 0.3])
+    func shortZoomIsValid(seconds: Double) throws {
+        let zoom = ZoomEffect(
+            id: EffectID(rawValue: "z"),
+            range: TimeRange(start: .zero, duration: RationalTime(seconds: seconds)),
+            center: NormalizedPoint(x: 0.5, y: 0.5),
+            scale: 2
+        )
+        let times = zoom.scaleAnimation.keyframes.map(\.time)
+        #expect(Set(times).count == times.count)
+        #expect(times.allSatisfy { $0 >= .zero && $0 <= RationalTime(seconds: seconds) })
+    }
+
+    @Test("A trim outside the asset is refused rather than leaving an empty clip")
+    func emptyTrimIsRefused() throws {
+        let item = TimelineItem(
+            id: ItemID(rawValue: "clip"),
+            assetID: AssetID(rawValue: "asset"),
+            sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 10))
+        )
+        let document = try ProjectDocument(
+            id: ProjectID(rawValue: "p"), name: "P", timeline: Timeline(video: [item]),
+            createdAt: Date(timeIntervalSince1970: 1), modifiedAt: Date(timeIntervalSince1970: 1))
+        #expect(throws: ModelError.self) {
+            _ = try TimelineEditPlanner.trimClip(
+                in: document, itemID: item.id,
+                to: TimeRange(start: RationalTime(seconds: 20), duration: RationalTime(seconds: 5)),
+                assetDuration: RationalTime(seconds: 10))
+        }
+    }
+}
