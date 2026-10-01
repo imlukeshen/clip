@@ -586,6 +586,7 @@ public actor AppRuntime {
         let url = pdfDocumentURL(for: assetID)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(PDFEditDocument.self, from: Data(contentsOf: url))
+            .upgradedToCurrentSchema()
     }
 
     public func savePDFDocument(_ document: PDFEditDocument) throws {

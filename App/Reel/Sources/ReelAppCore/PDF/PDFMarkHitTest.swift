@@ -63,18 +63,6 @@ public enum PDFMarkHitTest {
 
     /// Maps a stored rect into the space the rotated page is drawn in.
     public static func displayBounds(_ rect: CGRect, rotation: PDFPageRotation) -> CGRect {
-        switch rotation {
-        case .degrees0:
-            rect
-        case .degrees90:
-            CGRect(
-                x: 1 - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
-        case .degrees180:
-            CGRect(
-                x: 1 - rect.maxX, y: 1 - rect.maxY, width: rect.width, height: rect.height)
-        case .degrees270:
-            CGRect(
-                x: rect.minY, y: 1 - rect.maxX, width: rect.height, height: rect.width)
-        }
+        rotation.displayRect(for: rect)
     }
 }

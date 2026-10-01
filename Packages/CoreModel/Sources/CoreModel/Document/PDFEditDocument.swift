@@ -31,6 +31,32 @@ public enum PDFPageRotation: Int, Codable, Sendable, Equatable, CaseIterable {
         case .degrees270: .degrees0
         }
     }
+
+    /// Maps a rect stored in unrotated page space (normalized, top-left) to
+    /// where it appears on the page as displayed and exported at this rotation.
+    public func displayRect(for rect: CGRect) -> CGRect {
+        switch self {
+        case .degrees0:
+            rect
+        case .degrees90:
+            CGRect(x: 1 - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
+        case .degrees180:
+            CGRect(x: 1 - rect.maxX, y: 1 - rect.maxY, width: rect.width, height: rect.height)
+        case .degrees270:
+            CGRect(x: rect.minY, y: 1 - rect.maxX, width: rect.height, height: rect.width)
+        }
+    }
+
+    /// The inverse of ``displayRect(for:)``: where a rect drawn on the
+    /// displayed page lies in unrotated page space, which is how marks are stored.
+    public func storedRect(fromDisplay rect: CGRect) -> CGRect {
+        switch self {
+        case .degrees0: rect
+        case .degrees90: Self.degrees270.displayRect(for: rect)
+        case .degrees180: Self.degrees180.displayRect(for: rect)
+        case .degrees270: Self.degrees90.displayRect(for: rect)
+        }
+    }
 }
 
 public struct PDFFontDescriptor: Codable, Sendable, Equatable {
@@ -246,7 +272,10 @@ public enum PDFPatch: DocumentPatch {
 }
 
 public struct PDFEditDocument: EditableDocument {
-    public static let currentSchemaVersion = 1
+    /// 2: highlight and redaction regions are stored in unrotated page space,
+    /// the space PDFium, search, and hit testing use, so rotating a page never
+    /// moves a mark off the content it covers.
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public var id: DocumentID
@@ -307,6 +336,34 @@ public struct PDFEditDocument: EditableDocument {
                 try validate(layer)
             }
         }
+    }
+
+    /// This document in the current schema.
+    ///
+    /// Version 1 stored marks drawn on a rotated page in that page's display
+    /// space, and exported them there. Converting them to unrotated space keeps
+    /// them over the same content.
+    public func upgradedToCurrentSchema() -> PDFEditDocument {
+        guard schemaVersion < 2 else { return self }
+        var upgraded = self
+        upgraded.schemaVersion = Self.currentSchemaVersion
+        for pageIndex in upgraded.pages.indices {
+            let rotation = upgraded.pages[pageIndex].rotation
+            guard rotation != .degrees0 else { continue }
+            upgraded.pages[pageIndex].layers = upgraded.pages[pageIndex].layers.map { layer in
+                switch layer {
+                case .highlight(var highlight):
+                    highlight.regions = highlight.regions.map(rotation.storedRect(fromDisplay:))
+                    return .highlight(highlight)
+                case .redaction(var redaction):
+                    redaction.regions = redaction.regions.map(rotation.storedRect(fromDisplay:))
+                    return .redaction(redaction)
+                case .text:
+                    return layer
+                }
+            }
+        }
+        return upgraded
     }
 
     public func page(_ id: PDFPageID) -> PDFPage? {

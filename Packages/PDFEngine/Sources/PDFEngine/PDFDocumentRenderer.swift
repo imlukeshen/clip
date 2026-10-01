@@ -179,12 +179,14 @@ public struct PDFDocumentRenderer: Sendable {
         case .highlight(let highlight):
             context.setFillColor(color(highlight.color))
             for region in highlight.regions {
-                context.fill(outputRect(region, size: size))
+                context.fill(outputRect(page.rotation.displayRect(for: region), size: size))
             }
         case .redaction(let redaction):
+            // Regions are stored unrotated and the page is drawn rotated, so map
+            // them, or a redaction lands on other content and leaves its own visible.
             context.setFillColor(color(redaction.color))
             for region in redaction.regions {
-                context.fill(outputRect(region, size: size))
+                context.fill(outputRect(page.rotation.displayRect(for: region), size: size))
             }
         }
     }

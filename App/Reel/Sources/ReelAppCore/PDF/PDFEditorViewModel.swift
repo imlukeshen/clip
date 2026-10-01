@@ -439,6 +439,9 @@ public final class PDFEditorViewModel {
     public func commitGesture(from start: CGPoint, to end: CGPoint) {
         let rect = normalizedRect(from: start, to: end)
         guard rect.width > 0.01, rect.height > 0.01 else { return }
+        // The drag is in display space; marks are stored unrotated so they
+        // stay on the same content if the page is rotated later.
+        let stored = (selectedPage?.rotation ?? .degrees0).storedRect(fromDisplay: rect)
         let layer: PDFLayer
         switch activeTool {
         case .select:
@@ -451,9 +454,9 @@ public final class PDFEditorViewModel {
             _ = addText(in: rect)
             return
         case .highlight:
-            layer = .highlight(PDFHighlightLayer(regions: [rect]))
+            layer = .highlight(PDFHighlightLayer(regions: [stored]))
         case .redact:
-            layer = .redaction(PDFRedactionLayer(regions: [rect]))
+            layer = .redaction(PDFRedactionLayer(regions: [stored]))
         }
         do {
             let index = selectedPage?.layers.count ?? 0
