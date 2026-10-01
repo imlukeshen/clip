@@ -85,6 +85,14 @@ private struct TemporaryTrashManager: FileTrashManaging {
     #expect(!FileManager.default.fileExists(atPath: media.path))
     #expect(receipt.items.first?.movedFiles.count == 5)
 
+    // The rebuildable thumbnail was emptied from the Trash; restore still works.
+    let trashedThumbnail = try #require(
+        receipt.items.first?.movedFiles.first {
+            $0.originalURL.lastPathComponent == thumbnail.lastPathComponent
+        }
+    )
+    try FileManager.default.removeItem(at: trashedThumbnail.trashedURL)
+
     try await store.restore(receipt)
     let restored = try #require(try await store.asset(id: id))
     #expect(restored.id == record.id)

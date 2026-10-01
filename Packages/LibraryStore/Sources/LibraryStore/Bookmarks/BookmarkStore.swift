@@ -110,8 +110,17 @@ public actor BookmarkStore {
         } catch {
             throw LibraryError.bookmarkResolutionFailed(key)
         }
-        guard !isStale else {
-            throw LibraryError.staleBookmark(key)
+        // A stale bookmark still resolved: the folder moved or was renamed.
+        // Re-create it so access survives instead of failing for good until
+        // the person grants the folder again.
+        if isStale {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try store(url, key: key)
+            } catch {
+                throw LibraryError.staleBookmark(key)
+            }
         }
         return url
     }

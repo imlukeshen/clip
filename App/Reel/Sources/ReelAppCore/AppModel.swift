@@ -3313,6 +3313,14 @@ public final class AppModel {
         case .rename:
             return uniqueOutputURL(proposed: proposed, reserved: &reserved)
         case .overwrite:
+            // Replacing the input would destroy the source mid-conversion, and
+            // for a library file break its content hash.
+            guard
+                proposed.standardizedFileURL.resolvingSymlinksInPath()
+                    != item.inputURL.standardizedFileURL.resolvingSymlinksInPath()
+            else {
+                throw ExportDestinationError.outputIsSource
+            }
             guard reserved.insert(proposed).inserted else {
                 throw ExportDestinationError.conflictingBatchOutput
             }

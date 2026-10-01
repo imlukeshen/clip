@@ -23,6 +23,12 @@ struct KeywordSearchTests {
         #expect(parsed.filters.minimumDuration == RationalTime(seconds: 60))
         #expect(parsed.filters.hasAudio == true)
         #expect(parsed.filters.after != nil)
+        // A typed day is the searcher's own day, starting at local midnight.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        #expect(
+            parsed.filters.after
+                == calendar.date(from: DateComponents(year: 2026, month: 7, day: 1)))
     }
 
     @Test("Queries over 512 characters are refused")

@@ -782,20 +782,34 @@ extension LibraryStore {
     }
 
     private func restoreFiles(in receipt: TrashReceipt) throws {
+        // Thumbnails and peaks are rebuilt from the media, so one emptied from
+        // the Trash is skipped rather than failing the restore.
+        let derivativeFolders = [LibraryLayout.thumbnails(in: root), LibraryLayout.peaks(in: root)]
+            .map { $0.standardizedFileURL.path + "/" }
+        func isDerivative(_ url: URL) -> Bool {
+            derivativeFolders.contains { url.standardizedFileURL.path.hasPrefix($0) }
+        }
+        // Check every file before moving any, so a missing file leaves nothing
+        // half-restored with the index still saying the assets are trashed.
+        var moves: [TrashReceipt.MovedFile] = []
         for item in receipt.items.reversed() {
             for file in item.movedFiles.reversed() {
                 guard FileManager.default.fileExists(atPath: file.trashedURL.path) else {
+                    if isDerivative(file.originalURL) { continue }
                     throw LibraryError.assetFileMissing(file.trashedURL.path)
                 }
                 guard !FileManager.default.fileExists(atPath: file.originalURL.path) else {
                     throw LibraryError.fileOperationFailed("restore destination already exists")
                 }
-                try FileManager.default.createDirectory(
-                    at: file.originalURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try FileManager.default.moveItem(at: file.trashedURL, to: file.originalURL)
+                moves.append(file)
             }
+        }
+        for file in moves {
+            try FileManager.default.createDirectory(
+                at: file.originalURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.moveItem(at: file.trashedURL, to: file.originalURL)
         }
     }
 
