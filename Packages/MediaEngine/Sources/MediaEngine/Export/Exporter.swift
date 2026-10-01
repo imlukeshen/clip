@@ -20,7 +20,8 @@ public actor Exporter {
                     let built = try await CompositionBuilder().build(
                         document,
                         resolving: resolving,
-                        quality: .full
+                        quality: .full,
+                        burnsCaptions: preset.burnCaptions
                     )
                     built.videoComposition.renderSize = preset.size
                     built.videoComposition.frameDuration = preset.frameRate.frameDuration.cmTime

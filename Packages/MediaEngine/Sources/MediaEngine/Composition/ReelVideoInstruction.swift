@@ -19,16 +19,20 @@ final class ReelVideoInstruction: NSObject, AVVideoCompositionInstructionProtoco
 
     let layers: [ReelVideoLayer]
     let background: RGBA
+    /// Captions overlapping this instruction, drawn on top of the frame.
+    let captions: [CaptionSegment]
 
     init(
         timeRange: CMTimeRange,
         layers: [ReelVideoLayer],
-        background: RGBA
+        background: RGBA,
+        captions: [CaptionSegment] = []
     ) {
         self.timeRange = timeRange
         self.layers = layers
         self.background = background
-        containsTweening = layers.contains { layer in
+        self.captions = captions
+        containsTweening = !captions.isEmpty || layers.contains { layer in
             let item = layer.item
             return !item.effects.isEmpty
                 || item.videoFade.fadeIn > .zero

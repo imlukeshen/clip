@@ -5,10 +5,15 @@ import Foundation
 public struct CompositionBuilder: Sendable {
     public init() {}
 
+    /// Builds a playable composition for `document`.
+    ///
+    /// - Parameter burnsCaptions: Draws the timeline's captions into the
+    ///   frames. Preview shows them; export follows its preset.
     public func build(
         _ document: ProjectDocument,
         resolving: @Sendable (AssetID) async throws -> URL,
-        quality: RenderQuality
+        quality: RenderQuality,
+        burnsCaptions: Bool = true
     ) async throws -> sending BuiltComposition {
         guard document.timeline.videoTracks.contains(where: { !$0.items.isEmpty }) else {
             throw MediaEngineError.emptyTimeline
@@ -93,7 +98,8 @@ public struct CompositionBuilder: Sendable {
         let instructions = makeInstructions(
             layers: layers,
             duration: document.duration,
-            background: document.canvas.background
+            background: document.canvas.background,
+            captions: burnsCaptions ? document.timeline.captions : []
         )
         let audioMix = try await addAudio(
             from: document,
@@ -120,7 +126,8 @@ public struct CompositionBuilder: Sendable {
     private func makeInstructions(
         layers: [ReelVideoLayer],
         duration: RationalTime,
-        background: RGBA
+        background: RGBA,
+        captions: [CaptionSegment]
     ) -> [ReelVideoInstruction] {
         var boundaries = [RationalTime.zero, duration]
         for layer in layers {
@@ -140,7 +147,8 @@ public struct CompositionBuilder: Sendable {
                     duration: (end - start).cmTime
                 ),
                 layers: active,
-                background: background
+                background: background,
+                captions: captions.filter { $0.range.start < end && $0.range.end > start }
             )
         }
     }
