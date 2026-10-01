@@ -134,22 +134,24 @@ notarized channel and needs Developer ID and App Store Connect credentials; see
 | `make test-ui` | Native interaction suite; needs an unlocked macOS session |
 | `make lint` | Strict formatter gate |
 | `make format` | Apply the formatter |
-| `make build` | Build both distribution schemes |
+| `make build` | Build the direct and (unpublished) App Store schemes |
 | `make ffmpeg` | Rebuild the vendored LGPL FFmpeg from pinned sources |
 | `make licence-audit` | Verify the LGPL-only FFmpeg configuration |
 
 Requires macOS 14+ and a Swift 6 toolchain whose compiler matches its installed
 macOS SDK.
 
-Start with [`CLAUDE.md`](CLAUDE.md) for the invariants that matter, then
-[`docs/DESIGN.md`](docs/DESIGN.md) for the data model and services.
+Start with [`CLAUDE.md`](CLAUDE.md) for the invariants that matter, then the
+decision records in [`docs/adr/`](docs/adr/) and the package READMEs under
+`Packages/`.
 
 ## Project status
 
-clipx is built milestone-by-milestone against the design in `docs/`. M0–M9 are
-complete: the model foundation and patch/undo engine, library and index, ingest,
-shell and workspaces, conversion, composition and playback, effects and export,
-the event track, the AI layer, and both distribution channels.
+The original milestones are complete: the model foundation and patch/undo
+engine, library and index, ingest, shell and workspaces, conversion, composition
+and playback, effects and export, the event track, the AI layer, and the signed
+direct-download channel. [`docs/ROADMAP.md`](docs/ROADMAP.md) tracks what is
+still open.
 
 Later phases added the multi-track editing foundation, the photo and PDF
 workspaces, on-device search, the conversion planner, and the text and LaTeX
