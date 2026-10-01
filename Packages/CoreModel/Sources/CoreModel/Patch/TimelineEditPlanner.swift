@@ -45,6 +45,7 @@ public enum TimelineEditPlanner {
         leftItem.effects = leftEffects
         leftItem.videoFade.fadeOut = .zero
         leftItem.audioFade.fadeOut = .zero
+        leftItem = leftItem.retimingAnimations(from: item)
         var rightItem = item
         rightItem.id = rightItemID
         rightItem.sourceRange = rightRange
@@ -52,6 +53,7 @@ public enum TimelineEditPlanner {
         rightItem.timelineStart = timelineTime
         rightItem.videoFade.fadeIn = .zero
         rightItem.audioFade.fadeIn = .zero
+        rightItem = rightItem.retimingAnimations(from: item)
 
         var items = location.track.items
         items[location.index] = leftItem
@@ -367,6 +369,9 @@ public enum TimelineEditPlanner {
                 items[index].blendMode = source.blendMode
                 items[index].videoFade = source.videoFade
                 items[index].audioFade = source.audioFade
+                // Same local times, limited to this clip's length, so pasting
+                // from a longer clip no longer rejects the whole paste.
+                items[index] = items[index].retimingAnimations(from: items[index])
                 changed = true
             }
             if changed { operations.append(.setTrackItems(track.id, items)) }
@@ -606,6 +611,7 @@ extension TimelineEditPlanner {
     }
 
     fileprivate static func trimming(_ item: TimelineItem, to range: TimeRange) -> TimelineItem {
+        let original = item
         var item = item
         let retained = TimeRange(
             start: range.start - item.sourceRange.start,
@@ -615,11 +621,7 @@ extension TimelineEditPlanner {
             sliced($0, to: retained, shiftingBy: retained.start)
         }
         item.sourceRange = range
-        item.videoFade.fadeIn = min(item.videoFade.fadeIn, item.timelineDuration)
-        item.videoFade.fadeOut = min(item.videoFade.fadeOut, item.timelineDuration)
-        item.audioFade.fadeIn = min(item.audioFade.fadeIn, item.timelineDuration)
-        item.audioFade.fadeOut = min(item.audioFade.fadeOut, item.timelineDuration)
-        return item
+        return item.retimingAnimations(from: original)
     }
 
     fileprivate static func rippledCaption(
@@ -656,6 +658,6 @@ extension TimelineEditPlanner {
                 start: intersection.start - offset,
                 duration: intersection.duration
             )
-        )
+        ).shiftingAnimations(by: offset, within: window.duration)
     }
 }

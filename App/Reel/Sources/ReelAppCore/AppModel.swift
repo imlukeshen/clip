@@ -1656,19 +1656,24 @@ public final class AppModel {
             return
         }
         editor.saveNow()
-        if let index = conversionQueue.firstIndex(where: { $0.asset.id == assetID }) {
-            conversionQueue[index].selectTarget(target)
-        } else {
-            var item = ConversionQueueItem(
-                asset: asset,
-                inputURL: inputURL,
-                target: target,
-                capabilities: conversionCapabilities
-            )
-            item.setConflictPolicy(conversionConflictPolicy)
-            conversionQueue.append(item)
-        }
         showWorkspace(.convert)
+        Task {
+            // The conversion reads the file on disk, so queue it only once the
+            // save has landed; otherwise a quick export used the old text.
+            await editor.flushPendingWrites()
+            if let index = conversionQueue.firstIndex(where: { $0.asset.id == assetID }) {
+                conversionQueue[index].selectTarget(target)
+            } else {
+                var item = ConversionQueueItem(
+                    asset: asset,
+                    inputURL: inputURL,
+                    target: target,
+                    capabilities: conversionCapabilities
+                )
+                item.setConflictPolicy(conversionConflictPolicy)
+                conversionQueue.append(item)
+            }
+        }
     }
 
     public func enqueueForConversion(_ urls: [URL], source: IngestSource) {
@@ -3030,12 +3035,17 @@ public final class AppModel {
     /// to the Trash.
     public func trashScratchBuffer(_ id: DocumentID) {
         guard let runtime else { return }
+        var closing: TextEditorViewModel?
         if let textEditor, textEditor.sourceURL == nil, textEditor.document.id == id {
+            closing = textEditor
             closeTextEditor()
             // An open buffer autosaves, which would write the files straight back.
             guard self.textEditor == nil else { return }
         }
         Task {
+            // Closing starts the buffer's final save; trashing before it lands
+            // would let that save recreate the file.
+            await closing?.flushPendingWrites()
             do {
                 try await runtime.trashScratchTextBuffer(id)
                 lastMessage = "Moved to Trash"

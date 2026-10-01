@@ -1377,6 +1377,8 @@ public final class TextEditorViewModel {
     /// Writes every unsaved buffer and waits until each is on disk, so quitting
     /// right after typing does not lose the last edits.
     public func flushPendingWrites() async {
+        // Let a save's whitespace cleanup finish first; it starts the write.
+        await cleanupTask?.value
         contentTask?.cancel()
         flushContentAutosave()
         for write in writeChains.values { await write.value }
