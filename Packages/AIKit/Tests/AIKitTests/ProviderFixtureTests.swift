@@ -124,3 +124,52 @@ private func request() -> ChatRequest {
     } catch {}
     #expect(await ledger.summary().requestCount == 1)
 }
+
+private actor RequestLog {
+    private(set) var requests: [URLRequest] = []
+    func append(_ request: URLRequest) { requests.append(request) }
+}
+
+private struct RecordingTransport: HTTPTransport {
+    let log: RequestLog
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        await log.append(request)
+        guard let url = request.url,
+            let response = HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
+        else { throw AIKitError.invalidResponse("fixture") }
+        return (Data("data: [DONE]\n\n".utf8), response)
+    }
+}
+
+@Test func geminiSendsItsKeyInAHeaderNotTheURL() async throws {
+    let log = RequestLog()
+    let provider = GoogleProvider(
+        apiKey: "secret-key", ledger: EgressLedger(), transport: RecordingTransport(log: log))
+    for try await _ in provider.send(request()) {}
+    let sent = try #require(await log.requests.first)
+    #expect(sent.url?.absoluteString.contains("secret-key") == false)
+    #expect(sent.value(forHTTPHeaderField: "x-goog-api-key") == "secret-key")
+}
+
+@Test func openAIUsesMaxCompletionTokensAndLocalServersKeepMaxTokens() async throws {
+    let openAILog = RequestLog()
+    let openAI = OpenAIProvider(
+        apiKey: "k", ledger: EgressLedger(), transport: RecordingTransport(log: openAILog))
+    for try await _ in openAI.send(request()) {}
+    let openAIBody = try #require(await openAILog.requests.first?.httpBody)
+    let openAIJSON = try #require(String(data: openAIBody, encoding: .utf8))
+    #expect(openAIJSON.contains("max_completion_tokens"))
+    #expect(!openAIJSON.contains("\"max_tokens\""))
+
+    let localLog = RequestLog()
+    let local = OpenAICompatibleProvider(
+        baseURL: try #require(URL(string: "http://localhost:11434/v1")),
+        defaultModel: "local",
+        ledger: EgressLedger(),
+        transport: RecordingTransport(log: localLog)
+    )
+    for try await _ in local.send(request()) {}
+    let localBody = try #require(await localLog.requests.first?.httpBody)
+    #expect(String(data: localBody, encoding: .utf8)?.contains("\"max_tokens\"") == true)
+}

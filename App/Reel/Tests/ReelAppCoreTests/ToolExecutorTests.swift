@@ -9,6 +9,16 @@ import Testing
 
 @Suite("Assistant tool execution")
 struct ToolExecutorTests {
+    @Test("A number too large to be a time is rejected instead of crashing")
+    func outOfRangeNumbersAreRejected() async throws {
+        let fixture = try Fixture()
+        await #expect(throws: ToolExecutorError.self) {
+            _ = try await fixture.executor.execute(
+                call("splitClip", ["itemID": .string("one"), "at": .number(1e20)]),
+                turnID: "t", policy: .autoApply, context: fixture.context)
+        }
+    }
+
     @Test("PDF and photo tools honour the confirmation policy before they run")
     func workspaceToolsWaitForConfirmation() async throws {
         let fixture = try Fixture()

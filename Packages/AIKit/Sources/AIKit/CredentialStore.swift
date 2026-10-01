@@ -7,16 +7,26 @@ public actor CredentialStore {
 
     public init(service: String = "app.reel.editor.ai") { self.service = service }
 
+    /// Saves `key`, replacing any existing one in place. Updating rather than
+    /// deleting first means a failed save never loses the key already stored.
     public func store(_ key: String, provider: ProviderID) throws {
-        try delete(provider: provider)
-        let status = SecItemAdd(
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: provider.rawValue,
+        ]
+        let update = SecItemUpdate(
+            query as CFDictionary,
             [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: service,
-                kSecAttrAccount: provider.rawValue,
-                kSecAttrAccessible: kSecAttrAccessibleWhenUnlocked,
                 kSecValueData: Data(key.utf8),
-            ] as CFDictionary, nil)
+                kSecAttrAccessible: kSecAttrAccessibleWhenUnlocked,
+            ] as CFDictionary)
+        if update == errSecSuccess { return }
+        guard update == errSecItemNotFound else { throw CredentialError.keychain(update) }
+        var attributes = query
+        attributes[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
+        attributes[kSecValueData] = Data(key.utf8)
+        let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else { throw CredentialError.keychain(status) }
     }
 
