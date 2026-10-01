@@ -473,23 +473,33 @@ final class CodeTextView: NSTextView {
                 return
             }
         }
-        let pairs = ["(": ")", "[": "]", "{": "}", "\"": "\"", "'": "'"]
-        if let closing = pairs[inserted] {
-            let selected = (string as NSString).substring(with: selection)
+        let source = string as NSString
+        let before =
+            selection.location > 0
+            ? source.substring(
+                with: source.rangeOfComposedCharacterSequence(at: selection.location - 1)
+            ).last : nil
+        let after =
+            NSMaxRange(selection) < source.length
+            ? source.substring(
+                with: source.rangeOfComposedCharacterSequence(at: NSMaxRange(selection))
+            ).first : nil
+        switch CodePairing.action(
+            typing: inserted,
+            before: before,
+            after: after,
+            hasSelection: selection.length > 0,
+            language: snippetLanguage
+        ) {
+        case .stepOver:
+            setSelectedRange(NSRange(location: selection.location + 1, length: 0))
+        case .pair(let closing):
+            let selected = source.substring(with: selection)
             super.insertText(inserted + selected + closing, replacementRange: selection)
             setSelectedRange(NSRange(location: selection.location + 1, length: selection.length))
-            return
+        case .insert:
+            super.insertText(insertString, replacementRange: replacementRange)
         }
-        if pairs.values.contains(inserted) {
-            let source = string as NSString
-            if selection.length == 0, selection.location < source.length,
-                source.substring(with: NSRange(location: selection.location, length: 1)) == inserted
-            {
-                setSelectedRange(NSRange(location: selection.location + 1, length: 0))
-                return
-            }
-        }
-        super.insertText(insertString, replacementRange: replacementRange)
     }
 
     private func validatedReplacementRange(_ replacementRange: NSRange) -> NSRange {

@@ -6,6 +6,53 @@ import Testing
 
 @Suite("Text editing operations")
 struct TextEditingOperationsTests {
+    @Test("Moving a CRLF line keeps every character")
+    func moveLineKeepsCRLFText() {
+        let source = "foo\r\nbar\r\n"
+        let moved = TextEditingOperations.moveLine(
+            in: source,
+            selectedRange: NSRange(location: 5, length: 0),
+            direction: .up
+        )
+        #expect(moved.text == "bar\r\nfoo\r\n")
+    }
+
+    @Test("Typing a closer steps over the one already there")
+    func closersStepOver() {
+        #expect(
+            CodePairing.action(
+                typing: ")", before: "x", after: ")", hasSelection: false, language: .python)
+                == .stepOver)
+        #expect(
+            CodePairing.action(
+                typing: "\"", before: "i", after: "\"", hasSelection: false, language: .swift)
+                == .stepOver)
+    }
+
+    @Test("Quotes pair where they open a string, not as apostrophes")
+    func quotePairing() {
+        #expect(
+            CodePairing.action(
+                typing: "\"", before: "(", after: ")", hasSelection: false, language: .python)
+                == .pair(closing: "\""))
+        #expect(
+            CodePairing.action(
+                typing: "'", before: "n", after: "t", hasSelection: false, language: .python)
+                == .insert)
+        #expect(
+            CodePairing.action(
+                typing: "'", before: " ", after: nil, hasSelection: false, language: .markdown)
+                == .insert)
+        #expect(
+            CodePairing.action(
+                typing: "\"", before: " ", after: "w", hasSelection: true, language: .markdown)
+                == .pair(closing: "\""))
+        #expect(
+            CodePairing.action(
+                typing: "(", before: "f", after: nil, hasSelection: false, language: .swift)
+                == .pair(closing: ")"))
+    }
+
     @Test("Comment toggling preserves line endings and reverses exactly")
     func commentRoundTrip() {
         let source = "let first = 1\r\nlet second = 2\r\n"

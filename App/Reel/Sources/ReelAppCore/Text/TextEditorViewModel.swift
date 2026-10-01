@@ -159,6 +159,9 @@ public final class TextEditorViewModel {
     /// or mid-save — not another app's edit. Older versions are dropped once a
     /// newer write lands, so a deliberate revert to one is still noticed.
     private var knownDiskContents: [FileID: [String]] = [:]
+    /// The latest write per file. Each new write waits for the one before, so
+    /// saves land in the order they were made and an older one never wins.
+    private var writeChains: [FileID: Task<Void, Never>] = [:]
     private var dirtyFileIDs: Set<FileID> = []
 
     /// Told when detection settles a library file's language. The editor never
@@ -1348,6 +1351,15 @@ public final class TextEditorViewModel {
         }
     }
 
+    /// Writes every unsaved buffer and waits until each is on disk, so quitting
+    /// right after typing does not lose the last edits.
+    public func flushPendingWrites() async {
+        contentTask?.cancel()
+        flushContentAutosave()
+        for write in writeChains.values { await write.value }
+        await structureTask?.value
+    }
+
     private func flushContentAutosave() {
         for fileID in dirtyFileIDs {
             guard let value = textBuffers[fileID] else { continue }
@@ -1381,24 +1393,31 @@ public final class TextEditorViewModel {
         beginDiskWrite(value, for: fileID)
         let hashData = hashData
         let persistContents = persistContents
-        Task { [weak self] in
+        let previousWrite = writeChains[fileID]
+        writeChains[fileID] = Task { [weak self] in
+            await previousWrite?.value
             let payload = await Task.detached(priority: .utility) {
+                // No UTF-8 fallback: writing UTF-8 into a file still marked
+                // Latin-1 (say) permanently garbles its existing accents.
                 guard
                     let data =
                         TextFileEncoder.encode(
                             value,
                             using: textEncoding,
                             byteOrderMark: byteOrderMark
-                        ) ?? value.data(using: encoding) ?? value.data(using: .utf8)
+                        ) ?? value.data(using: encoding)
                 else {
                     return Optional<(Data, String)>.none
                 }
                 return (data, hashData(data))
             }.value
             guard let (data, hash) = payload else {
+                self?.knownDiskContents[fileID]?.removeAll { $0 == value }
                 self?.dirtyFileIDs.insert(fileID)
                 if self?.activeFileID == fileID { self?.isDirty = true }
-                self?.notice = "This text could not be encoded for saving."
+                self?.notice =
+                    "This text has characters the file's encoding cannot store. "
+                    + "Change the encoding to UTF-8 to save it."
                 return
             }
             do {

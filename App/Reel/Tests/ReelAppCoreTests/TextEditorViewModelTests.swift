@@ -289,6 +289,56 @@ struct TextEditorViewModelTests {
         #expect(editor.hasExternalConflict)
     }
 
+    @Test("Flushing saves unsaved typing right away and in order")
+    func flushSavesInOrder() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
+        let writes = WriteLog()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { data, _ in
+                // The first write is slow; it must still land first.
+                if String(decoding: data, as: UTF8.self) == "first" {
+                    try await Task.sleep(for: .milliseconds(80))
+                }
+                await writes.append(String(decoding: data, as: UTF8.self))
+            }
+        )
+        editor.text = "first"
+        await editor.flushPendingWrites()
+        editor.text = "second"
+        await editor.flushPendingWrites()
+
+        #expect(await writes.values == ["first", "second"])
+        #expect(!editor.isDirty)
+    }
+
+    @Test("Text the file's encoding cannot hold is not saved as UTF-8 behind its back")
+    func unencodableTextIsRefused() async throws {
+        let file = TextFile(
+            id: FileID(rawValue: "main"), relativePath: "Legacy.txt", encoding: .isoLatin1)
+        let writes = WriteLog()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "café",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { data, _ in
+                await writes.append(String(decoding: data, as: UTF8.self))
+            }
+        )
+        editor.text = "café 😀"
+        await editor.flushPendingWrites()
+
+        #expect(await writes.values.isEmpty)
+        #expect(editor.isDirty)
+        #expect(editor.notice?.contains("encoding") == true)
+    }
+
     @Test("A deliberate revert to an older saved version is still noticed")
     func revertToOlderVersionIsNoticed() async throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
@@ -1689,4 +1739,9 @@ private final class UndoBackedTextView: NSTextView {
 private actor SaveCounter {
     private(set) var count = 0
     func increment() { count += 1 }
+}
+
+private actor WriteLog {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
 }

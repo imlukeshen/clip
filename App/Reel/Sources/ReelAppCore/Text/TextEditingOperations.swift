@@ -360,8 +360,10 @@ public enum TextEditingOperations {
     }
 
     private static func splitFinalTerminator(_ text: String) -> (body: String, terminator: String) {
+        // "\r\n" is a single Character, so dropLast() removes all of it;
+        // dropLast(2) also took the line's last real character.
         if text.hasSuffix("\r\n") {
-            return (String(text.dropLast(2)), "\r\n")
+            return (String(text.dropLast()), "\r\n")
         }
         if text.hasSuffix("\r") || text.hasSuffix("\n") {
             return (String(text.dropLast()), String(text.suffix(1)))

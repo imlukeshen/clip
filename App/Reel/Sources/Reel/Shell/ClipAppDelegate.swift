@@ -122,6 +122,9 @@ final class ClipAppDelegate: NSObject, NSApplicationDelegate {
     ) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         Task { @MainActor in
+            // Unsaved typing is written before the process ends; autosave
+            // otherwise waits two seconds and quitting would drop that window.
+            await model.textEditor?.flushPendingWrites()
             let release = Task { await model.aiSettings.releaseLocalModels() }
             let deadline = Task {
                 try? await Task.sleep(for: .milliseconds(1_200))
