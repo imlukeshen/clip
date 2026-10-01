@@ -8,6 +8,10 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
     nonisolated public var id: BackendID { .ffmpeg }
     nonisolated public var isAvailable: Bool { true }
 
+    /// What the C bridge actually honours for every recipe except an
+    /// adaptive GIF: it encodes with fixed settings and copies no metadata.
+    nonisolated private static let honouredVideoOptions: ConversionOptionSupport = [.stripMetadata]
+
     nonisolated public func edges() -> [ConversionEdge] {
         [
             ConversionEdge(
@@ -18,9 +22,11 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 cost: .expensive,
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
-                supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
-                ]
+                // The bridge encodes with fixed settings and never copies the
+                // source's metadata; it honours nothing else. Advertising
+                // options it ignores made the planner route a muted or trimmed
+                // export here and silently keep the audio or full length.
+                supportedOptions: Self.honouredVideoOptions
             ),
             ConversionEdge(
                 from: .oneOf(ConversionFormats.videoInputs),
@@ -30,9 +36,11 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 cost: .expensive,
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
-                supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
-                ]
+                // The bridge encodes with fixed settings and never copies the
+                // source's metadata; it honours nothing else. Advertising
+                // options it ignores made the planner route a muted or trimmed
+                // export here and silently keep the audio or full length.
+                supportedOptions: Self.honouredVideoOptions
             ),
             ConversionEdge(
                 from: .oneOf(ConversionFormats.videoInputs + ConversionFormats.imageInputs),
@@ -42,9 +50,9 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 cost: .expensive,
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
-                supportedOptions: [
-                    .quality, .resize, .frameRate, .trim, .mute, .stripMetadata, .twoPass,
-                ]
+                // Resolution and frame rate go through AdaptiveGIFEncoder; a GIF
+                // has no audio, so muting is inherent.
+                supportedOptions: [.resize, .frameRate, .mute, .stripMetadata]
             ),
             ConversionEdge(
                 from: .oneOf(ConversionFormats.videoInputs),
@@ -54,9 +62,11 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 cost: .expensive,
                 isLossless: false,
                 warnings: ["This format requires re-encoding."],
-                supportedOptions: [
-                    .quality, .resize, .frameRate, .audio, .trim, .mute, .stripMetadata, .twoPass,
-                ]
+                // The bridge encodes with fixed settings and never copies the
+                // source's metadata; it honours nothing else. Advertising
+                // options it ignores made the planner route a muted or trimmed
+                // export here and silently keep the audio or full length.
+                supportedOptions: Self.honouredVideoOptions
             ),
             ConversionEdge(
                 from: .oneOf(ConversionFormats.audioInputs),
@@ -65,7 +75,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 implementation: .ffmpeg(.flac),
                 cost: .expensive,
                 isLossless: true,
-                supportedOptions: [.audio, .trim, .stripMetadata]
+                supportedOptions: Self.honouredVideoOptions
             ),
             ConversionEdge(
                 from: .oneOf([ConversionFormats.png, ConversionFormats.jpeg]),
@@ -75,7 +85,7 @@ public actor FFmpegTranscoder: FFmpegTranscoding, ConversionBackend {
                 cost: .expensive,
                 isLossless: false,
                 warnings: ["This image format uses lossy compression."],
-                supportedOptions: [.quality, .resize, .stripMetadata]
+                supportedOptions: Self.honouredVideoOptions
             ),
         ]
     }
