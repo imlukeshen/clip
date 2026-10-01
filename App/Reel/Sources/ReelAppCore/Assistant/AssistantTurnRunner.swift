@@ -163,15 +163,29 @@ public struct AssistantTurnRunner: Sendable {
 
             var roundResults: [ToolResult] = []
             for invocation in roundInvocations {
-                let result = try await executor.execute(
-                    invocation, turnID: turnID, policy: policy, context: context)
+                // One bad call (an invented tool, malformed arguments) used to
+                // abort the whole turn, dropping earlier edits while PDF and
+                // photo changes that already ran stayed applied. It now comes
+                // back to the model as a failed result it can correct.
+                var result: ToolResult
+                do {
+                    result = try await executor.execute(
+                        invocation, turnID: turnID, policy: policy, context: context)
+                    if let patch = result.patch {
+                        var candidate = context.document
+                        _ = try candidate.apply(patch)
+                        context.document = candidate
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    result = ToolResult(
+                        callID: invocation.callID,
+                        message: "Failed: \(error.localizedDescription)"
+                    )
+                }
                 roundResults.append(result)
                 results.append(result)
-                if let patch = result.patch {
-                    var candidate = context.document
-                    _ = try candidate.apply(patch)
-                    context.document = candidate
-                }
             }
 
             guard !roundInvocations.isEmpty, !reachedToolLimit else { break }

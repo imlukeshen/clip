@@ -508,11 +508,24 @@ enum OpenAIStreamParser {
                 guard case .array(let calls)? = delta["tool_calls"] else { continue }
                 for call in calls {
                     guard case .object(let callObject) = call else { continue }
-                    let index = callObject["index"]?.int ?? 0
+                    // Some OpenAI-compatible servers send each call whole with
+                    // no index; give it its own slot instead of merging every
+                    // call into slot 0.
+                    let index = callObject["index"]?.int ?? ((pending.keys.max() ?? -1) + 1)
                     var value = pending[index] ?? Pending()
-                    value.id += callObject["id"]?.stringValue ?? ""
+                    // An ID arrives once; some servers repeat it on every delta.
+                    if let id = callObject["id"]?.stringValue, !id.isEmpty, value.id.isEmpty {
+                        value.id = id
+                    }
                     if case .object(let function)? = callObject["function"] {
-                        value.name += function["name"]?.stringValue ?? ""
+                        // Names may stream in fragments ("trim" + "Clip"), but a
+                        // server that re-sends the whole name each delta must
+                        // not turn "trimClip" into "trimCliptrimClip".
+                        if let name = function["name"]?.stringValue, !name.isEmpty,
+                            name != value.name
+                        {
+                            value.name += name
+                        }
                         value.arguments += function["arguments"]?.stringValue ?? ""
                     }
                     pending[index] = value

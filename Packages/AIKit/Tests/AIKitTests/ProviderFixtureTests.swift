@@ -173,3 +173,25 @@ private struct RecordingTransport: HTTPTransport {
     let localBody = try #require(await localLog.requests.first?.httpBody)
     #expect(String(data: localBody, encoding: .utf8)?.contains("\"max_tokens\"") == true)
 }
+
+@Test func openAICompatibleCallsWithoutIndexStaySeparate() async throws {
+    let fixture = """
+        data: {"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"trimClip","arguments":"{}"}}]}}]}
+
+        data: {"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"addZoom","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
+        """
+    let provider = OpenAICompatibleProvider(
+        baseURL: try #require(URL(string: "http://localhost:1234/v1")),
+        defaultModel: "local",
+        ledger: EgressLedger(),
+        transport: FixtureTransport(data: Data(fixture.utf8), status: 200)
+    )
+    var names: [String] = []
+    for try await chunk in provider.send(request()) {
+        if case .toolCall(let invocation) = chunk { names.append(invocation.name) }
+    }
+    #expect(names == ["trimClip", "addZoom"])
+}

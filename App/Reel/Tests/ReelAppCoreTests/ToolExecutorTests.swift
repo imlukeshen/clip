@@ -9,6 +9,32 @@ import Testing
 
 @Suite("Assistant tool execution")
 struct ToolExecutorTests {
+    @Test("An invented tool fails on its own instead of aborting the turn")
+    func badToolCallDoesNotAbortTurn() async throws {
+        let fixture = try Fixture()
+        let provider = FixtureProvider(
+            ledger: EgressLedger(),
+            chunks: [
+                .toolCall(
+                    call(
+                        "setSpeed", ["itemID": .string("one"), "speed": .number(1.5)], id: "speed")),
+                .toolCall(call("makeItPop", [:], id: "invented")),
+                .done(.toolUse),
+            ])
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "speed it up and make it pop",
+            turnID: "bad-tool",
+            provider: provider,
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: fixture.context
+        )
+        #expect(turn.results.count == 2)
+        #expect(turn.results[0].patch != nil)
+        #expect(turn.results[1].message.hasPrefix("Failed"))
+        #expect(turn.combinedPatch != nil)
+    }
+
     @Test("A number too large to be a time is rejected instead of crashing")
     func outOfRangeNumbersAreRejected() async throws {
         let fixture = try Fixture()
