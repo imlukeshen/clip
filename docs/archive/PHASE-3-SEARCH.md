@@ -1,5 +1,10 @@
 # clipx — Phase S: Search & Indexing
 
+> **Historical.** Phase S (search), shipped as R5. This is the plan as written
+> before the work; the code and `docs/adr/` are the current truth. References to
+> `DESIGN.md`, `PHASE-2*.md`, and other uncommitted design documents point at
+> files that were never published.
+
 > **Delivery status:** S0–S5 are complete and validated. S6 remains the roadmap's
 > explicit evidence-gated experiment and is not required for R5 completion.
 

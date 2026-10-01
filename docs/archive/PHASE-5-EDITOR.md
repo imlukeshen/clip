@@ -1,5 +1,10 @@
 # clipx — Phase T: Text Editor & LaTeX
 
+> **Historical.** Phase T (text, Markdown, and LaTeX), shipped as R7. This is
+> the plan as written before the work; the code and `docs/adr/` are the current
+> truth. References to `DESIGN.md`, `PHASE-2*.md`, and other uncommitted design
+> documents point at files that were never published.
+
 > **Delivery status:** T0–T7 are complete and validated. The editor supports
 > native typing and undo, syntax-aware editing, offline Markdown preview, confined
 > LaTeX compilation, SyncTeX and diagnostics, multi-file projects, snippet export,

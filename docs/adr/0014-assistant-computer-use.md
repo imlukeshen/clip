@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-09-30
-- Revisits: ADR-0001 (no screen capture in v1)
+- Revisits: the v1 decision not to ship screen capture (ADR-0001, not yet written)
 - Depends on: direct distribution only
 
 ## Context
