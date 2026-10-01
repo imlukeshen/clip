@@ -104,6 +104,32 @@ struct FrameEffectRendererTests {
         #expect(edge[0] < 255)
     }
 
+    @Test("A zoom centred near the top of the frame shows the top, not the bottom")
+    func zoomCentreUsesTopLeftCoordinates() throws {
+        // Core Image puts y = 0 at the bottom, so the red half is the top.
+        let top = CIImage(color: .red).cropped(to: CGRect(x: 0, y: 32, width: 64, height: 32))
+        let bottom = CIImage(color: .blue).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 32))
+        let effects: [Effect] = [
+            .zoom(
+                ZoomEffect(
+                    id: EffectID(rawValue: "zoom"),
+                    range: activeRange,
+                    center: NormalizedPoint(x: 0.5, y: 0.25),
+                    scale: 4
+                )
+            )
+        ]
+        let rendered = FrameEffectRenderer.render(
+            top.composited(over: bottom),
+            effects: effects,
+            at: RationalTime(seconds: 0.5),
+            bounds: bounds,
+            background: CIImage(color: .black).cropped(to: bounds)
+        )
+
+        #expect(try pixel(rendered, x: 32, y: 32) == [255, 0, 0, 255])
+    }
+
     private func pixel(_ image: CIImage, x: Int, y: Int) throws -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 64 * 64 * 4)
         let context = CIContext(options: [.useSoftwareRenderer: true])
