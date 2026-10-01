@@ -26,15 +26,23 @@ public enum TimelineEditPlanner {
             start: item.sourceRange.start,
             duration: sourceOffset
         )
+        // Away from 1x, rounding to whole ticks can make the left half end a
+        // tick past the requested cut. The right half starts where the left
+        // actually ends, and gives up a tick of source if it would otherwise
+        // run past the original end, so the halves never overlap.
+        let rightStart = item.timelineStart + sourceOffset.scaled(by: 1 / item.speed)
+        let rightSourceDuration = fittedSourceDuration(
+            item.sourceRange.duration - sourceOffset,
+            speed: item.speed,
+            startingAt: rightStart,
+            endingBy: item.timelineEnd
+        )
         let rightRange = TimeRange(
             start: item.sourceRange.start + sourceOffset,
-            duration: item.sourceRange.duration - sourceOffset
+            duration: rightSourceDuration
         )
         let leftWindow = TimeRange(start: .zero, duration: sourceOffset)
-        let rightWindow = TimeRange(
-            start: sourceOffset,
-            duration: item.sourceRange.duration - sourceOffset
-        )
+        let rightWindow = TimeRange(start: sourceOffset, duration: rightSourceDuration)
         let leftEffects = item.effects.compactMap { sliced($0, to: leftWindow, shiftingBy: .zero) }
         let rightEffects = item.effects.compactMap {
             sliced($0, to: rightWindow, shiftingBy: sourceOffset)
@@ -50,7 +58,7 @@ public enum TimelineEditPlanner {
         rightItem.id = rightItemID
         rightItem.sourceRange = rightRange
         rightItem.effects = rightEffects
-        rightItem.timelineStart = timelineTime
+        rightItem.timelineStart = rightStart
         rightItem.videoFade.fadeIn = .zero
         rightItem.audioFade.fadeIn = .zero
         rightItem = rightItem.retimingAnimations(from: item)
@@ -191,16 +199,24 @@ public enum TimelineEditPlanner {
             duration: leftTimelineDuration.scaled(by: left.speed)
         )
         let rightSourceDelta = delta.scaled(by: right.speed)
+        let adjustedLeft = trimming(left, to: leftRange)
         let rightRange = TimeRange(
             start: right.sourceRange.start + rightSourceDelta,
-            duration: rightTimelineDuration.scaled(by: right.speed)
+            duration: fittedSourceDuration(
+                rightTimelineDuration.scaled(by: right.speed),
+                speed: right.speed,
+                startingAt: adjustedLeft.timelineEnd,
+                endingBy: right.timelineEnd
+            )
         )
         try validateSourceRange(leftRange, for: left, assetDurations: assetDurations)
         try validateSourceRange(rightRange, for: right, assetDurations: assetDurations)
 
-        items[location.index] = trimming(left, to: leftRange)
+        items[location.index] = adjustedLeft
         var adjustedRight = trimming(right, to: rightRange)
-        adjustedRight.timelineStart = left.timelineStart + leftTimelineDuration
+        // Where the left clip really ends after tick rounding, not where the
+        // requested duration said it would.
+        adjustedRight.timelineStart = adjustedLeft.timelineEnd
         items[location.index + 1] = adjustedRight
         return replacementPatch(trackID: location.track.id, items: items, label: "Roll Edit")
     }
@@ -258,15 +274,23 @@ public enum TimelineEditPlanner {
             duration: leftDuration.scaled(by: left.speed)
         )
         let rightDelta = delta.scaled(by: right.speed)
+        let adjustedLeft = trimming(left, to: leftRange)
+        let selectedStart = adjustedLeft.timelineEnd
         let rightRange = TimeRange(
             start: right.sourceRange.start + rightDelta,
-            duration: rightDuration.scaled(by: right.speed)
+            duration: fittedSourceDuration(
+                rightDuration.scaled(by: right.speed),
+                speed: right.speed,
+                startingAt: selectedStart + selected.timelineDuration,
+                endingBy: right.timelineEnd
+            )
         )
         try validateSourceRange(leftRange, for: left, assetDurations: assetDurations)
         try validateSourceRange(rightRange, for: right, assetDurations: assetDurations)
 
-        items[location.index - 1] = trimming(left, to: leftRange)
-        selected.timelineStart = selected.timelineStart + delta
+        items[location.index - 1] = adjustedLeft
+        // Placed after the left clip's rounded end so the three stay gapless.
+        selected.timelineStart = selectedStart
         items[location.index] = selected
         var adjustedRight = trimming(right, to: rightRange)
         adjustedRight.timelineStart = selected.timelineEnd
@@ -608,6 +632,25 @@ extension TimelineEditPlanner {
                 assetDuration: assetDurations[item.assetID] ?? item.sourceRange.end
             )
         }
+    }
+
+    /// `sourceDuration`, shortened by at most a few ticks so that a clip at
+    /// `speed` starting at `start` ends no later than `end`. Converting
+    /// between source and timeline time rounds to whole ticks, which away
+    /// from 1x can otherwise push a clip a tick into its neighbour.
+    fileprivate static func fittedSourceDuration(
+        _ sourceDuration: RationalTime,
+        speed: Double,
+        startingAt start: RationalTime,
+        endingBy end: RationalTime
+    ) -> RationalTime {
+        var duration = sourceDuration
+        var attempts = 0
+        while start + duration.scaled(by: 1 / speed) > end, duration > .zero, attempts < 8 {
+            duration = duration - RationalTime(value: 1)
+            attempts += 1
+        }
+        return duration
     }
 
     fileprivate static func trimming(_ item: TimelineItem, to range: TimeRange) -> TimelineItem {

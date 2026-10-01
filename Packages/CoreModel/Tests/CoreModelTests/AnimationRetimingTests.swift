@@ -100,3 +100,57 @@ struct AnimationRetimingTests {
         #expect(fast.opacity.keyframes.map(\.time) == [seconds(1), seconds(4)])
     }
 }
+
+@Suite("Edits away from 1x stay gapless and non-overlapping")
+struct SpeedRoundingTests {
+    private func document(speeds: [Double]) throws -> ProjectDocument {
+        var start = RationalTime.zero
+        let items = speeds.enumerated().map { index, speed in
+            let item = TimelineItem(
+                id: ItemID(rawValue: "clip-\(index)"),
+                assetID: AssetID(rawValue: "asset"),
+                sourceRange: TimeRange(start: .zero, duration: RationalTime(seconds: 10)),
+                timelineStart: start,
+                speed: speed
+            )
+            start = item.timelineEnd
+            return item
+        }
+        return try ProjectDocument(
+            id: ProjectID(rawValue: "p"),
+            name: "P",
+            timeline: Timeline(video: items),
+            createdAt: Date(timeIntervalSince1970: 1),
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    @Test(
+        "Splitting a half-speed clip at odd ticks always succeeds",
+        arguments: [3, 3003, 90_001, 449_999])
+    func splitAtOddTick(offsetTicks: Int64) throws {
+        var document = try document(speeds: [0.5, 1])
+        let original = document.timeline.video[0]
+        _ = try document.apply(
+            TimelineEditPlanner.splitClip(
+                in: document, itemID: original.id,
+                at: RationalTime(seconds: 5) + RationalTime(value: offsetTicks),
+                rightItemID: ItemID(rawValue: "right")))
+        let video = document.timeline.video
+        #expect(video[0].timelineEnd == video[1].timelineStart)
+        #expect(video[1].timelineEnd <= original.timelineEnd)
+        #expect(video[2].timelineStart >= video[1].timelineEnd)
+    }
+
+    @Test("Rolling a cut between 1.5x clips by an odd tick count stays gapless")
+    func rollAtOddTicks() throws {
+        var document = try document(speeds: [1.5, 1.5])
+        let left = document.timeline.video[0]
+        _ = try document.apply(
+            TimelineEditPlanner.rollEdit(
+                in: document, leftItemID: left.id, by: RationalTime(value: 7),
+                assetDurations: [AssetID(rawValue: "asset"): RationalTime(seconds: 20)]))
+        let video = document.timeline.video
+        #expect(video[0].timelineEnd == video[1].timelineStart)
+    }
+}
