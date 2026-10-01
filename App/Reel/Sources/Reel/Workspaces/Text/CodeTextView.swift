@@ -94,6 +94,14 @@ final class CodeTextView: NSTextView {
         backgroundColor.alphaComponent >= 1
     }
 
+    /// NSTextView reports only its text to accessibility; add the rendered
+    /// diagram cards placed over it so VoiceOver and UI tests can reach them.
+    override func accessibilityChildren() -> [Any]? {
+        let diagrams = subviews.filter { $0 is MermaidDiagramCard }
+        guard !diagrams.isEmpty else { return super.accessibilityChildren() }
+        return (super.accessibilityChildren() ?? []) + diagrams
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
         dirtyRect.fill()
