@@ -131,6 +131,21 @@ struct AISettingsModelTests {
         #expect(calls.first?.1 == "llama3.2")
     }
 
+    @Test("A local Ollama is driven through its native endpoint; other servers are not")
+    @MainActor
+    func ollamaUsesNativeProvider() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let settings = fixture.settings()
+
+        // Only the native endpoint can be told how much context to allocate.
+        #expect(try await settings.provider() is OllamaChatProvider)
+
+        // LM Studio and the rest expose the compatible surface alone.
+        settings.compatibleBaseURL = "http://localhost:1234/v1"
+        #expect(try await settings.provider() is OpenAICompatibleProvider)
+    }
+
     @Test("Ollama connection failures produce actionable guidance")
     @MainActor
     func ollamaFailureIsActionable() async throws {
