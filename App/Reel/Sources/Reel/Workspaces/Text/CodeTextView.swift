@@ -1281,7 +1281,14 @@ private final class CodeFindPanelController: NSObject, NSWindowDelegate {
     private func replacement(for range: NSRange, in source: String) -> String? {
         guard usesRegularExpression else { return replaceField.stringValue }
         guard let expression = expression(),
-            let match = expression.firstMatch(in: source, range: range), match.range == range
+            // Transparent, non-anchoring bounds let lookbehind and ^/$ see the
+            // text around the match, as they did when Find located it; without
+            // them "(?<=a)b" found matches that Replace then refused.
+            let match = expression.firstMatch(
+                in: source,
+                options: [.withTransparentBounds, .withoutAnchoringBounds],
+                range: range
+            ), match.range == range
         else { return nil }
         return expression.replacementString(
             for: match,
