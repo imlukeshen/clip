@@ -605,6 +605,11 @@ public final class TextEditorViewModel {
                 throw TextEditorCommandError.fileNotFound(file)
             }
             selectFile(target.id)
+            // selectFile declines while a conflict or detached buffer needs
+            // attention; editing anyway would change whichever file is open.
+            guard activeFileID == target.id else {
+                throw TextEditorCommandError.fileNotFound(file)
+            }
         }
         var updated = request.contents ?? text
         let edits = request.edits.sorted {
@@ -625,9 +630,17 @@ public final class TextEditorViewModel {
             guard edit.endLine < priorStart else {
                 throw TextEditorCommandError.overlappingLineEdits
             }
-            updated = (updated as NSString).replacingCharacters(
+            // Appending past a last line that has no line break would glue the
+            // new text onto it; start it on its own line instead.
+            let source = updated as NSString
+            let appendsAfterUnterminatedLine =
+                range.location == source.length && source.length > 0
+                && !(updated.last?.isNewline ?? true) && !edit.replacement.isEmpty
+            updated = source.replacingCharacters(
                 in: range,
-                with: edit.replacement
+                with: appendsAfterUnterminatedLine
+                    ? Self.lineBreak(for: activeFile?.lineEnding) + edit.replacement
+                    : edit.replacement
             )
             priorStart = edit.startLine
         }
@@ -685,7 +698,14 @@ public final class TextEditorViewModel {
         for file in document.files where relevantFiles.contains(file.relativePath) && remaining > 0
         {
             guard let source = textBuffers[file.id] else { continue }
-            let lines = source.components(separatedBy: .newlines)
+            // Split the way lineRange counts: "\r\n" is one line break.
+            // components(separatedBy: .newlines) split it twice, so a CRLF
+            // file's numbers doubled and edits by line hit the wrong lines.
+            var lines: [String] = []
+            source.enumerateLines { line, _ in lines.append(line) }
+            if source.hasSuffix("\n") || source.hasSuffix("\r") || source.isEmpty {
+                lines.append("")
+            }
             let selected = lines.prefix(remaining)
             rows.append("Source \(file.relativePath):")
             rows += selected.enumerated().map { offset, line in "\(offset + 1) │ \(line)" }
@@ -1151,7 +1171,10 @@ public final class TextEditorViewModel {
             }.value
             guard !Task.isCancelled, let self else { return }
             if text == original, cleaned != original {
-                text = cleaned
+                // Undoable like any other edit: changing the text without telling
+                // the undo stack left NSTextView's typing entries pointing at
+                // ranges that no longer exist, so the next Cmd-Z corrupted text.
+                replaceContentsForCommand(cleaned, actionName: "Trim Trailing Whitespace")
                 contentTask?.cancel()
             }
             writeContents()
@@ -1601,6 +1624,14 @@ public final class TextEditorViewModel {
         }
         undoManager.setActionName(actionName)
         text = value
+    }
+
+    private static func lineBreak(for ending: LineEnding?) -> String {
+        switch ending {
+        case .crlf: "\r\n"
+        case .cr: "\r"
+        case .lf, .mixed, nil: "\n"
+        }
     }
 
     private static func lineRange(

@@ -289,6 +289,42 @@ struct TextEditorViewModelTests {
         #expect(editor.hasExternalConflict)
     }
 
+    @Test("Undo after a save that trims whitespace restores the exact text")
+    func saveTrimIsUndoable() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "a.py", language: .python)
+        let editor = try makeEditor(file: file, text: "")
+        editor.text = "x = 1   \ny = 2"
+        editor.saveNow()
+        for _ in 0..<200 where editor.text != "x = 1\ny = 2" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(editor.text == "x = 1\ny = 2")
+        editor.undo()
+        #expect(editor.text == "x = 1   \ny = 2")
+    }
+
+    @Test("Appending after a last line with no line break starts a new line")
+    func appendStartsOwnLine() throws {
+        let file = TextFile(
+            id: FileID(rawValue: "main"), relativePath: "a.txt", lineEnding: .crlf)
+        let editor = try makeEditor(file: file, text: "a\r\nb")
+        try editor.applyToolFormat(
+            TextToolFormatRequest(edits: [
+                TextToolLineEdit(startLine: 3, endLine: 3, replacement: "c")
+            ])
+        )
+        #expect(editor.text == "a\r\nb\r\nc")
+    }
+
+    @Test("Line numbers shown to the assistant count CRLF as one line break")
+    func crlfLineNumbersMatchEdits() throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "a.txt", lineEnding: .crlf)
+        let editor = try makeEditor(file: file, text: "one\r\ntwo\r\nthree")
+        let report = editor.toolDiagnosticReport()
+        #expect(report.contains("2 │ two"))
+        #expect(report.contains("3 │ three"))
+    }
+
     @Test("Flushing saves unsaved typing right away and in order")
     func flushSavesInOrder() async throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
