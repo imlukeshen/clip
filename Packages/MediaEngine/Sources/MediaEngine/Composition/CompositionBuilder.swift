@@ -5,10 +5,15 @@ import Foundation
 public struct CompositionBuilder: Sendable {
     public init() {}
 
+    /// Builds a playable composition for `document`.
+    ///
+    /// - Parameter burnsCaptions: Draws the timeline's captions into the
+    ///   frames. Preview shows them; export follows its preset.
     public func build(
         _ document: ProjectDocument,
         resolving: @Sendable (AssetID) async throws -> URL,
-        quality: RenderQuality
+        quality: RenderQuality,
+        burnsCaptions: Bool = true
     ) async throws -> sending BuiltComposition {
         guard document.timeline.videoTracks.contains(where: { !$0.items.isEmpty }) else {
             throw MediaEngineError.emptyTimeline
@@ -93,7 +98,8 @@ public struct CompositionBuilder: Sendable {
         let instructions = makeInstructions(
             layers: layers,
             duration: document.duration,
-            background: document.canvas.background
+            background: document.canvas.background,
+            captions: burnsCaptions ? document.timeline.captions : []
         )
         let audioMix = try await addAudio(
             from: document,
@@ -120,7 +126,8 @@ public struct CompositionBuilder: Sendable {
     private func makeInstructions(
         layers: [ReelVideoLayer],
         duration: RationalTime,
-        background: RGBA
+        background: RGBA,
+        captions: [CaptionSegment]
     ) -> [ReelVideoInstruction] {
         var boundaries = [RationalTime.zero, duration]
         for layer in layers {
@@ -140,7 +147,8 @@ public struct CompositionBuilder: Sendable {
                     duration: (end - start).cmTime
                 ),
                 layers: active,
-                background: background
+                background: background,
+                captions: captions.filter { $0.range.start < end && $0.range.end > start }
             )
         }
     }
@@ -199,59 +207,14 @@ public struct CompositionBuilder: Sendable {
             }
             let input = AVMutableAudioMixInputParameters(track: compositionTrack)
             let audible = !modelTrack.isMuted && (!anySolo || modelTrack.isSolo)
-            let initialGain = linearGain(
-                decibels: modelTrack.gain.value(at: .zero),
-                audible: audible
-            )
-            input.setVolume(initialGain, at: .zero)
-            if audible {
-                var previousTime = RationalTime.zero
-                var previousGain = initialGain
-                for keyframe in modelTrack.gain.keyframes where keyframe.time > .zero {
-                    let nextGain = linearGain(decibels: keyframe.value, audible: true)
-                    input.setVolumeRamp(
-                        fromStartVolume: previousGain,
-                        toEndVolume: nextGain,
-                        timeRange: CMTimeRange(
-                            start: previousTime.cmTime,
-                            duration: (keyframe.time - previousTime).cmTime
-                        )
-                    )
-                    previousTime = keyframe.time
-                    previousGain = nextGain
-                }
-                for item in modelTrack.items where item.isEnabled {
-                    let fade = item.audioFade
-                    if fade.fadeIn > .zero {
-                        let itemGain = linearGain(
-                            decibels: modelTrack.gain.value(at: item.timelineStart),
-                            audible: true
-                        )
-                        input.setVolumeRamp(
-                            fromStartVolume: 0,
-                            toEndVolume: itemGain,
-                            timeRange: CMTimeRange(
-                                start: item.timelineStart.cmTime,
-                                duration: fade.fadeIn.cmTime
-                            )
-                        )
-                    }
-                    if fade.fadeOut > .zero {
-                        let fadeStart = item.timelineEnd - fade.fadeOut
-                        let itemGain = linearGain(
-                            decibels: modelTrack.gain.value(at: fadeStart),
-                            audible: true
-                        )
-                        input.setVolumeRamp(
-                            fromStartVolume: itemGain,
-                            toEndVolume: 0,
-                            timeRange: CMTimeRange(
-                                start: fadeStart.cmTime,
-                                duration: fade.fadeOut.cmTime
-                            )
-                        )
-                    }
-                }
+            let envelope = AudioGainEnvelope(track: modelTrack, audible: audible)
+            input.setVolume(envelope.initialVolume, at: .zero)
+            for ramp in envelope.ramps {
+                input.setVolumeRamp(
+                    fromStartVolume: ramp.from,
+                    toEndVolume: ramp.to,
+                    timeRange: CMTimeRange(start: ramp.start.cmTime, duration: ramp.duration.cmTime)
+                )
             }
             parameters.append(input)
         }
@@ -280,10 +243,6 @@ public struct CompositionBuilder: Sendable {
         }
         // Empty or standalone A lanes do not silence embedded video audio.
         return embeddedTracks + timeline.audioTracks
-    }
-
-    private func linearGain(decibels: Double, audible: Bool) -> Float {
-        audible ? Float(pow(10, decibels / 20)) : 0
     }
 
     private func validateSourceRange(_ item: TimelineItem, in asset: AVURLAsset) async throws {

@@ -71,7 +71,10 @@ public actor SemanticVectorIndex {
                 limit: Self.pageSize,
                 offset: offset
             )
-            guard !records.isEmpty else { break }
+            // Advance by the page asked for, not the rows that decoded: a skipped
+            // bad row otherwise made the next page overlap and repeat matches.
+            defer { offset += Self.pageSize }
+            guard !records.isEmpty else { continue }
             let page = Cache(model: model, generation: generation, records: records)
             candidates += Self.rank(
                 vector,
@@ -81,7 +84,6 @@ public actor SemanticVectorIndex {
             )
             candidates.sort(by: Self.matchOrdering)
             if candidates.count > limit { candidates.removeLast(candidates.count - limit) }
-            offset += records.count
         }
         return candidates
     }

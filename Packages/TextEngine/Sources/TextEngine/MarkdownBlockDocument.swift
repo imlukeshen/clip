@@ -312,18 +312,30 @@ public enum MarkdownBlockDocumentEngine {
 
         let oldFragment = oldText.substring(with: edit.previousRange)
         let newFragment = newText.substring(with: edit.currentRange)
-        let structurallyUnsafe = "\n\r|"
-        guard !oldFragment.contains(where: structurallyUnsafe.contains),
-            !newFragment.contains(where: structurallyUnsafe.contains)
+        // Checked by UTF-16 unit: "\r\n" is a single Character, so a
+        // Character test missed it, and NSString also breaks lines at
+        // U+0085, U+2028, and U+2029. A missed break left part of the pasted
+        // text belonging to no block.
+        func isStructurallyUnsafe(_ fragment: String) -> Bool {
+            fragment.utf16.contains { [10, 13, 0x7C, 0x85, 0x2028, 0x2029].contains($0) }
+        }
+        guard !isStructurallyUnsafe(oldFragment), !isStructurallyUnsafe(newFragment)
         else { return reconcileFull(source: source, with: previous, edit: edit) }
 
         let newLineRange = newText.lineRange(
             for: NSRange(location: edit.currentRange.location, length: 0)
         )
         let lineSource = newText.substring(with: newLineRange)
+        // A line parsed alone loses its context: four or more columns of
+        // indent can be a list continuation or indented code, and a line
+        // starting with "<" can belong to an HTML block. Those reparse fully.
+        let indentColumns = lineSource.prefix { $0 == " " || $0 == "\t" }
+            .reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
         guard !lineSource.contains("```"), !lineSource.contains("~~~"),
             !lineSource.contains("|"),
             lineSource.trimmingCharacters(in: .whitespacesAndNewlines) != "$$",
+            indentColumns < 4,
+            !lineSource.trimmingCharacters(in: .whitespaces).hasPrefix("<"),
             newLineRange.location == oldBlock.sourceRange.location
         else { return reconcileFull(source: source, with: previous, edit: edit) }
 
@@ -913,7 +925,8 @@ public enum MarkdownBlockDocumentEngine {
         }.flatMap { $0 }
         var mathSpans: [MarkdownInlineSpan] = []
         appendInlineMatches(
-            #"(?<![\\$])\$([^\n$]+)\$(?!\$)"#,
+            // Same rule as export: "$x^2$" is math, "costs $5 and $10" is not.
+            #"(?<![\\$])\$(?=[^\s$])([^\n$]*?[^\s$\\])\$(?![\d$])"#,
             kind: { _ in .math },
             contentGroups: [1],
             in: source,
@@ -1744,6 +1757,13 @@ public enum MarkdownBlockDocumentEngine {
             return nil
         }
         let text = value as NSString
+        // CommonMark: a backtick fence's info string may not contain a
+        // backtick, so a line like ``` `code` ``` is inline code, not a fence.
+        if value.first == "`",
+            text.substring(from: NSMaxRange(match.range(at: 1))).contains("`")
+        {
+            return nil
+        }
         return (
             text.substring(with: match.range(at: 1)),
             match.range(at: 2).location == NSNotFound

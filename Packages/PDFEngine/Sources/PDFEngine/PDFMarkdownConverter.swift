@@ -11,8 +11,11 @@ public struct PDFMarkdownConverter: Sendable {
 
     public func convert(_ document: PDFEditDocument) throws -> String {
         let analyses = try document.pages.map { page in
-            try page.sourcePageIndex.map { try source.analyzePage(at: $0) }
-                ?? PDFPageAnalysis(text: "", glyphs: [], fonts: [])
+            // Analyse the page as edited, so in-place text edits replace the
+            // original wording instead of appearing beside it.
+            try page.sourcePageIndex.map {
+                try source.analyzePage(at: $0, applying: Self.sourceTextEdits(on: page))
+            } ?? PDFPageAnalysis(text: "", glyphs: [], fonts: [])
         }
         return Self.convert(document, analyses: analyses)
     }
@@ -31,18 +34,32 @@ public struct PDFMarkdownConverter: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
 
+    private static func sourceTextEdits(on page: PDFPage) -> [PDFTextLayer] {
+        page.layers.compactMap { layer in
+            guard case .text(let text) = layer, text.sourceReference != nil else { return nil }
+            return text
+        }
+    }
+
     private static func markdown(page: PDFPage, analysis: PDFPageAnalysis) -> String {
         let redactions = page.layers.flatMap { layer -> [CGRect] in
             if case .redaction(let value) = layer { return value.regions }
             return []
         }
+        func isRedacted(_ bounds: CGRect) -> Bool {
+            redactions.contains { $0.intersects(bounds) }
+        }
         var glyphs = analysis.glyphs.filter { glyph in
             guard let bounds = glyph.bounds else { return false }
-            return !redactions.contains { $0.intersects(bounds) }
+            return !isRedacted(bounds)
         }
         glyphs.append(
             contentsOf: page.layers.compactMap { layer -> PDFTextGlyph? in
-                guard case .text(let text) = layer else { return nil }
+                // Source edits are already in `analysis`; added text under a
+                // redaction is as hidden as the page text beneath it.
+                guard case .text(let text) = layer, text.sourceReference == nil,
+                    !isRedacted(text.frame)
+                else { return nil }
                 return PDFTextGlyph(
                     text: text.text,
                     bounds: text.frame,
@@ -53,6 +70,9 @@ public struct PDFMarkdownConverter: Sendable {
         )
         let lines = layoutLines(glyphs)
         if lines.isEmpty {
+            // OCR and raw page text carry no positions, so they cannot be
+            // filtered against redactions: a redacted page contributes nothing.
+            guard redactions.isEmpty else { return "" }
             let fallback = page.ocrText ?? analysis.text
             return fallback.trimmingCharacters(in: .whitespacesAndNewlines)
         }

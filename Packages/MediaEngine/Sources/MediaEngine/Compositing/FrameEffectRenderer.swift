@@ -86,7 +86,10 @@ enum FrameEffectRenderer {
                     c: 0,
                     d: zoom.scale,
                     tx: bounds.midX - zoom.center.x * bounds.width * zoom.scale,
-                    ty: bounds.midY - zoom.center.y * bounds.height * zoom.scale
+                    // Zoom centres are top-left normalized like every other
+                    // canvas coordinate (clicks, crops, blur regions); Core
+                    // Image's origin is bottom-left, so flip y here.
+                    ty: bounds.midY - (1 - zoom.center.y) * bounds.height * zoom.scale
                 )
             )
         }

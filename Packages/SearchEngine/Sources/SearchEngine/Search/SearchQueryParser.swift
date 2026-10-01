@@ -117,7 +117,8 @@ public enum SearchQueryParser {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        // A day typed by a person means their own day, not UTC's.
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         guard let date = formatter.date(from: value) else { return nil }
         return endOfDay ? date.addingTimeInterval(86_400 - 0.001) : date

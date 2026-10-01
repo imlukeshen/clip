@@ -40,7 +40,9 @@ public struct AssistantSessionToken: Sendable, Equatable {
 
 /// A resolved edit waiting for explicit review.
 public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
-    public var id: String { result.callID }
+    /// Unique per action. Providers reuse call IDs across turns (Gemini numbers
+    /// them from 1 each time), so the call ID cannot tell two actions apart.
+    public let id: String
     public var name: String
     public var result: ToolResult
     public var invocation: ToolInvocation?
@@ -52,6 +54,7 @@ public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
         invocation: ToolInvocation? = nil,
         session: AssistantSessionToken
     ) {
+        self.id = UUID().uuidString
         self.name = name
         self.result = result
         self.invocation = invocation
@@ -160,15 +163,29 @@ public struct AssistantTurnRunner: Sendable {
 
             var roundResults: [ToolResult] = []
             for invocation in roundInvocations {
-                let result = try await executor.execute(
-                    invocation, turnID: turnID, policy: policy, context: context)
+                // One bad call (an invented tool, malformed arguments) used to
+                // abort the whole turn, dropping earlier edits while PDF and
+                // photo changes that already ran stayed applied. It now comes
+                // back to the model as a failed result it can correct.
+                var result: ToolResult
+                do {
+                    result = try await executor.execute(
+                        invocation, turnID: turnID, policy: policy, context: context)
+                    if let patch = result.patch {
+                        var candidate = context.document
+                        _ = try candidate.apply(patch)
+                        context.document = candidate
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    result = ToolResult(
+                        callID: invocation.callID,
+                        message: "Failed: \(error.localizedDescription)"
+                    )
+                }
                 roundResults.append(result)
                 results.append(result)
-                if let patch = result.patch {
-                    var candidate = context.document
-                    _ = try candidate.apply(patch)
-                    context.document = candidate
-                }
             }
 
             guard !roundInvocations.isEmpty, !reachedToolLimit else { break }

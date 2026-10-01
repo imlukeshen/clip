@@ -167,6 +167,10 @@ extension ProjectDocument {
             let previousDuration = previous[location.itemIndex].timelineDuration
             mutateItems(at: location) { items in
                 items[location.itemIndex].speed = speed
+                // The clip's length changes with its speed, so its keyframes
+                // move with the picture they were set against.
+                items[location.itemIndex] = items[location.itemIndex]
+                    .retimingAnimations(from: previous[location.itemIndex])
                 guard location.trackIndex == 0 else { return }
                 let delta = items[location.itemIndex].timelineDuration - previousDuration
                 if location.itemIndex + 1 < items.count {

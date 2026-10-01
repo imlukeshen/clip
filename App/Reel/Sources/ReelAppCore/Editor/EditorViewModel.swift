@@ -1170,10 +1170,21 @@ public final class EditorViewModel {
         inserted.id = .generate()
         inserted.effects = []
         inserted.timelineStart = playhead
+        // A copy is a new, independent clip: it has its own audio and is not
+        // part of the original's nest, and per-clip animation and fades start
+        // fresh like its effects do (their times may not fit a shorter copy).
+        inserted.detachedAudioItemID = nil
+        inserted.nestID = nil
+        inserted.transform.keyframes = []
+        inserted.opacity.keyframes = []
+        inserted.videoFade = .none
+        inserted.audioFade = .none
         if let inPoint, let outPoint, outPoint > inPoint {
+            // In and out are marked on the timeline; the source plays `speed`
+            // times faster, so the same span covers more source.
             inserted.sourceRange.duration = min(
                 inserted.sourceRange.duration,
-                outPoint - inPoint
+                (outPoint - inPoint).scaled(by: inserted.speed)
             )
         }
         do {
@@ -1502,6 +1513,13 @@ public final class EditorViewModel {
                     exportProgress = update.fraction
                 }
                 guard let self else { return }
+                // Cancelling this task ends the stream quietly instead of
+                // throwing, and the exporter deletes its partial file.
+                guard !Task.isCancelled else {
+                    isExporting = false
+                    notice = "Export cancelled."
+                    return
+                }
                 lastExportURL = url
                 isExporting = false
                 notice = "Exported \(url.lastPathComponent)."

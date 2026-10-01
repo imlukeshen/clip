@@ -1656,19 +1656,24 @@ public final class AppModel {
             return
         }
         editor.saveNow()
-        if let index = conversionQueue.firstIndex(where: { $0.asset.id == assetID }) {
-            conversionQueue[index].selectTarget(target)
-        } else {
-            var item = ConversionQueueItem(
-                asset: asset,
-                inputURL: inputURL,
-                target: target,
-                capabilities: conversionCapabilities
-            )
-            item.setConflictPolicy(conversionConflictPolicy)
-            conversionQueue.append(item)
-        }
         showWorkspace(.convert)
+        Task {
+            // The conversion reads the file on disk, so queue it only once the
+            // save has landed; otherwise a quick export used the old text.
+            await editor.flushPendingWrites()
+            if let index = conversionQueue.firstIndex(where: { $0.asset.id == assetID }) {
+                conversionQueue[index].selectTarget(target)
+            } else {
+                var item = ConversionQueueItem(
+                    asset: asset,
+                    inputURL: inputURL,
+                    target: target,
+                    capabilities: conversionCapabilities
+                )
+                item.setConflictPolicy(conversionConflictPolicy)
+                conversionQueue.append(item)
+            }
+        }
     }
 
     public func enqueueForConversion(_ urls: [URL], source: IngestSource) {
@@ -2393,21 +2398,26 @@ public final class AppModel {
         }
     }
 
+    /// Whether an action held for review can be run later by re-executing its
+    /// invocation: file operations, and PDF and photo tools, which have no
+    /// patch to apply and change their document as they run.
     private func supportsAssistantConfirmation(_ invocation: ToolInvocation) -> Bool {
-        if invocation.name == "convert.run" || invocation.name == "text.export"
-            || invocation.name == "text.create" || invocation.name == "text.setLanguage"
-            || invocation.name == "text.format" || invocation.name == "tex.compile"
-        {
-            return true
+        func isConfirmable(_ name: String) -> Bool {
+            if [
+                "convert.run", "text.export", "text.create", "text.setLanguage", "text.format",
+                "tex.compile",
+            ].contains(name) {
+                return true
+            }
+            let category = CommandRegistry.command(named: name)?.category
+            return category == .pdf || category == .image
         }
+        if isConfirmable(invocation.name) { return true }
         guard invocation.name == "runCommand",
             case .object(let fields) = invocation.arguments,
             let idValue = fields["id"], case .string(let id) = idValue
         else { return false }
-        return [
-            "convert.run", "text.export", "text.create", "text.setLanguage", "text.format",
-            "tex.compile",
-        ].contains(id)
+        return isConfirmable(id)
     }
 
     private func executeTextTool(_ request: TextToolRequest) async throws -> String {
@@ -3025,12 +3035,17 @@ public final class AppModel {
     /// to the Trash.
     public func trashScratchBuffer(_ id: DocumentID) {
         guard let runtime else { return }
+        var closing: TextEditorViewModel?
         if let textEditor, textEditor.sourceURL == nil, textEditor.document.id == id {
+            closing = textEditor
             closeTextEditor()
             // An open buffer autosaves, which would write the files straight back.
             guard self.textEditor == nil else { return }
         }
         Task {
+            // Closing starts the buffer's final save; trashing before it lands
+            // would let that save recreate the file.
+            await closing?.flushPendingWrites()
             do {
                 try await runtime.trashScratchTextBuffer(id)
                 lastMessage = "Moved to Trash"
@@ -3298,6 +3313,14 @@ public final class AppModel {
         case .rename:
             return uniqueOutputURL(proposed: proposed, reserved: &reserved)
         case .overwrite:
+            // Replacing the input would destroy the source mid-conversion, and
+            // for a library file break its content hash.
+            guard
+                proposed.standardizedFileURL.resolvingSymlinksInPath()
+                    != item.inputURL.standardizedFileURL.resolvingSymlinksInPath()
+            else {
+                throw ExportDestinationError.outputIsSource
+            }
             guard reserved.insert(proposed).inserted else {
                 throw ExportDestinationError.conflictingBatchOutput
             }

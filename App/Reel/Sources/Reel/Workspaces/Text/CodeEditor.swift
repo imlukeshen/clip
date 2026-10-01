@@ -32,6 +32,8 @@ struct CodeEditor: NSViewRepresentable {
     let onVisibleLineChange: (Int) -> Void
     let onSelectionChange: (NSRange) -> Void
     let onMarkdownDocumentChange: (CodeEditorDocumentIdentity, MarkdownDocumentSnapshot) -> Void
+    /// The open file's line ending, so Return keeps a CRLF file CRLF.
+    var lineEnding: LineEnding = .lf
     let onCursorChange: (Int, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -521,6 +523,12 @@ struct CodeEditor: NSViewRepresentable {
             textView.commentPrefix = commentDelimiters.prefix
             textView.commentSuffix = commentDelimiters.suffix
             textView.tabWidth = settings.tabWidth
+            textView.lineBreak =
+                switch parent.lineEnding {
+                case .crlf: "\r\n"
+                case .cr: "\r"
+                case .lf, .mixed: "\n"
+                }
             textView.showsInvisibleMarkers = settings.showInvisibles
             textView.invisibleMarkerColor = NSColor(theme.palette.textTertiary)
             textView.placeholderColor = NSColor(theme.palette.textTertiary)

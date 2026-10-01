@@ -102,8 +102,12 @@ private final class EventTapContext: @unchecked Sendable {
     }
 
     private func run(continuation: CheckedContinuation<Void, any Error>) {
+        // Dragging sends dragged events, not moves; without them the cursor
+        // track went blank whenever a button was held.
         let mask = [
             CGEventType.mouseMoved,
+            .leftMouseDragged,
+            .rightMouseDragged,
             .leftMouseDown,
             .leftMouseUp,
             .rightMouseDown,
@@ -225,7 +229,7 @@ private let eventTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
 extension RawEvent.Kind {
     fileprivate init?(_ type: CGEventType) {
         switch type {
-        case .mouseMoved: self = .mouseMoved
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged: self = .mouseMoved
         case .leftMouseDown: self = .leftMouseDown
         case .leftMouseUp: self = .leftMouseUp
         case .rightMouseDown: self = .rightMouseDown

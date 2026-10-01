@@ -88,12 +88,18 @@ public final class EffectCompositor: NSObject, AVVideoCompositing, Sendable {
             }
             sources.append((layer, CIImage(cvPixelBuffer: sourceBuffer)))
         }
-        let composed = VideoLayerRenderer.compose(
+        var composed = VideoLayerRenderer.compose(
             sources,
             at: request.compositionTime.rational,
             bounds: bounds,
             background: background
         )
+        if let caption = CaptionOverlay.active(
+            instruction.captions,
+            at: request.compositionTime.rational
+        ), let overlay = CaptionOverlay.image(for: caption.text, in: bounds) {
+            composed = overlay.composited(over: composed)
+        }
 
         context.render(
             composed, to: output, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())

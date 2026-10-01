@@ -128,6 +128,7 @@ public enum ExportDestinationError: Error, Sendable, Equatable, LocalizedError {
     case unclosedToken
     case invalidPath
     case conflictingBatchOutput
+    case outputIsSource
 
     public var errorDescription: String? {
         switch self {
@@ -136,6 +137,8 @@ public enum ExportDestinationError: Error, Sendable, Equatable, LocalizedError {
         case .invalidPath: "The export template does not form a safe path."
         case .conflictingBatchOutput:
             "Two files resolve to the same output path. Add {index} to the filename template."
+        case .outputIsSource:
+            "This would overwrite the file being converted. Choose another folder or filename."
         }
     }
 }

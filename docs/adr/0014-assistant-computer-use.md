@@ -4,6 +4,10 @@
 - Date: 2026-09-30
 - Revisits: the v1 decision not to ship screen capture (ADR-0001, not yet written)
 - Depends on: direct distribution only
+- Implementation status (2026-10-01): part of stage 1 has landed. The
+  assistant can see clipx's own window (rendered with `cacheDisplay`, not
+  screen capture), and a local model is sent images when it reports vision
+  support. The "Context" below describes the state before that.
 
 ## Context
 

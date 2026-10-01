@@ -168,9 +168,15 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         format: ImageExportFormat
     ) throws {
         let image = try renderForExport(document, sourceURL: sourceURL)
+        // Written beside the destination and swapped in only when complete,
+        // so a failed export (a full disk, say) never destroys the file it
+        // was replacing.
+        let temporary = destinationURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(destinationURL.lastPathComponent).\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: temporary) }
         guard
             let destination = CGImageDestinationCreateWithURL(
-                destinationURL as CFURL,
+                temporary as CFURL,
                 format.typeIdentifier as CFString,
                 1,
                 nil
@@ -180,7 +186,16 @@ public final class ImageDocumentRenderer: @unchecked Sendable {
         guard CGImageDestinationFinalize(destination) else {
             throw ImageRenderError.exportFailed
         }
-        try stripSensitiveMetadata(at: destinationURL, format: format)
+        try stripSensitiveMetadata(at: temporary, format: format)
+        do {
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: temporary)
+            } else {
+                try FileManager.default.moveItem(at: temporary, to: destinationURL)
+            }
+        } catch {
+            throw ImageRenderError.exportFailed
+        }
     }
 
     public func exportWarning(

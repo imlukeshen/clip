@@ -132,7 +132,13 @@ public struct OpenAICompatibleProvider: AIProvider {
                     try validateMedia(request, supportsVision: configuration.supportsVision)
                     let url = configuration.baseURL.appendingPathComponent("chat/completions")
                     let body = openAIRequestBody(
-                        request, supportsTools: configuration.supportsTools)
+                        request,
+                        supportsTools: configuration.supportsTools,
+                        // OpenAI's current models reject `max_tokens`; local
+                        // OpenAI-compatible servers still expect it.
+                        tokenLimitKey: configuration.id == .openAI
+                            ? "max_completion_tokens" : "max_tokens"
+                    )
                     var urlRequest = try jsonRequest(url: url, body: body)
                     if let apiKey = configuration.apiKey, !apiKey.isEmpty {
                         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -251,14 +257,16 @@ public struct GoogleProvider: AIProvider {
                             .appendingPathComponent("\(model):streamGenerateContent"),
                         resolvingAgainstBaseURL: false
                     )
-                    components?.queryItems = [
-                        URLQueryItem(name: "alt", value: "sse"),
-                        URLQueryItem(name: "key", value: configuration.apiKey),
-                    ]
+                    // The key travels in a header, never the URL, so it cannot
+                    // surface in URL logs, proxies, or transport error messages.
+                    components?.queryItems = [URLQueryItem(name: "alt", value: "sse")]
                     guard let url = components?.url else {
                         throw AIKitError.invalidResponse("Invalid Gemini URL")
                     }
-                    let urlRequest = try jsonRequest(url: url, body: geminiRequestBody(request))
+                    var urlRequest = try jsonRequest(url: url, body: geminiRequestBody(request))
+                    if let apiKey = configuration.apiKey {
+                        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+                    }
                     await record(request, configuration: configuration)
                     let (data, response) = try await configuration.transport.data(for: urlRequest)
                     try validate(response)
@@ -381,14 +389,18 @@ private func openAITools(_ tools: [ToolSchema]) -> JSONValue {
         })
 }
 
-func openAIRequestBody(_ request: ChatRequest, supportsTools: Bool) -> JSONValue {
+func openAIRequestBody(
+    _ request: ChatRequest,
+    supportsTools: Bool,
+    tokenLimitKey: String = "max_tokens"
+) -> JSONValue {
     var allMessages: [JSONValue] = [
         .object(["role": .string("system"), "content": .string(request.system)])
     ]
     allMessages.append(contentsOf: openAIMessages(request))
     var body: [String: JSONValue] = [
         "model": .string(request.model), "stream": .bool(true),
-        "messages": .array(allMessages), "max_tokens": .number(Double(request.maxTokens)),
+        "messages": .array(allMessages), tokenLimitKey: .number(Double(request.maxTokens)),
         "stream_options": .object(["include_usage": .bool(true)]),
     ]
     if supportsTools && !request.tools.isEmpty { body["tools"] = openAITools(request.tools) }
@@ -496,11 +508,24 @@ enum OpenAIStreamParser {
                 guard case .array(let calls)? = delta["tool_calls"] else { continue }
                 for call in calls {
                     guard case .object(let callObject) = call else { continue }
-                    let index = callObject["index"]?.int ?? 0
+                    // Some OpenAI-compatible servers send each call whole with
+                    // no index; give it its own slot instead of merging every
+                    // call into slot 0.
+                    let index = callObject["index"]?.int ?? ((pending.keys.max() ?? -1) + 1)
                     var value = pending[index] ?? Pending()
-                    value.id += callObject["id"]?.stringValue ?? ""
+                    // An ID arrives once; some servers repeat it on every delta.
+                    if let id = callObject["id"]?.stringValue, !id.isEmpty, value.id.isEmpty {
+                        value.id = id
+                    }
                     if case .object(let function)? = callObject["function"] {
-                        value.name += function["name"]?.stringValue ?? ""
+                        // Names may stream in fragments ("trim" + "Clip"), but a
+                        // server that re-sends the whole name each delta must
+                        // not turn "trimClip" into "trimCliptrimClip".
+                        if let name = function["name"]?.stringValue, !name.isEmpty,
+                            name != value.name
+                        {
+                            value.name += name
+                        }
                         value.arguments += function["arguments"]?.stringValue ?? ""
                     }
                     pending[index] = value

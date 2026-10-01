@@ -83,6 +83,30 @@ struct PlanningTests {
         #expect(result.warnings == ["Document layout may change during PDF rendering."])
     }
 
+    @Test("A same-format conversion with options gets a real step, not an empty plan")
+    func sameFormatWithOptions() throws {
+        let options = ConversionOptions(video: VideoConversionOptions(resolution: .p720))
+        let result = try #require(
+            ConversionPlanner().plan(
+                from: ConversionFormats.mp4H264, to: ConversionFormats.mp4H264, options: options))
+        #expect(!result.steps.isEmpty)
+    }
+
+    @Test("A muted WebM export mutes before FFmpeg, which cannot mute itself")
+    func mutedWebMMutesFirst() throws {
+        let options = ConversionOptions(video: VideoConversionOptions(mute: true))
+        let result = try #require(
+            ConversionPlanner().plan(
+                from: ConversionFormats.movH264,
+                to: ConversionFormats.webMVP9,
+                options: options
+            )
+        )
+        #expect(result.steps.last?.backend == .ffmpeg)
+        #expect(result.steps.count >= 2)
+        #expect(result.steps.first?.backend != .ffmpeg)
+    }
+
     @Test("LaTeX to PDF uses the bundled Tectonic backend")
     func latexToPDF() throws {
         let result = try #require(

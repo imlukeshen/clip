@@ -53,11 +53,20 @@ public actor SearchEngine {
         let highlightTerms = parsed.terms + parsed.phrases
         var buckets: [AssetID: HitBucket] = [:]
         let bySource = Dictionary(grouping: rawMatches, by: \.source)
+        // Reciprocal rank fusion ranks assets, not spans: each source counts
+        // an asset once, at its best rank among the assets the filters allow.
+        // Scoring every span let a long recording that shows a word in a
+        // hundred frames outrank a file named exactly that word.
         for (source, sourceMatches) in bySource {
-            for (rank, match) in sourceMatches.sorted(by: matchOrdering).enumerated() {
+            var assetRank = 0
+            var ranked: Set<AssetID> = []
+            for match in sourceMatches.sorted(by: matchOrdering) {
                 guard allowed[match.assetID] != nil else { continue }
                 var bucket = buckets[match.assetID] ?? HitBucket()
-                bucket.score += sourceWeight(source) / Double(60 + rank + 1)
+                if ranked.insert(match.assetID).inserted {
+                    bucket.score += sourceWeight(source) / Double(60 + assetRank + 1)
+                    assetRank += 1
+                }
                 bucket.sources.insert(source)
                 if let start = match.start {
                     let moment = SearchMoment(
@@ -86,10 +95,16 @@ public actor SearchEngine {
                     limit: candidateLimit
                 )
             {
-                for (rank, match) in semanticMatches.enumerated() {
+                var assetRanks: [SearchHitSource: Int] = [:]
+                var ranked: Set<String> = []
+                for match in semanticMatches {
                     guard allowed[match.assetID] != nil else { continue }
                     var bucket = buckets[match.assetID] ?? HitBucket()
-                    bucket.score += sourceWeight(match.kind) * 0.85 / Double(60 + rank + 1)
+                    if ranked.insert("\(match.kind):\(match.assetID.rawValue)").inserted {
+                        let rank = assetRanks[match.kind, default: 0]
+                        bucket.score += sourceWeight(match.kind) * 0.85 / Double(60 + rank + 1)
+                        assetRanks[match.kind] = rank + 1
+                    }
                     bucket.sources.insert(match.kind)
                     if let start = match.start {
                         let moment = SearchMoment(

@@ -99,7 +99,7 @@ extension LibraryStore {
                     ftsTable: "text_fts",
                     source: .text,
                     pattern: pattern,
-                    literal: queryText,
+                    literals: (terms + phrases).filter { !$0.isEmpty },
                     script: script,
                     limit: limit
                 )
@@ -109,7 +109,7 @@ extension LibraryStore {
                     ftsTable: "ocr_fts",
                     source: .ocr,
                     pattern: pattern,
-                    literal: queryText,
+                    literals: (terms + phrases).filter { !$0.isEmpty },
                     script: script,
                     limit: limit
                 )
@@ -119,7 +119,7 @@ extension LibraryStore {
                     ftsTable: "transcript_fts",
                     source: .transcript,
                     pattern: pattern,
-                    literal: queryText,
+                    literals: (terms + phrases).filter { !$0.isEmpty },
                     script: script,
                     limit: limit
                 )
@@ -185,17 +185,20 @@ extension LibraryStore {
         ftsTable: String,
         source: SearchHitSource,
         pattern: String,
-        literal: String,
+        literals: [String],
         script: OCRScript,
         limit: Int
     ) throws -> [IndexedTextMatch] {
         if script == .cjk || script == .mixed {
-            if literal.unicodeScalars.count < 3 {
+            // Trigram FTS cannot match a word shorter than three characters,
+            // so "東京 tower" found nothing. Any short word means a substring
+            // search that requires every word instead.
+            if literals.contains(where: { $0.unicodeScalars.count < 3 }) {
                 return try likeMatches(
                     db,
                     table: table,
                     source: source,
-                    literal: literal,
+                    literals: literals,
                     limit: limit
                 )
             }
@@ -247,24 +250,32 @@ extension LibraryStore {
         _ db: Database,
         table: String,
         source: SearchHitSource,
-        literal: String,
+        literals: [String],
         limit: Int
     ) throws -> [IndexedTextMatch] {
-        let escaped =
-            literal
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "%", with: "\\%")
-            .replacingOccurrences(of: "_", with: "\\_")
+        guard !literals.isEmpty else { return [] }
+        let patterns = literals.map { literal -> String in
+            let escaped =
+                literal
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%")
+                .replacingOccurrences(of: "_", with: "\\_")
+            return "%\(escaped)%"
+        }
+        let conditions = Array(repeating: "text LIKE ? ESCAPE '\\'", count: patterns.count)
+            .joined(separator: " AND ")
+        var arguments = StatementArguments(patterns)
+        arguments += [limit]
         let rows = try Row.fetchAll(
             db,
             sql: """
                 SELECT asset_id, start_value, start_scale, end_value, end_scale, text
                 FROM \(table)
-                WHERE text LIKE ? ESCAPE '\\'
+                WHERE \(conditions)
                 ORDER BY id ASC
                 LIMIT ?
                 """,
-            arguments: ["%\(escaped)%", limit]
+            arguments: arguments
         )
         return rows.map { decodeMatch($0, source: source, rankFallback: -1) }
     }

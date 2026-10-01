@@ -117,19 +117,29 @@ public struct ZoomEffect: Codable, Sendable, Equatable {
         rampOut: RationalTime,
         easing: Easing
     ) -> Animatable<Value> {
-        var keyframes: [Keyframe<Value>] = []
+        // On a zoom shorter than its two ramps the default 0.42 s ramps would
+        // place keyframes before the start or at the same time twice, which
+        // makes the document invalid; each ramp gets at most half the range.
+        let half = range.duration.scaled(by: 0.5)
+        let rampIn = min(rampIn, half)
+        let rampOut = min(rampOut, half)
+        var animation = Animatable(constant: target)
         if rampIn > .zero {
-            keyframes.append(Keyframe(time: range.start, value: identity))
-            keyframes.append(Keyframe(time: range.start + rampIn, value: target, easing: easing))
+            animation.setKeyframe(Keyframe(time: range.start, value: identity))
+            animation.setKeyframe(
+                Keyframe(time: range.start + rampIn, value: target, easing: easing))
         } else {
-            keyframes.append(Keyframe(time: range.start, value: target))
+            animation.setKeyframe(Keyframe(time: range.start, value: target))
         }
         if rampOut > .zero {
-            keyframes.append(Keyframe(time: range.end - rampOut, value: target))
-            keyframes.append(Keyframe(time: range.end, value: identity, easing: easing))
+            // When the ramps meet, the ramp-in keyframe already holds the target.
+            if range.end - rampOut > range.start + rampIn {
+                animation.setKeyframe(Keyframe(time: range.end - rampOut, value: target))
+            }
+            animation.setKeyframe(Keyframe(time: range.end, value: identity, easing: easing))
         } else {
-            keyframes.append(Keyframe(time: range.end, value: target))
+            animation.setKeyframe(Keyframe(time: range.end, value: target))
         }
-        return Animatable(constant: target, keyframes: keyframes)
+        return animation
     }
 }

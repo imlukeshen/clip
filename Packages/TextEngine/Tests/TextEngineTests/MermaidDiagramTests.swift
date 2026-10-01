@@ -40,3 +40,47 @@ import Testing
         .html
     #expect(!plain.contains("mermaid.run("))
 }
+
+@Test func tildeAndLongerFencesCountEverywhereTheBlockParserCountsThem() {
+    let markdown = """
+        ~~~mermaid
+        flowchart LR
+          A --> B
+        ~~~
+
+        ````python
+        print("```")
+        ````
+        """
+    #expect(MermaidDiagram.diagrams(in: markdown).map(\.source) == ["flowchart LR\n  A --> B"])
+
+    let blocks = MarkdownEditingIntelligence.fencedCodeBlocks(in: markdown)
+    #expect(blocks.count == 2)
+    #expect(blocks.last?.language == .python)
+    // The inner ``` is code, not a closing fence.
+    let inner = (markdown as NSString).range(of: "print").location
+    #expect(MarkdownEditingIntelligence.isInsideFencedCode(location: inner, in: markdown))
+    let tildeBody = (markdown as NSString).range(of: "A --> B").location
+    #expect(MarkdownEditingIntelligence.isInsideFencedCode(location: tildeBody, in: markdown))
+}
+
+@Test func aFenceStillBeingTypedCountsAsCode() {
+    let markdown = "Intro\n```swift\nlet x = 1"
+    let end = (markdown as NSString).length
+    #expect(MarkdownEditingIntelligence.isInsideFencedCode(location: end, in: markdown))
+    #expect(!MarkdownEditingIntelligence.isInsideFencedCode(location: 2, in: markdown))
+    #expect(MermaidDiagram.diagrams(in: "```mermaid\nflowchart TD\n  A --> B").isEmpty)
+}
+
+@Test func inlineCodeWithBackticksIsNotAFence() {
+    let markdown = "``` `code` ```\n# Heading\n"
+    #expect(MarkdownEditingIntelligence.fencedCodeBlocks(in: markdown).isEmpty)
+    let document = MarkdownBlockDocumentEngine.reconcile(source: markdown)
+    #expect(!document.blocks.contains { if case .fencedCode = $0.kind { true } else { false } })
+    #expect(document.blocks.contains { $0.kind == .heading(level: 1) })
+}
+
+@Test func crlfDiagramsKeepTheirLastCharacter() {
+    let markdown = "```mermaid\r\ngraph TD\r\n  A-->B\r\n```\r\n"
+    #expect(MermaidDiagram.diagrams(in: markdown).map(\.source) == ["graph TD\r\n  A-->B"])
+}

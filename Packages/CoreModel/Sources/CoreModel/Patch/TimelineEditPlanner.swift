@@ -26,15 +26,23 @@ public enum TimelineEditPlanner {
             start: item.sourceRange.start,
             duration: sourceOffset
         )
+        // Away from 1x, rounding to whole ticks can make the left half end a
+        // tick past the requested cut. The right half starts where the left
+        // actually ends, and gives up a tick of source if it would otherwise
+        // run past the original end, so the halves never overlap.
+        let rightStart = item.timelineStart + sourceOffset.scaled(by: 1 / item.speed)
+        let rightSourceDuration = fittedSourceDuration(
+            item.sourceRange.duration - sourceOffset,
+            speed: item.speed,
+            startingAt: rightStart,
+            endingBy: item.timelineEnd
+        )
         let rightRange = TimeRange(
             start: item.sourceRange.start + sourceOffset,
-            duration: item.sourceRange.duration - sourceOffset
+            duration: rightSourceDuration
         )
         let leftWindow = TimeRange(start: .zero, duration: sourceOffset)
-        let rightWindow = TimeRange(
-            start: sourceOffset,
-            duration: item.sourceRange.duration - sourceOffset
-        )
+        let rightWindow = TimeRange(start: sourceOffset, duration: rightSourceDuration)
         let leftEffects = item.effects.compactMap { sliced($0, to: leftWindow, shiftingBy: .zero) }
         let rightEffects = item.effects.compactMap {
             sliced($0, to: rightWindow, shiftingBy: sourceOffset)
@@ -45,13 +53,15 @@ public enum TimelineEditPlanner {
         leftItem.effects = leftEffects
         leftItem.videoFade.fadeOut = .zero
         leftItem.audioFade.fadeOut = .zero
+        leftItem = leftItem.retimingAnimations(from: item)
         var rightItem = item
         rightItem.id = rightItemID
         rightItem.sourceRange = rightRange
         rightItem.effects = rightEffects
-        rightItem.timelineStart = timelineTime
+        rightItem.timelineStart = rightStart
         rightItem.videoFade.fadeIn = .zero
         rightItem.audioFade.fadeIn = .zero
+        rightItem = rightItem.retimingAnimations(from: item)
 
         var items = location.track.items
         items[location.index] = leftItem
@@ -63,7 +73,8 @@ public enum TimelineEditPlanner {
         in document: ProjectDocument,
         itemID: ItemID,
         to requestedRange: TimeRange,
-        assetDuration: RationalTime
+        assetDuration: RationalTime,
+        minimumDuration: RationalTime = RationalTime(seconds: 0.1)
     ) throws -> GraphPatch {
         let location = try itemLocation(in: document, itemID: itemID)
         let item = location.track.items[location.index]
@@ -76,6 +87,11 @@ public enum TimelineEditPlanner {
         }
         let assetRange = TimeRange(start: .zero, duration: assetDuration)
         let range = requestedRange.clamped(to: assetRange)
+        // A range outside the asset clamps to nothing; an empty clip would be
+        // invisible and impossible to select.
+        guard range.duration.scaled(by: 1 / item.speed) >= minimumDuration else {
+            throw ModelError.invalidEdit("Trim would make the clip too short.")
+        }
         var items = location.track.items
         let previousDuration = item.timelineDuration
         items[location.index] = trimming(item, to: range)
@@ -189,16 +205,24 @@ public enum TimelineEditPlanner {
             duration: leftTimelineDuration.scaled(by: left.speed)
         )
         let rightSourceDelta = delta.scaled(by: right.speed)
+        let adjustedLeft = trimming(left, to: leftRange)
         let rightRange = TimeRange(
             start: right.sourceRange.start + rightSourceDelta,
-            duration: rightTimelineDuration.scaled(by: right.speed)
+            duration: fittedSourceDuration(
+                rightTimelineDuration.scaled(by: right.speed),
+                speed: right.speed,
+                startingAt: adjustedLeft.timelineEnd,
+                endingBy: right.timelineEnd
+            )
         )
         try validateSourceRange(leftRange, for: left, assetDurations: assetDurations)
         try validateSourceRange(rightRange, for: right, assetDurations: assetDurations)
 
-        items[location.index] = trimming(left, to: leftRange)
+        items[location.index] = adjustedLeft
         var adjustedRight = trimming(right, to: rightRange)
-        adjustedRight.timelineStart = left.timelineStart + leftTimelineDuration
+        // Where the left clip really ends after tick rounding, not where the
+        // requested duration said it would.
+        adjustedRight.timelineStart = adjustedLeft.timelineEnd
         items[location.index + 1] = adjustedRight
         return replacementPatch(trackID: location.track.id, items: items, label: "Roll Edit")
     }
@@ -256,15 +280,23 @@ public enum TimelineEditPlanner {
             duration: leftDuration.scaled(by: left.speed)
         )
         let rightDelta = delta.scaled(by: right.speed)
+        let adjustedLeft = trimming(left, to: leftRange)
+        let selectedStart = adjustedLeft.timelineEnd
         let rightRange = TimeRange(
             start: right.sourceRange.start + rightDelta,
-            duration: rightDuration.scaled(by: right.speed)
+            duration: fittedSourceDuration(
+                rightDuration.scaled(by: right.speed),
+                speed: right.speed,
+                startingAt: selectedStart + selected.timelineDuration,
+                endingBy: right.timelineEnd
+            )
         )
         try validateSourceRange(leftRange, for: left, assetDurations: assetDurations)
         try validateSourceRange(rightRange, for: right, assetDurations: assetDurations)
 
-        items[location.index - 1] = trimming(left, to: leftRange)
-        selected.timelineStart = selected.timelineStart + delta
+        items[location.index - 1] = adjustedLeft
+        // Placed after the left clip's rounded end so the three stay gapless.
+        selected.timelineStart = selectedStart
         items[location.index] = selected
         var adjustedRight = trimming(right, to: rightRange)
         adjustedRight.timelineStart = selected.timelineEnd
@@ -367,6 +399,9 @@ public enum TimelineEditPlanner {
                 items[index].blendMode = source.blendMode
                 items[index].videoFade = source.videoFade
                 items[index].audioFade = source.audioFade
+                // Same local times, limited to this clip's length, so pasting
+                // from a longer clip no longer rejects the whole paste.
+                items[index] = items[index].retimingAnimations(from: items[index])
                 changed = true
             }
             if changed { operations.append(.setTrackItems(track.id, items)) }
@@ -605,7 +640,27 @@ extension TimelineEditPlanner {
         }
     }
 
+    /// `sourceDuration`, shortened by at most a few ticks so that a clip at
+    /// `speed` starting at `start` ends no later than `end`. Converting
+    /// between source and timeline time rounds to whole ticks, which away
+    /// from 1x can otherwise push a clip a tick into its neighbour.
+    fileprivate static func fittedSourceDuration(
+        _ sourceDuration: RationalTime,
+        speed: Double,
+        startingAt start: RationalTime,
+        endingBy end: RationalTime
+    ) -> RationalTime {
+        var duration = sourceDuration
+        var attempts = 0
+        while start + duration.scaled(by: 1 / speed) > end, duration > .zero, attempts < 8 {
+            duration = duration - RationalTime(value: 1)
+            attempts += 1
+        }
+        return duration
+    }
+
     fileprivate static func trimming(_ item: TimelineItem, to range: TimeRange) -> TimelineItem {
+        let original = item
         var item = item
         let retained = TimeRange(
             start: range.start - item.sourceRange.start,
@@ -615,11 +670,7 @@ extension TimelineEditPlanner {
             sliced($0, to: retained, shiftingBy: retained.start)
         }
         item.sourceRange = range
-        item.videoFade.fadeIn = min(item.videoFade.fadeIn, item.timelineDuration)
-        item.videoFade.fadeOut = min(item.videoFade.fadeOut, item.timelineDuration)
-        item.audioFade.fadeIn = min(item.audioFade.fadeIn, item.timelineDuration)
-        item.audioFade.fadeOut = min(item.audioFade.fadeOut, item.timelineDuration)
-        return item
+        return item.retimingAnimations(from: original)
     }
 
     fileprivate static func rippledCaption(
@@ -656,6 +707,6 @@ extension TimelineEditPlanner {
                 start: intersection.start - offset,
                 duration: intersection.duration
             )
-        )
+        ).shiftingAnimations(by: offset, within: window.duration)
     }
 }

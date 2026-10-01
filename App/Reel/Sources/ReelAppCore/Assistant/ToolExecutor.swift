@@ -167,13 +167,24 @@ public struct ToolExecutor: Sendable {
         guard let command = CommandRegistry.command(named: invocation.name) else {
             throw ToolExecutorError.unknownTool(invocation.name)
         }
+        // Model output is untrusted: a number like 1e20 would overflow when
+        // turned into a timestamp and crash the app. No real argument is
+        // anywhere near this bound, which keeps any seconds value safely
+        // inside RationalTime's 90 kHz Int64 range.
+        guard Self.numbersAreInRange(invocation.arguments) else {
+            throw ToolExecutorError.invalidArguments(
+                "A number in the arguments is out of range.")
+        }
         let schema = command.schema
         let executesTextSideEffect = [
             "text.create", "text.setLanguage", "text.format", "tex.compile", "text.export",
         ].contains(invocation.name)
+        // PDF and photo tools change their document as soon as they run, with
+        // no patch to hold back, so the policy has to be checked before them.
+        let executesWorkspaceSideEffect = command.category == .pdf || command.category == .image
         let needsUpfrontConfirmation =
             schema.kind == .confirm
-            || (executesTextSideEffect
+            || ((executesTextSideEffect || executesWorkspaceSideEffect)
                 && policy.requiresConfirmation(
                     for: schema.kind,
                     isDestructive: command.isDestructive
@@ -796,6 +807,15 @@ public struct ToolExecutor: Sendable {
                     isDestructive: command.isDestructive
                 )
         )
+    }
+
+    private static func numbersAreInRange(_ value: JSONValue) -> Bool {
+        switch value {
+        case .number(let number): number.isFinite && abs(number) <= 1e12
+        case .array(let values): values.allSatisfy(numbersAreInRange)
+        case .object(let fields): fields.values.allSatisfy(numbersAreInRange)
+        case .null, .bool, .string: true
+        }
     }
 
     private func audibleRanges(

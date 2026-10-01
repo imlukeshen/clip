@@ -23,6 +23,12 @@ struct KeywordSearchTests {
         #expect(parsed.filters.minimumDuration == RationalTime(seconds: 60))
         #expect(parsed.filters.hasAudio == true)
         #expect(parsed.filters.after != nil)
+        // A typed day is the searcher's own day, starting at local midnight.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        #expect(
+            parsed.filters.after
+                == calendar.date(from: DateComponents(year: 2026, month: 7, day: 1)))
     }
 
     @Test("Queries over 512 characters are refused")
@@ -78,6 +84,53 @@ struct KeywordSearchTests {
         #expect(transcript.hits.first?.moments.first?.start == RationalTime(seconds: 45))
     }
 
+    @Test("Many matching frames in one recording do not outweigh matching in more sources")
+    func fusionRanksAssetsNotSpans() async throws {
+        let fixture = try await SearchFixture(count: 2)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let frames = fixture.assets[0]
+        let both = fixture.assets[1]
+        try await fixture.store.replaceOCRSpans(
+            (0..<40).map { second in
+                OCRSpan(
+                    assetID: frames.id,
+                    start: RationalTime(seconds: Double(second)),
+                    end: RationalTime(seconds: Double(second) + 1),
+                    text: "invoice \(second)",
+                    boundingBox: NormalizedRect(x: 0.1, y: 0.2, width: 0.4, height: 0.1),
+                    confidence: 0.9,
+                    revision: 3,
+                    script: .alphabetic
+                )
+            },
+            for: frames.id
+        )
+        try await fixture.store.replaceOCRSpans(
+            [
+                OCRSpan(
+                    assetID: both.id, start: .zero, end: RationalTime(seconds: 1),
+                    text: "invoice", boundingBox: NormalizedRect(x: 0, y: 0, width: 1, height: 1),
+                    confidence: 0.9, revision: 3, script: .alphabetic)
+            ],
+            for: both.id
+        )
+        try await fixture.store.replaceTranscriptSpans(
+            [
+                TranscriptSpan(
+                    assetID: both.id, start: .zero, end: RationalTime(seconds: 2),
+                    text: "send the invoice", script: .alphabetic)
+            ],
+            for: both.id
+        )
+
+        let response = try await SearchEngine(store: fixture.store).search(
+            SearchQuery(text: "invoice", mode: .keyword))
+
+        #expect(response.hits.first?.assetID == both.id)
+        // Every matching frame is still offered as a moment.
+        #expect(response.hits.first { $0.assetID == frames.id }?.moments.count == 40)
+    }
+
     @Test("FTS punctuation is literal and two-character CJK falls back safely")
     func punctuationAndShortCJK() async throws {
         let fixture = try await SearchFixture(count: 2)
@@ -100,6 +153,11 @@ struct KeywordSearchTests {
 
         #expect(try await engine.search(SearchQuery(text: "C++")).hits.first?.assetID == asset.id)
         #expect(try await engine.search(SearchQuery(text: "請求")).hits.first?.assetID == asset.id)
+        // A short CJK word beside a Latin one needs every word, not a trigram
+        // match of the whole query.
+        let mixed = try await engine.search(SearchQuery(text: "請求 C++", mode: .keyword))
+        #expect(mixed.hits.first?.assetID == asset.id)
+        #expect(mixed.hits.first?.sources.contains(.ocr) == true)
     }
 
     @Test("Markdown content is indexed directly and returned as the strongest source")

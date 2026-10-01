@@ -101,6 +101,10 @@ private struct MathExpression {
     let token: String
     let tex: String
     let isDisplay: Bool
+    /// The token plus its line padding, and the source it replaced, so code
+    /// that swift-markdown parses as code gets its original text back.
+    let replacement: String
+    let original: String
 }
 
 private struct FootnoteReference {
@@ -165,12 +169,23 @@ private struct MarkdownPreprocessor {
     ) {
         var lines = source.components(separatedBy: "\n")
         var definitions: [FootnoteDefinition] = []
+        // A definition-shaped line inside fenced code is code, not a footnote.
+        let fences = MarkdownFenceScanner.fences(in: source).map(\.range)
+        var lineStarts: [Int] = []
+        var offset = 0
+        for line in lines {
+            lineStarts.append(offset)
+            offset += (line as NSString).length + 1
+        }
+        func isFenced(_ index: Int) -> Bool {
+            fences.contains { NSLocationInRange(lineStarts[index], $0) }
+        }
         let pattern = try? NSRegularExpression(pattern: #"^[ \t]{0,3}\[\^([^\]]+)\]:[ \t]*(.*)$"#)
         var index = 0
         while index < lines.count {
             let line = lines[index]
             let range = NSRange(location: 0, length: (line as NSString).length)
-            guard let match = pattern?.firstMatch(in: line, range: range),
+            guard !isFenced(index), let match = pattern?.firstMatch(in: line, range: range),
                 let labelRange = Range(match.range(at: 1), in: line),
                 let contentRange = Range(match.range(at: 2), in: line)
             else {
@@ -222,7 +237,10 @@ private struct MarkdownPreprocessor {
         let pattern =
             display
             ? #"(?s)(?<!\\)\$\$(.+?)(?<!\\)\$\$"#
-            : #"(?<![\\$])\$([^$\n]+?)(?<!\\)\$(?!\$)"#
+            // Pandoc's rule, so prices are not math: no space just inside
+            // either dollar, and the closing one not followed by a digit.
+            // "$x^2$" is math; "costs $5 and $10" is not.
+            : #"(?<![\\$])\$(?=[^\s$])([^$\n]*?[^\s$\\])\$(?![\d$])"#
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return source }
         let protected = protectedCodeRanges(in: source)
         let matches = expression.matches(
@@ -238,9 +256,12 @@ private struct MarkdownPreprocessor {
             guard !tex.isEmpty else { continue }
             let token = "CLIPMATH\(display ? "BLOCK" : "INLINE")\(expressions.count)TOKEN"
             let newlineCount = result[fullRange].filter { $0 == "\n" }.count
-            expressions.append(MathExpression(token: token, tex: tex, isDisplay: display))
-            result.replaceSubrange(
-                fullRange, with: token + String(repeating: "\n", count: newlineCount))
+            let replacement = token + String(repeating: "\n", count: newlineCount)
+            expressions.append(
+                MathExpression(
+                    token: token, tex: tex, isDisplay: display,
+                    replacement: replacement, original: String(result[fullRange])))
+            result.replaceSubrange(fullRange, with: replacement)
         }
         return result
     }
@@ -299,18 +320,39 @@ private struct SafeMarkdownFormatter: MarkupWalker {
         result += "</blockquote>\n"
     }
 
+    /// Puts back the source that preprocessing swapped for math and footnote
+    /// tokens. Preprocessing can only skip code it recognises by pattern;
+    /// indented code, and code inside lists or quotes, is found by the parser,
+    /// so any token that lands in code is undone here.
+    private func restoringSourceTokens(_ value: String) -> String {
+        guard value.contains("CLIP") else { return value }
+        var restored = value
+        for expression in math.reversed() {
+            restored = restored.replacingOccurrences(
+                of: expression.replacement, with: expression.original)
+            restored = restored.replacingOccurrences(
+                of: expression.token, with: expression.original)
+        }
+        for reference in footnoteReferences {
+            restored = restored.replacingOccurrences(
+                of: reference.token, with: "[^\(reference.label)]")
+        }
+        return restored
+    }
+
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) {
         let language = codeBlock.language?.lowercased() ?? ""
+        let code = restoringSourceTokens(codeBlock.code)
         if language == "mermaid" {
             // Mermaid reads the element's text, so the definition stays escaped
             // source rather than highlighted markup.
-            result += #"<pre class="mermaid">"# + htmlText(codeBlock.code) + "</pre>\n"
+            result += #"<pre class="mermaid">"# + htmlText(code) + "</pre>\n"
             return
         }
         let languageClass =
             language.isEmpty ? "" : #" class="language-\#(htmlAttribute(language))""#
         result += "<pre><code\(languageClass)>"
-        result += FencedCodeHighlighter.render(codeBlock.code, language: language)
+        result += FencedCodeHighlighter.render(code, language: language)
         result += "</code></pre>\n"
     }
 
@@ -367,7 +409,7 @@ private struct SafeMarkdownFormatter: MarkupWalker {
     }
 
     mutating func visitInlineCode(_ inlineCode: InlineCode) {
-        result += "<code>\(htmlText(inlineCode.code))</code>"
+        result += "<code>\(htmlText(restoringSourceTokens(inlineCode.code)))</code>"
     }
 
     mutating func visitCustomInline(_ customInline: CustomInline) {}

@@ -137,6 +137,22 @@ enum AdaptiveGIFEncoder {
         let frameInterval = 1 / profile.framesPerSecond
         var nextFrameTime = 0.0
         var encodedCount = 0
+        // Each frame is held until the next is chosen so its delay can be the
+        // real gap between them. Screen recordings are variable-frame-rate: a
+        // fixed delay collapsed every pause and played the GIF too fast.
+        var pending: (image: CGImage, time: Double)?
+        func emit(_ frame: (image: CGImage, time: Double), until end: Double) {
+            CGImageDestinationAddImage(
+                destination,
+                frame.image,
+                [
+                    kCGImagePropertyGIFDictionary: [
+                        kCGImagePropertyGIFDelayTime: max(end - frame.time, 0.02)
+                    ]
+                ] as CFDictionary
+            )
+            encodedCount += 1
+        }
         while let sample = trackOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds
@@ -158,19 +174,12 @@ enum AdaptiveGIFEncoder {
             guard let image = context.createCGImage(transformed, from: transformed.extent) else {
                 throw ConversionError.conversionFailed("GIF frame rendering failed")
             }
-            CGImageDestinationAddImage(
-                destination,
-                image,
-                [
-                    kCGImagePropertyGIFDictionary: [
-                        kCGImagePropertyGIFDelayTime: frameInterval
-                    ]
-                ] as CFDictionary
-            )
-            encodedCount += 1
-            nextFrameTime += frameInterval
+            if let previous = pending { emit(previous, until: time) }
+            pending = (image, time)
+            nextFrameTime = max(nextFrameTime + frameInterval, time + frameInterval)
             progress(min(time / duration, 0.99))
         }
+        if let last = pending { emit(last, until: max(duration, last.time + frameInterval)) }
         guard reader.status == .completed else {
             throw ConversionError.conversionFailed(
                 reader.error?.localizedDescription ?? "Video decode failed"

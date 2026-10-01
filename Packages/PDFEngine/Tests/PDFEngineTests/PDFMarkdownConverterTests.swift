@@ -59,6 +59,41 @@ struct PDFMarkdownConverterTests {
         #expect(markdown.contains("<!-- Page 2 -->"))
     }
 
+    @Test("A redacted page never falls back to its unfiltered OCR or raw text")
+    func redactedPageDoesNotLeakFallbackText() throws {
+        // Every glyph is under the redaction, and the page also carries OCR
+        // text: neither may reach the Markdown.
+        let page = PDFPage(
+            sourcePageIndex: 0,
+            size: PDFPageSize(width: 612, height: 792),
+            layers: [
+                .redaction(PDFRedactionLayer(regions: [CGRect(x: 0, y: 0, width: 1, height: 1)])),
+                .text(
+                    PDFTextLayer(
+                        text: "Hidden note",
+                        frame: CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.05),
+                        fontSize: 12
+                    )),
+            ],
+            ocrText: "SSN 123-45-6789"
+        )
+        let document = try PDFEditDocument(
+            sourceAssetID: AssetID(rawValue: "redacted"),
+            title: "Redacted",
+            pages: [page]
+        )
+        let analysis = PDFPageAnalysis(
+            text: "SSN 123-45-6789",
+            glyphs: positionedText("SSN 123-45-6789", x: 0.1, y: 0.4, size: 12),
+            fonts: []
+        )
+
+        let markdown = PDFMarkdownConverter.convert(document, analyses: [analysis])
+
+        #expect(!markdown.contains("123-45-6789"))
+        #expect(!markdown.contains("Hidden note"))
+    }
+
     @Test("Vision recognizes text from an in-memory page without network access")
     func onDeviceOCR() async throws {
         let result = try await OnDevicePDFOCR().recognize(try textImage("LOCAL OCR"))

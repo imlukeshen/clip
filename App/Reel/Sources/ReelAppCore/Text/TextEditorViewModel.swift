@@ -153,10 +153,15 @@ public final class TextEditorViewModel {
     private var sourceURLs: [FileID: URL]
     private var projectFileURLs: [String: URL]
     private var textBuffers: [FileID: String]
-    /// What each file held on disk the last few times this editor loaded or
-    /// wrote it. A file watcher that reads one of these back is seeing clipx's
-    /// own earlier state — after a rename, say — not another app's edit.
+    /// For each file: what this editor last confirmed on disk (by loading or
+    /// a finished write), followed by writes still in flight. A watcher that
+    /// reads one of these back is seeing clipx's own state — after a rename,
+    /// or mid-save — not another app's edit. Older versions are dropped once a
+    /// newer write lands, so a deliberate revert to one is still noticed.
     private var knownDiskContents: [FileID: [String]] = [:]
+    /// The latest write per file. Each new write waits for the one before, so
+    /// saves land in the order they were made and an older one never wins.
+    private var writeChains: [FileID: Task<Void, Never>] = [:]
     private var dirtyFileIDs: Set<FileID> = []
 
     /// Told when detection settles a library file's language. The editor never
@@ -600,6 +605,11 @@ public final class TextEditorViewModel {
                 throw TextEditorCommandError.fileNotFound(file)
             }
             selectFile(target.id)
+            // selectFile declines while a conflict or detached buffer needs
+            // attention; editing anyway would change whichever file is open.
+            guard activeFileID == target.id else {
+                throw TextEditorCommandError.fileNotFound(file)
+            }
         }
         var updated = request.contents ?? text
         let edits = request.edits.sorted {
@@ -620,9 +630,17 @@ public final class TextEditorViewModel {
             guard edit.endLine < priorStart else {
                 throw TextEditorCommandError.overlappingLineEdits
             }
-            updated = (updated as NSString).replacingCharacters(
+            // Appending past a last line that has no line break would glue the
+            // new text onto it; start it on its own line instead.
+            let source = updated as NSString
+            let appendsAfterUnterminatedLine =
+                range.location == source.length && source.length > 0
+                && !(updated.last?.isNewline ?? true) && !edit.replacement.isEmpty
+            updated = source.replacingCharacters(
                 in: range,
-                with: edit.replacement
+                with: appendsAfterUnterminatedLine
+                    ? Self.lineBreak(for: activeFile?.lineEnding) + edit.replacement
+                    : edit.replacement
             )
             priorStart = edit.startLine
         }
@@ -680,7 +698,14 @@ public final class TextEditorViewModel {
         for file in document.files where relevantFiles.contains(file.relativePath) && remaining > 0
         {
             guard let source = textBuffers[file.id] else { continue }
-            let lines = source.components(separatedBy: .newlines)
+            // Split the way lineRange counts: "\r\n" is one line break.
+            // components(separatedBy: .newlines) split it twice, so a CRLF
+            // file's numbers doubled and edits by line hit the wrong lines.
+            var lines: [String] = []
+            source.enumerateLines { line, _ in lines.append(line) }
+            if source.hasSuffix("\n") || source.hasSuffix("\r") || source.isEmpty {
+                lines.append("")
+            }
             let selected = lines.prefix(remaining)
             rows.append("Source \(file.relativePath):")
             rows += selected.enumerated().map { offset, line in "\(offset + 1) │ \(line)" }
@@ -1146,7 +1171,10 @@ public final class TextEditorViewModel {
             }.value
             guard !Task.isCancelled, let self else { return }
             if text == original, cleaned != original {
-                text = cleaned
+                // Undoable like any other edit: changing the text without telling
+                // the undo stack left NSTextView's typing entries pointing at
+                // ranges that no longer exist, so the next Cmd-Z corrupted text.
+                replaceContentsForCommand(cleaned, actionName: "Trim Trailing Whitespace")
                 contentTask?.cancel()
             }
             writeContents()
@@ -1346,6 +1374,17 @@ public final class TextEditorViewModel {
         }
     }
 
+    /// Writes every unsaved buffer and waits until each is on disk, so quitting
+    /// right after typing does not lose the last edits.
+    public func flushPendingWrites() async {
+        // Let a save's whitespace cleanup finish first; it starts the write.
+        await cleanupTask?.value
+        contentTask?.cancel()
+        flushContentAutosave()
+        for write in writeChains.values { await write.value }
+        await structureTask?.value
+    }
+
     private func flushContentAutosave() {
         for fileID in dirtyFileIDs {
             guard let value = textBuffers[fileID] else { continue }
@@ -1376,33 +1415,42 @@ public final class TextEditorViewModel {
         dirtyFileIDs.remove(fileID)
         // Recorded before the write so a watcher that fires mid-save, while the
         // buffer is already ahead again, still recognises the bytes as ours.
-        recordDiskContents(value, for: fileID)
+        beginDiskWrite(value, for: fileID)
         let hashData = hashData
         let persistContents = persistContents
-        Task { [weak self] in
+        let previousWrite = writeChains[fileID]
+        writeChains[fileID] = Task { [weak self] in
+            await previousWrite?.value
             let payload = await Task.detached(priority: .utility) {
+                // No UTF-8 fallback: writing UTF-8 into a file still marked
+                // Latin-1 (say) permanently garbles its existing accents.
                 guard
                     let data =
                         TextFileEncoder.encode(
                             value,
                             using: textEncoding,
                             byteOrderMark: byteOrderMark
-                        ) ?? value.data(using: encoding) ?? value.data(using: .utf8)
+                        ) ?? value.data(using: encoding)
                 else {
                     return Optional<(Data, String)>.none
                 }
                 return (data, hashData(data))
             }.value
             guard let (data, hash) = payload else {
+                self?.knownDiskContents[fileID]?.removeAll { $0 == value }
                 self?.dirtyFileIDs.insert(fileID)
                 if self?.activeFileID == fileID { self?.isDirty = true }
-                self?.notice = "This text could not be encoded for saving."
+                self?.notice =
+                    "This text has characters the file's encoding cannot store. "
+                    + "Change the encoding to UTF-8 to save it."
                 return
             }
             do {
                 try await persistContents(fileID, data, hash)
+                self?.confirmDiskWrite(value, for: fileID)
             } catch {
                 await MainActor.run {
+                    self?.knownDiskContents[fileID]?.removeAll { $0 == value }
                     self?.dirtyFileIDs.insert(fileID)
                     if self?.activeFileID == fileID { self?.isDirty = true }
                     self?.notice = "The file could not be saved."
@@ -1411,13 +1459,25 @@ public final class TextEditorViewModel {
         }
     }
 
-    private func recordDiskContents(_ value: String, for fileID: FileID) {
+    private func beginDiskWrite(_ value: String, for fileID: FileID) {
         var known = knownDiskContents[fileID] ?? []
-        known.removeAll { $0 == value }
-        known.append(value)
-        // A few entries cover a load plus saves still in flight; strings share
-        // storage with the buffer, so this holds no extra copies.
-        knownDiskContents[fileID] = Array(known.suffix(3))
+        if known.last != value { known.append(value) }
+        knownDiskContents[fileID] = known
+    }
+
+    /// A write landed: it is now what the disk holds, and anything recorded
+    /// before it can no longer be clipx's own state.
+    private func confirmDiskWrite(_ value: String, for fileID: FileID) {
+        guard var known = knownDiskContents[fileID],
+            let index = known.firstIndex(of: value)
+        else { return }
+        known.removeFirst(index)
+        knownDiskContents[fileID] = known
+    }
+
+    /// The disk now holds exactly `value`, read or written outside a save.
+    private func resetDiskContents(_ value: String, for fileID: FileID) {
+        knownDiskContents[fileID] = [value]
     }
 
     private func persistStructureNow() {
@@ -1487,7 +1547,7 @@ public final class TextEditorViewModel {
         text = contents.text
         textBuffers[activeFileID] = contents.text
         isApplyingExternalText = false
-        recordDiskContents(contents.text, for: activeFileID)
+        resetDiskContents(contents.text, for: activeFileID)
         isDirty = false
         dirtyFileIDs.remove(activeFileID)
         hasSavedDetachedCopy = false
@@ -1566,6 +1626,14 @@ public final class TextEditorViewModel {
         }
         undoManager.setActionName(actionName)
         text = value
+    }
+
+    private static func lineBreak(for ending: LineEnding?) -> String {
+        switch ending {
+        case .crlf: "\r\n"
+        case .cr: "\r"
+        case .lf, .mixed, nil: "\n"
+        }
     }
 
     private static func lineRange(

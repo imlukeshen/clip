@@ -289,6 +289,119 @@ struct TextEditorViewModelTests {
         #expect(editor.hasExternalConflict)
     }
 
+    @Test("Undo after a save that trims whitespace restores the exact text")
+    func saveTrimIsUndoable() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "a.py", language: .python)
+        let editor = try makeEditor(file: file, text: "")
+        editor.text = "x = 1   \ny = 2"
+        editor.saveNow()
+        for _ in 0..<200 where editor.text != "x = 1\ny = 2" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(editor.text == "x = 1\ny = 2")
+        editor.undo()
+        #expect(editor.text == "x = 1   \ny = 2")
+    }
+
+    @Test("Appending after a last line with no line break starts a new line")
+    func appendStartsOwnLine() throws {
+        let file = TextFile(
+            id: FileID(rawValue: "main"), relativePath: "a.txt", lineEnding: .crlf)
+        let editor = try makeEditor(file: file, text: "a\r\nb")
+        try editor.applyToolFormat(
+            TextToolFormatRequest(edits: [
+                TextToolLineEdit(startLine: 3, endLine: 3, replacement: "c")
+            ])
+        )
+        #expect(editor.text == "a\r\nb\r\nc")
+    }
+
+    @Test("Line numbers shown to the assistant count CRLF as one line break")
+    func crlfLineNumbersMatchEdits() throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "a.txt", lineEnding: .crlf)
+        let editor = try makeEditor(file: file, text: "one\r\ntwo\r\nthree")
+        let report = editor.toolDiagnosticReport()
+        #expect(report.contains("2 │ two"))
+        #expect(report.contains("3 │ three"))
+    }
+
+    @Test("Flushing saves unsaved typing right away and in order")
+    func flushSavesInOrder() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
+        let writes = WriteLog()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { data, _ in
+                // The first write is slow; it must still land first.
+                if String(decoding: data, as: UTF8.self) == "first" {
+                    try await Task.sleep(for: .milliseconds(80))
+                }
+                await writes.append(String(decoding: data, as: UTF8.self))
+            }
+        )
+        editor.text = "first"
+        await editor.flushPendingWrites()
+        editor.text = "second"
+        await editor.flushPendingWrites()
+
+        #expect(await writes.values == ["first", "second"])
+        #expect(!editor.isDirty)
+    }
+
+    @Test("Text the file's encoding cannot hold is not saved as UTF-8 behind its back")
+    func unencodableTextIsRefused() async throws {
+        let file = TextFile(
+            id: FileID(rawValue: "main"), relativePath: "Legacy.txt", encoding: .isoLatin1)
+        let writes = WriteLog()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "café",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { data, _ in
+                await writes.append(String(decoding: data, as: UTF8.self))
+            }
+        )
+        editor.text = "café 😀"
+        await editor.flushPendingWrites()
+
+        #expect(await writes.values.isEmpty)
+        #expect(editor.isDirty)
+        #expect(editor.notice?.contains("encoding") == true)
+    }
+
+    @Test("A deliberate revert to an older saved version is still noticed")
+    func revertToOlderVersionIsNoticed() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
+        let saves = SaveCounter()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "v1",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in await saves.increment() }
+        )
+        editor.text = "v2"
+        editor.saveNow()
+        for _ in 0..<300 where await saves.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(30))
+
+        // v2 is confirmed on disk; the user then restores v1 with git.
+        editor.receiveExternalContents(
+            LoadedTextFile(text: "v1", encoding: .utf8, lineEnding: .lf)
+        )
+        #expect(editor.text == "v1")
+        #expect(!editor.hasExternalConflict)
+    }
+
     @Test("Clean external edits reload while dirty edits require a choice")
     func handlesExternalChangesWithoutDiscardingLocalEdits() throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
@@ -1657,4 +1770,14 @@ private final class UndoBackedTextView: NSTextView {
     override var undoManager: UndoManager? {
         providedUndoManager ?? super.undoManager
     }
+}
+
+private actor SaveCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
+}
+
+private actor WriteLog {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
 }

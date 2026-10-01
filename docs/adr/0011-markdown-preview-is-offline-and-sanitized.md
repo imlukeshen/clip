@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-03
+- Implementation status (2026-10-01): the renderer, sanitization, and CSP
+  ship and power HTML export and Copy as HTML. The in-app `WKWebView` preview
+  and its `clip-local:` scheme handler were not built; the editor instead
+  styles Markdown live and renders Mermaid diagrams inline.
 
 ## Context
 

@@ -65,6 +65,32 @@ struct PDFiumDocumentTests {
         #expect(document.pages.map(\.sourcePageIndex) == [0, 1])
     }
 
+    @Test("A redaction stays over its text when the page is rotated")
+    func redactionFollowsRotation() throws {
+        let source = try PDFiumDocument(data: fixturePDF())
+        let block = try #require(
+            source.analyzePage(at: 0).textBlocks.first { $0.text.contains("Hello PDFium") }
+        )
+        var document = try source.makeEditDocument(
+            sourceAssetID: AssetID(rawValue: "rotated-redaction"),
+            title: "Rotated"
+        )
+        var page = document.pages[0]
+        // Redact by the text's own bounds, as search does, then rotate.
+        page.layers = [.redaction(PDFRedactionLayer(regions: [block.bounds]))]
+        page.rotation = .degrees90
+        _ = try document.apply(.updatePage(page))
+
+        let image = try PDFDocumentRenderer(source: source).render(
+            document, pageID: page.id, maxPixelDimension: 640)
+        let shown = page.rotation.displayRect(for: block.bounds)
+        let center = CGPoint(
+            x: shown.midX * Double(image.width),
+            y: shown.midY * Double(image.height)
+        )
+        #expect(try pixel(image, at: center) == [0, 0, 0])
+    }
+
     @Test("Direct text edits stay selectable in a vector-preserving export")
     func directTextExport() throws {
         let source = try PDFiumDocument(data: fixturePDF())
@@ -430,6 +456,27 @@ struct PDFiumDocumentTests {
 
         let after = try darkPixelCount(renderer.render(document, pageID: pageID))
         #expect(after > before, "oversized text vanished: before=\(before) after=\(after)")
+    }
+
+    /// RGB at a top-left-origin point of `image`.
+    private func pixel(_ image: CGImage, at point: CGPoint) throws -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 4)
+        let context = try #require(
+            CGContext(
+                data: &bytes, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+        context.draw(
+            image,
+            in: CGRect(
+                x: -point.x.rounded(.down),
+                y: -(Double(image.height) - 1 - point.y.rounded(.down)),
+                width: Double(image.width),
+                height: Double(image.height)
+            )
+        )
+        return Array(bytes[0..<3])
     }
 
     private func fixturePDF() throws -> Data {

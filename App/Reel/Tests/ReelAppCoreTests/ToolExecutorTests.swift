@@ -9,6 +9,69 @@ import Testing
 
 @Suite("Assistant tool execution")
 struct ToolExecutorTests {
+    @Test("An invented tool fails on its own instead of aborting the turn")
+    func badToolCallDoesNotAbortTurn() async throws {
+        let fixture = try Fixture()
+        let provider = FixtureProvider(
+            ledger: EgressLedger(),
+            chunks: [
+                .toolCall(
+                    call(
+                        "setSpeed", ["itemID": .string("one"), "speed": .number(1.5)], id: "speed")),
+                .toolCall(call("makeItPop", [:], id: "invented")),
+                .done(.toolUse),
+            ])
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "speed it up and make it pop",
+            turnID: "bad-tool",
+            provider: provider,
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: fixture.context
+        )
+        #expect(turn.results.count == 2)
+        #expect(turn.results[0].patch != nil)
+        #expect(turn.results[1].message.hasPrefix("Failed"))
+        #expect(turn.combinedPatch != nil)
+    }
+
+    @Test("A number too large to be a time is rejected instead of crashing")
+    func outOfRangeNumbersAreRejected() async throws {
+        let fixture = try Fixture()
+        await #expect(throws: ToolExecutorError.self) {
+            _ = try await fixture.executor.execute(
+                call("splitClip", ["itemID": .string("one"), "at": .number(1e20)]),
+                turnID: "t", policy: .autoApply, context: fixture.context)
+        }
+    }
+
+    @Test("PDF and photo tools honour the confirmation policy before they run")
+    func workspaceToolsWaitForConfirmation() async throws {
+        let fixture = try Fixture()
+        let runs = CommandRecorder()
+        var context = fixture.context
+        context.pdfCommand = { invocation in
+            await runs.record(invocation.name)
+            return "done"
+        }
+        let rotate = call("pdf.rotatePage", ["pageID": .string("page")])
+
+        let held = try await fixture.executor.execute(
+            rotate, turnID: "t", policy: .confirmAll, context: context)
+        #expect(held.requiresConfirmation)
+        #expect(await runs.names.isEmpty)
+
+        let approved = try await fixture.executor.execute(
+            rotate, turnID: "t", policy: .confirmAll, context: context, confirmed: true)
+        #expect(!approved.requiresConfirmation)
+        #expect(await runs.names == ["pdf.rotatePage"])
+
+        // Reads still run straight away under the strictest policy.
+        _ = try await fixture.executor.execute(
+            call("pdf.describe", [:]), turnID: "t", policy: .confirmAll, context: context)
+        #expect(await runs.names == ["pdf.rotatePage", "pdf.describe"])
+    }
+
     @Test("Every write tool resolves to a valid assistant patch")
     func everyWriteToolProducesValidPatch() async throws {
         let fixture = try Fixture()
@@ -622,4 +685,9 @@ private func call(
     id: String = UUID().uuidString
 ) -> ToolInvocation {
     ToolInvocation(callID: id, name: name, arguments: .object(arguments))
+}
+
+private actor CommandRecorder {
+    private(set) var names: [String] = []
+    func record(_ name: String) { names.append(name) }
 }

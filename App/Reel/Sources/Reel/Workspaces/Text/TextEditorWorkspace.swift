@@ -219,7 +219,8 @@ struct TextEditorWorkspace: View {
                 else { return }
                 markdownDocumentIdentity = identity
                 markdownDocument = document
-            }
+            },
+            lineEnding: editor.activeFile?.lineEnding ?? .lf
         ) { line, column in
             cursorLine = line
             cursorColumn = column

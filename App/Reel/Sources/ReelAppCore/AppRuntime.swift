@@ -479,6 +479,11 @@ public actor AppRuntime {
 
     public func restoreFolder(_ receipt: FolderTrashReceipt) async throws {
         try await folders.restoreFolder(receipt)
+        // Trashing removed the assets' index rows (OCR, text, embeddings), so
+        // restored assets are indexed again, as a single-asset restore does.
+        for item in receipt.assets.items {
+            await indexPipeline.enqueue(item.asset.id, stages: Self.indexStages(for: item.asset))
+        }
     }
 
     public func revealInFinder(_ ids: [AssetID]) async {
@@ -586,6 +591,7 @@ public actor AppRuntime {
         let url = pdfDocumentURL(for: assetID)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(PDFEditDocument.self, from: Data(contentsOf: url))
+            .upgradedToCurrentSchema()
     }
 
     public func savePDFDocument(_ document: PDFEditDocument) throws {

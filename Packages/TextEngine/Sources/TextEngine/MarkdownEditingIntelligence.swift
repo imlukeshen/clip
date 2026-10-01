@@ -49,51 +49,37 @@ public enum MarkdownEditingIntelligence {
         return MarkdownCodePasteDetection(language: language)
     }
 
-    /// Finds triple-backtick code blocks, including their per-block languages.
+    /// Finds fenced code blocks (backtick or tilde, any length of three or
+    /// more) with their per-block languages, by the same rules the block
+    /// parser uses. A fence still being typed runs to the end of the text.
     public static func fencedCodeBlocks(in source: String) -> [MarkdownFencedCodeBlock] {
-        guard
-            let expression = try? NSRegularExpression(
-                pattern: "(?ms)^```[ \\t]*([A-Za-z0-9_+.-]*)[^\\n]*\\n(.*?)^```[ \\t]*$"
-            )
-        else { return [] }
         let text = source as NSString
-        let range = NSRange(location: 0, length: text.length)
-        return expression.matches(in: source, range: range).compactMap { match in
-            let codeRange = match.range(at: 2)
-            guard codeRange.location != NSNotFound else { return nil }
-            let labelRange = match.range(at: 1)
-            let label =
-                labelRange.location == NSNotFound
-                ? "" : text.substring(with: labelRange).lowercased()
-            let declaredLanguage = language(forFenceLabel: label)
-            let detectedLanguage = LanguageDetector.detect(
-                path: "",
-                contents: text.substring(with: codeRange)
-            )
+        return MarkdownFenceScanner.fences(in: source).map { fence in
+            let declaredLanguage = language(forFenceLabel: fence.label)
+            let language =
+                declaredLanguage == .plainText
+                ? embeddedLanguage(
+                    from: LanguageDetector.detect(
+                        path: "",
+                        contents: text.substring(with: fence.contentRange)
+                    )
+                ) : declaredLanguage
             return MarkdownFencedCodeBlock(
-                range: match.range,
-                codeRange: codeRange,
-                language: declaredLanguage == .plainText
-                    ? embeddedLanguage(from: detectedLanguage) : declaredLanguage
+                range: fence.range,
+                codeRange: fence.contentRange,
+                language: language
             )
         }
     }
 
-    /// Returns whether a UTF-16 location is currently inside a fenced code block.
+    /// Returns whether a UTF-16 location is currently inside a fenced code block,
+    /// including one whose closing fence has not been typed yet.
     public static func isInsideFencedCode(location: Int, in source: String) -> Bool {
-        if fencedCodeBlocks(in: source).contains(where: { block in
-            location > block.range.location && location < NSMaxRange(block.range)
-        }) {
-            return true
+        MarkdownFenceScanner.fences(in: source).contains { fence in
+            location > fence.range.location
+                && (location < NSMaxRange(fence.range)
+                    || (fence.closingMarkerRange == nil && location <= NSMaxRange(fence.range)))
         }
-        let text = source as NSString
-        let safeLocation = min(max(location, 0), text.length)
-        let prefix = text.substring(to: safeLocation)
-        guard let expression = try? NSRegularExpression(pattern: "(?m)^(?:```|~~~)") else {
-            return false
-        }
-        let prefixRange = NSRange(location: 0, length: (prefix as NSString).length)
-        return expression.numberOfMatches(in: prefix, range: prefixRange).isMultiple(of: 2) == false
     }
 
     /// Returns the portable Markdown label for a detected language.
