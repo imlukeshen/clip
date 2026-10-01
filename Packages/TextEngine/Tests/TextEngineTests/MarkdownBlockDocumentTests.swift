@@ -645,3 +645,39 @@ import Testing
     #expect(second.blocks[0].inlineSpans.contains { $0.kind == .strong })
     #expect(elapsed < .seconds(1))
 }
+
+/// The incremental path must land on exactly what a full parse produces.
+private func assertIncrementalMatchesFull(
+    _ source: String,
+    replacing target: String,
+    with replacement: String
+) {
+    let first = MarkdownBlockDocumentEngine.reconcile(source: source)
+    let range = (source as NSString).range(of: target)
+    let updated = (source as NSString).replacingCharacters(in: range, with: replacement)
+    let incremental = MarkdownBlockDocumentEngine.reconcile(
+        source: updated,
+        with: first,
+        edit: SyntaxEdit(
+            previousRange: range,
+            currentRange: NSRange(
+                location: range.location, length: (replacement as NSString).length)
+        )
+    )
+    let full = MarkdownBlockDocumentEngine.reconcile(source: updated)
+    #expect(incremental.blocks.map(\.kind) == full.blocks.map(\.kind))
+    #expect(incremental.blocks.map(\.sourceRange) == full.blocks.map(\.sourceRange))
+    #expect(incremental.blocks.map(\.inlineSpans) == full.blocks.map(\.inlineSpans))
+}
+
+@Test func pastingACRLFLineBreakMatchesAFullParse() {
+    assertIncrementalMatchesFull(
+        "Intro paragraph here\n", replacing: "paragraph", with: "x\r\n# Heading")
+    assertIncrementalMatchesFull(
+        "Intro paragraph here\n", replacing: "paragraph", with: "x\u{2028}y")
+}
+
+@Test func editingAnIndentedContinuationKeepsItsContext() {
+    assertIncrementalMatchesFull(
+        "- item\n\n    more *em* text\n", replacing: "more", with: "much more")
+}
