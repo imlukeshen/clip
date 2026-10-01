@@ -3,7 +3,8 @@
 Audited from the direct Debug build in dark appearance at 1440 × 900 on
 2026-08-03, plus the light and dark theme definitions in
 `Packages/DesignSystem`. The shipped SwiftUI/AppKit implementation and design
-system are the source of truth; `UI.md` remains historical intent.
+system are the source of truth. `Theme.swift` wins wherever this page and the
+code disagree; token values were last checked on 2026-09-30.
 
 ## Visual language
 
@@ -24,7 +25,7 @@ and editor-adjacent metadata use monospaced faces.
 | Base | `#0B0B0C` | `#F7F7F8` |
 | Panel | `#121213` | `#FFFFFF` |
 | Raised | `#1C1C1E` | `#F0F0F2` |
-| Sunken | `#08080A` | `#1B1B1E` |
+| Sunken | `#08080A` | `#E8E8EC` |
 | Primary text | `#EDEDEF` | `#18181B` |
 | Secondary text | `#9B9BA3` | `#5C5C66` |
 | Tertiary text | `#6A6A72` | `#8A8A94` |
@@ -76,7 +77,7 @@ persistent browsing inspector.
 - Convert: queue rows expose source, target, selected backend, progress, and
   completion state.
 
-## Differences from historical `UI.md`
+## Differences from the original UI spec
 
 - The top workspace tab strip was removed; the sidebar is primary navigation.
 - Borders are lighter and surfaces rely more on depth and spacing.

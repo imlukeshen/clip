@@ -1,4 +1,9 @@
-# Reel — Edge Cases & Correctness Pass
+# clipx — Edge Cases & Correctness Pass
+
+> **Historical.** Corrections to the Phase S and V plans, applied in the code.
+> This is the plan as written before the work; the code and `docs/adr/` are the
+> current truth. References to `DESIGN.md`, `PHASE-2*.md`, and other uncommitted
+> design documents point at files that were never published.
 
 Gaps found reviewing `PHASE-3-SEARCH.md` and `PHASE-4-CONVERT.md`, plus
 cross-phase issues. **Each item here is a change to those documents, not a
