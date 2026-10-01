@@ -217,6 +217,9 @@ struct CodeEditor: NSViewRepresentable {
         fileprivate weak var gutter: LineNumberGutterView?
         var isApplyingText = false
         private var scrollObserver: NSObjectProtocol?
+        private var diagramObservers: [NSObjectProtocol] = []
+        private let mermaidPresenter = MermaidDiagramPresenter()
+        private var lastDiagramLayoutWidth: CGFloat?
         private var lineIndex = TextLineIndex()
         private var lineIndexRevision = 0
         private var lineIndexTask: Task<Void, Never>?
@@ -499,6 +502,13 @@ struct CodeEditor: NSViewRepresentable {
             markdownMarkerColor = markerColor
             markdownCodeBackground = codeBackground
             markdownQuoteColor = quoteColor
+            mermaidPresenter.style = MermaidDiagramPresenter.Style(
+                card: codeBackground,
+                error: NSColor(theme.palette.danger),
+                muted: NSColor(theme.palette.textTertiary),
+                cornerRadius: theme.metrics.radius.control,
+                font: NSFont.systemFont(ofSize: max(settings.fontSize - 2, 11))
+            )
             textView.insertionPointColor = foreground
             textView.backgroundColor = background
             textView.currentLineColor =
@@ -580,6 +590,26 @@ struct CodeEditor: NSViewRepresentable {
             )
             storage.endEditing()
             isApplyingSyntax = false
+            layoutDiagrams(in: textView)
+        }
+
+        /// Places rendered Mermaid diagrams under their blocks; see
+        /// ``MermaidDiagramPresenter``.
+        private func layoutDiagrams(in textView: NSTextView) {
+            guard !textView.hasMarkedText() else { return }
+            lastDiagramLayoutWidth = textView.frame.width
+            mermaidPresenter.layout(
+                in: textView,
+                isMarkdown: parent.language == .markdown
+            ) { edit in
+                guard let storage = textView.textStorage else { return }
+                let wasApplying = isApplyingSyntax
+                isApplyingSyntax = true
+                storage.beginEditing()
+                edit()
+                storage.endEditing()
+                isApplyingSyntax = wasApplying
+            }
         }
 
         func observeScrolling(in scrollView: NSScrollView) {
@@ -597,6 +627,37 @@ struct CodeEditor: NSViewRepresentable {
                     }
                 }
             }
+            diagramObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: MermaidDiagramPresenter.diagramDidRender,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    let sender = (notification.object as AnyObject?).map(ObjectIdentifier.init)
+                    MainActor.assumeIsolated {
+                        guard let self, let textView = self.textView,
+                            sender == ObjectIdentifier(textView)
+                        else { return }
+                        self.layoutDiagrams(in: textView)
+                    }
+                })
+            diagramObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: NSView.frameDidChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] notification in
+                    let sender = (notification.object as AnyObject?).map(ObjectIdentifier.init)
+                    MainActor.assumeIsolated {
+                        // Only a width change reflows text; height changes are
+                        // the text growing, which the styling pass already covers.
+                        guard let self, let textView = self.textView,
+                            sender == ObjectIdentifier(textView),
+                            self.lastDiagramLayoutWidth != textView.frame.width
+                        else { return }
+                        self.layoutDiagrams(in: textView)
+                    }
+                })
         }
 
         func stopObserving() {
@@ -611,6 +672,8 @@ struct CodeEditor: NSViewRepresentable {
                 NotificationCenter.default.removeObserver(scrollObserver)
             }
             scrollObserver = nil
+            diagramObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            diagramObservers = []
         }
 
         fileprivate func restoreEditingAfterWorkspaceTransition(
@@ -941,6 +1004,7 @@ struct CodeEditor: NSViewRepresentable {
             if let textContainer = textView.textContainer {
                 textView.layoutManager?.ensureLayout(for: textContainer)
             }
+            layoutDiagrams(in: textView)
             textView.needsDisplay = true
         }
 

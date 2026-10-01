@@ -268,6 +268,27 @@ struct TextEditorViewModelTests {
         #expect(editor.activeFile?.lineEnding == .mixed)
     }
 
+    @Test("Reading back the editor's own earlier save is not an outside edit")
+    func ownEarlierContentsAreNotAConflict() throws {
+        // A rename restarts the file watcher, which reads the file while the
+        // buffer is ahead of the last save. That must not raise a conflict.
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Untitled.txt")
+        let editor = try makeEditor(file: file, text: "saved")
+        editor.text = "saved plus unsaved typing"
+
+        editor.receiveExternalContents(
+            LoadedTextFile(text: "saved", encoding: .utf8, lineEnding: .lf)
+        )
+        #expect(!editor.hasExternalConflict)
+        #expect(editor.text == "saved plus unsaved typing")
+        #expect(editor.isDirty)
+
+        editor.receiveExternalContents(
+            LoadedTextFile(text: "another app wrote this", encoding: .utf8, lineEnding: .lf)
+        )
+        #expect(editor.hasExternalConflict)
+    }
+
     @Test("Clean external edits reload while dirty edits require a choice")
     func handlesExternalChangesWithoutDiscardingLocalEdits() throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")

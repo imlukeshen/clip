@@ -8,7 +8,7 @@ Video, photos, PDFs, and LaTeX — edited by you, or by an AI that clicks the
 buttons for you.<br>
 **No subscription. No account. No uploads. Open source.**
 
-[**Download for macOS**](https://github.com/imlukeshen/clip/releases) ·
+[**Download for macOS**](https://github.com/imlukeshen/clipx/releases) ·
 [Build from source](#build-from-source) ·
 [What it does](#what-it-does)
 
@@ -49,7 +49,7 @@ halfway.
 ## Get started in a minute
 
 1. Download `clipx-<version>.dmg` from
-   [Releases](https://github.com/imlukeshen/clip/releases) and drag clipx to
+   [Releases](https://github.com/imlukeshen/clipx/releases) and drag clipx to
    Applications.
 2. Pick a folder for your library.
 3. Drop in a video, photo, PDF, or text file — or just take a screenshot.
@@ -81,7 +81,7 @@ your models in clipx → Settings. clipx can install them for you.
 ## Install
 
 Download the latest `clipx-<version>.dmg` from
-[Releases](https://github.com/imlukeshen/clip/releases), open it, and drag clipx
+[Releases](https://github.com/imlukeshen/clipx/releases), open it, and drag clipx
 to Applications.
 
 clipx needs macOS 14 or later on Apple silicon. The bundled FFmpeg framework is

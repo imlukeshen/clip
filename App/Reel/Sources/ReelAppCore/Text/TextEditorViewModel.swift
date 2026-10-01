@@ -153,6 +153,10 @@ public final class TextEditorViewModel {
     private var sourceURLs: [FileID: URL]
     private var projectFileURLs: [String: URL]
     private var textBuffers: [FileID: String]
+    /// What each file held on disk the last few times this editor loaded or
+    /// wrote it. A file watcher that reads one of these back is seeing clipx's
+    /// own earlier state — after a rename, say — not another app's edit.
+    private var knownDiskContents: [FileID: [String]] = [:]
     private var dirtyFileIDs: Set<FileID> = []
 
     /// Told when detection settles a library file's language. The editor never
@@ -245,6 +249,7 @@ public final class TextEditorViewModel {
         self.sourceURLs = sourceURLs
         self.projectFileURLs = projectFileURLs
         self.textBuffers = contents
+        self.knownDiskContents = contents.mapValues { [$0] }
         self.hashData = hashData
         self.persistStructure = persistingStructure
         self.persistContents = persistingContents
@@ -1070,6 +1075,9 @@ public final class TextEditorViewModel {
             updateDetectedFormat(from: contents)
             return
         }
+        // The disk holds something this editor loaded or saved itself, and the
+        // buffer has moved on since: there is no outside edit to reconcile.
+        if knownDiskContents[activeFileID]?.contains(contents.text) == true { return }
         if isDirty {
             contentTask?.cancel()
             pendingExternalContents = contents
@@ -1366,6 +1374,9 @@ public final class TextEditorViewModel {
         let byteOrderMark = file.byteOrderMark
         if activeFileID == fileID { isDirty = false }
         dirtyFileIDs.remove(fileID)
+        // Recorded before the write so a watcher that fires mid-save, while the
+        // buffer is already ahead again, still recognises the bytes as ours.
+        recordDiskContents(value, for: fileID)
         let hashData = hashData
         let persistContents = persistContents
         Task { [weak self] in
@@ -1398,6 +1409,15 @@ public final class TextEditorViewModel {
                 }
             }
         }
+    }
+
+    private func recordDiskContents(_ value: String, for fileID: FileID) {
+        var known = knownDiskContents[fileID] ?? []
+        known.removeAll { $0 == value }
+        known.append(value)
+        // A few entries cover a load plus saves still in flight; strings share
+        // storage with the buffer, so this holds no extra copies.
+        knownDiskContents[fileID] = Array(known.suffix(3))
     }
 
     private func persistStructureNow() {
@@ -1467,6 +1487,7 @@ public final class TextEditorViewModel {
         text = contents.text
         textBuffers[activeFileID] = contents.text
         isApplyingExternalText = false
+        recordDiskContents(contents.text, for: activeFileID)
         isDirty = false
         dirtyFileIDs.remove(activeFileID)
         hasSavedDetachedCopy = false

@@ -496,6 +496,58 @@ final class TextEditorTypingTests: XCTestCase {
     }
 
     @MainActor
+    func testMarkdownTabNestsListsAndMermaidRendersUnderItsBlock() throws {
+        let (app, libraryRoot) = launchClip(named: "markdown-mermaid")
+        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+
+        XCTAssertTrue(app.buttons["sidebar-route-text"].waitForExistence(timeout: 10))
+        app.buttons["sidebar-route-text"].click()
+        XCTAssertTrue(app.buttons["text-new-scratch"].waitForExistence(timeout: 5))
+        app.buttons["text-new-scratch"].click()
+        let editor = app.textViews["text-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.click()
+        editor.typeText("# Plan")
+        let languageMenu = app.descendants(matching: .any)["text-language-menu"]
+        XCTAssertTrue(languageMenu.waitForExistence(timeout: 5))
+        languageMenu.click()
+        XCTAssertTrue(app.menuItems["Markdown"].waitForExistence(timeout: 5))
+        app.menuItems["Markdown"].click()
+
+        // Tab nests the second item under the first and the caret stays put,
+        // so the rest of the word lands inside the nested item.
+        editor.click()
+        editor.typeKey(.end, modifierFlags: .command)
+        editor.typeText("\n\n- one\ntw")
+        editor.typeKey(.tab, modifierFlags: [])
+        editor.typeText("o")
+        XCTAssertTrue(
+            (editor.value as? String ?? "").contains("- one\n  - two"),
+            "Expected a nested item, got: \(editor.value as? String ?? "")"
+        )
+
+        editor.typeText("\n")
+        editor.typeKey(.return, modifierFlags: [])
+        editor.typeKey(.return, modifierFlags: [])
+        let insertMenu = app.descendants(matching: .any)["markdown-insert-block"]
+        XCTAssertTrue(insertMenu.waitForExistence(timeout: 5))
+        insertMenu.click()
+        XCTAssertTrue(app.menuItems["Code block"].waitForExistence(timeout: 5))
+        app.menuItems["Code block"].hover()
+        XCTAssertTrue(app.menuItems["Mermaid diagram"].waitForExistence(timeout: 5))
+        app.menuItems["Mermaid diagram"].click()
+
+        XCTAssertTrue((editor.value as? String ?? "").contains("```mermaid\nflowchart TD"))
+        let diagram = app.images["mermaid-diagram"]
+        XCTAssertTrue(diagram.waitForExistence(timeout: 15), "No rendered diagram appeared")
+        XCTAssertGreaterThan(diagram.frame.height, 40)
+        if let path = ProcessInfo.processInfo.environment["CLIPX_UI_SCREENSHOT"] {
+            try? XCUIScreen.main.screenshot().pngRepresentation
+                .write(to: URL(fileURLWithPath: path))
+        }
+    }
+
+    @MainActor
     func testLaTeXEditorAcceptsTypingAfterEnteringTheSplitWorkspace() throws {
         let (app, libraryRoot) = launchClip(named: "latex-typing")
         defer { try? FileManager.default.removeItem(at: libraryRoot) }

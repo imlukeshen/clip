@@ -301,6 +301,12 @@ private struct SafeMarkdownFormatter: MarkupWalker {
 
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) {
         let language = codeBlock.language?.lowercased() ?? ""
+        if language == "mermaid" {
+            // Mermaid reads the element's text, so the definition stays escaped
+            // source rather than highlighted markup.
+            result += #"<pre class="mermaid">"# + htmlText(codeBlock.code) + "</pre>\n"
+            return
+        }
         let languageClass =
             language.isEmpty ? "" : #" class="language-\#(htmlAttribute(language))""#
         result += "<pre><code\(languageClass)>"
@@ -671,6 +677,14 @@ private enum MarkdownPage {
     static func document(body: String) -> String {
         let katexCSS = MarkdownPreviewAssets.katexCSS
         let katexJS = MarkdownPreviewAssets.katexJavaScript
+        // Only pages with a diagram carry the Mermaid library; it is several
+        // megabytes and would otherwise bloat every exported note.
+        let mermaid =
+            body.contains(#"<pre class="mermaid">"#)
+            ? """
+            <script>\(MermaidAssets.javaScript)</script>
+            <script>mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'default'});mermaid.run({querySelector:'pre.mermaid'});</script>
+            """ : ""
         return """
             <!doctype html>
             <html><head>
@@ -684,13 +698,13 @@ private enum MarkdownPage {
             *{box-sizing:border-box}html{background:var(--bg)}body{margin:0 auto;max-width:820px;padding:40px 44px 96px;background:var(--bg);color:var(--fg);font:15.5px/1.62 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;-webkit-font-smoothing:antialiased}
             .source-block{scroll-margin-top:22px;min-height:1px}h1,h2,h3,h4,h5,h6{line-height:1.22;margin:1.5em 0 .58em;letter-spacing:-.018em}h1{font-size:2em;border-bottom:1px solid var(--line);padding-bottom:.32em}h2{font-size:1.5em;border-bottom:1px solid var(--line);padding-bottom:.28em}h3{font-size:1.2em}p{margin:.72em 0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}blockquote{margin:1em 0;padding:.1em 1em;border-left:3px solid var(--line);color:var(--muted)}hr{height:1px;border:0;background:var(--line);margin:2em 0}
             ul,ol{padding-left:1.65em}.task-list-item{list-style:none;margin-left:-1.25em}.task-list-item input{margin-right:.42em;accent-color:var(--accent)}code{font:13px/1.55 ui-monospace,"SFMono-Regular",Menlo,monospace;background:var(--panel);border-radius:5px;padding:.14em .34em}pre{overflow:auto;margin:1em 0;padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}pre code{padding:0;background:transparent}.syntax-keyword{color:var(--code-keyword);font-weight:600}.syntax-string{color:var(--code-string)}.syntax-comment{color:var(--code-comment);font-style:italic}.syntax-number{color:var(--code-number)}
-            .table-scroll{overflow-x:auto;margin:1em 0}table{width:100%;border-collapse:collapse;font-size:.94em}th,td{padding:8px 11px;border:1px solid var(--line)}th{background:var(--panel);font-weight:600}img{display:block;max-width:100%;height:auto;margin:1.2em auto;border-radius:9px}.blocked-resource{display:inline-flex;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);color:var(--muted);font-size:.88em}.math-display{display:block;overflow-x:auto;margin:1.2em 0;text-align:center}.footnotes{margin-top:2.4em;color:var(--muted);font-size:.88em}.footnote-ref{font-size:.72em}.footnote-backref{margin-left:.3em}
+            .table-scroll{overflow-x:auto;margin:1em 0}table{width:100%;border-collapse:collapse;font-size:.94em}th,td{padding:8px 11px;border:1px solid var(--line)}th{background:var(--panel);font-weight:600}img{display:block;max-width:100%;height:auto;margin:1.2em auto;border-radius:9px}.blocked-resource{display:inline-flex;padding:9px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);color:var(--muted);font-size:.88em}.math-display{display:block;overflow-x:auto;margin:1.2em 0;text-align:center}.footnotes{margin-top:2.4em;color:var(--muted);font-size:.88em}.footnote-ref{font-size:.72em}.footnote-backref{margin-left:.3em}pre.mermaid{background:transparent;border:0;text-align:center}
             </style>
             </head><body><main>\(body)</main>
             <script>\(katexJS)</script>
             <script>
             (()=>{'use strict';document.querySelectorAll('.math').forEach((node)=>{try{katex.render(node.dataset.tex||'',node,{displayMode:node.classList.contains('math-display'),throwOnError:false,strict:'warn',trust:false,output:'htmlAndMathml'});}catch(_){}});const blocks=()=>Array.from(document.querySelectorAll('.source-block[data-source-line]'));window.clipScrollToSourceLine=(line)=>{const all=blocks();let target=all[0];for(const block of all){if(Number(block.dataset.sourceLine)<=Number(line)){target=block;}else{break;}}if(target){window.scrollTo({top:Math.max(0,target.offsetTop-20),behavior:'auto'});}};let pending=false;window.addEventListener('scroll',()=>{if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;let nearest=null;let distance=Infinity;for(const block of blocks()){const value=Math.abs(block.getBoundingClientRect().top-20);if(value<distance){distance=value;nearest=block;}}const line=nearest?Number(nearest.dataset.sourceLine):1;window.webkit?.messageHandlers?.clipScrollSync?.postMessage(line);});},{passive:true});})();
-            </script></body></html>
+            </script>\(mermaid)</body></html>
             """
     }
 }
