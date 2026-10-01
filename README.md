@@ -12,7 +12,9 @@ buttons for you.<br>
 [Build from source](#build-from-source) ·
 [What it does](#what-it-does)
 
-[![Watch the video](https://youtube.com)](https://youtu.be/m5-lMDYilT4)
+<a href="https://youtu.be/m5-lMDYilT4" target="_blank">
+  <img src="https://youtube.com" alt="Watch the video" width="600" height="auto" />
+</a>
 
 </div>
 
