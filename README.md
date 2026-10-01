@@ -1,16 +1,61 @@
+<div align="center">
+
 # clipx
 
-A local-first screen demo editor for macOS.
+### Your own AI-powered creative suite. Running on your Mac.
 
-clipx takes the recordings and screenshots the system already makes, stitches
-them on a timeline, edits them non-destructively, converts them between
-formats, and lets an AI assistant drive the same editor you do. Everything runs
-on your machine: your library is a folder you choose, nothing is uploaded, and
-the only network traffic is what you explicitly allow.
+Video, photos, PDFs, and LaTeX — edited by you, or by an AI that clicks the
+buttons for you.<br>
+**No subscription. No account. No uploads. Open source.**
 
-There is no recorder inside clipx. It ingests what `screencapture` and the system
-screenshot tools produce, which is why it works on a full macOS version more
-than a bundled recorder would reach.
+[**Download for macOS**](https://github.com/imlukeshen/clip/releases) ·
+[Build from source](#build-from-source) ·
+[What it does](#what-it-does)
+
+</div>
+
+---
+
+Creative tools moved to the cloud and started charging rent. clipx goes the
+other way: the editors you reach for every day, in one native app, on your own
+machine, with an assistant that can drive every one of them.
+
+- **One app, four editors.** A multi-track video timeline, a layered photo
+  editor, a real PDF editor, and a text/LaTeX editor that compiles as you type.
+- **An AI that actually edits.** It doesn't just chat about your files. It
+  works the same editor you do, and every change it makes is one Command-Z
+  away.
+- **Private by default.** Your library is a folder you choose. Point the
+  assistant at a local model through Ollama or LM Studio and nothing leaves
+  your Mac. Use a hosted one and a ledger shows exactly what was sent.
+- **Yours to keep.** Apache-2.0. No account, no subscription, no watermark.
+
+## Just ask
+
+> *"Trim the silences out of this recording."*
+>
+> *"Redact my name from every page of this PDF."*
+>
+> *"Why won't my LaTeX build? Fix it."*
+>
+> *"Turn this screen recording into a GIF."*
+>
+> *"Find the screenshot with the error message in it."*
+
+The assistant turns each request into the same edits you'd make by hand, on the
+same undo stack, so you can watch it work, step back through it, or take over
+halfway.
+
+## Get started in a minute
+
+1. Download `clipx-<version>.dmg` from
+   [Releases](https://github.com/imlukeshen/clip/releases) and drag clipx to
+   Applications.
+2. Pick a folder for your library.
+3. Drop in a video, photo, PDF, or text file — or just take a screenshot.
+
+Want the AI fully offline? Install [Ollama](https://ollama.com), then choose
+your models in clipx → Settings. clipx can install them for you.
 
 ## What it does
 
