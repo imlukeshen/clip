@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-09-30
 - Supersedes: invariant I5 for referenced assets; extends ADR-0009
+- Implementation status (2026-10-01): text assets save in place. The photo
+  and PDF editors still keep the source read-only and save edited copies, so
+  saving a referenced image or PDF in place is not built yet.
 
 ## Context
 
