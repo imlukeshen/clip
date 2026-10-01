@@ -1941,7 +1941,10 @@ public final class AppModel {
         let context = session.context
         let sessionToken = session.token
         let settings = aiSettings
-        let categories = openWorkspaceCommandCategories
+        let categories = AssistantToolScope.categories(
+            for: sessionToken.document,
+            isLocalModel: settings.usesLoopbackAssistantEndpoint
+        )
         // Rendered here, on the main actor and before the turn detaches, so the
         // model sees the window as it looked when the question was asked rather
         // than after whatever the turn itself changes.
@@ -2241,19 +2244,6 @@ public final class AppModel {
                 revision: revision
             )
         )
-    }
-
-    /// The command categories offered directly, rather than left behind
-    /// meta-tool discovery.
-    ///
-    /// Every editing category, not just the open workspace's. Discovery costs a
-    /// round trip and asks the model to guess at a name it was never shown, and
-    /// a request that spans workspaces — redact this photo, then put it on the
-    /// timeline — needs both sets at once. The open workspace is listed first so
-    /// the tools for what is actually on screen appear earliest in the schema
-    /// list, which is where a model's attention is best.
-    private var openWorkspaceCommandCategories: Set<CommandCategory> {
-        [.clip, .effect, .audio, .timeline, .pdf, .image, .text, .asset, .file]
     }
 
     private func assistantDocumentDidChange() {
