@@ -21,7 +21,9 @@ public struct ConversionPlanner: Sendable {
         to target: FormatID,
         options: ConversionOptions = ConversionOptions()
     ) -> ConversionPlan? {
-        guard source != target else { return ConversionPlan(steps: []) }
+        // A same-format request ("Web-ready MP4" on an MP4) still needs a real
+        // step that applies its options; an empty plan has no backend and
+        // failed with "No conversion path".
         var queue = [Candidate(format: source, score: 0, steps: [], supportedOptions: [])]
         var bestScore: [CandidateKey: Int] = [CandidateKey(format: source, supportedOptions: []): 0]
 
@@ -33,7 +35,7 @@ public struct ConversionPlanner: Sendable {
                 supportedOptions: candidate.supportedOptions
             )
             guard candidate.score <= bestScore[candidateKey, default: .max] else { continue }
-            if candidate.format == target,
+            if candidate.format == target, !candidate.steps.isEmpty,
                 options.requested.isSubset(of: candidate.supportedOptions)
             {
                 return ConversionPlan(steps: candidate.steps)
