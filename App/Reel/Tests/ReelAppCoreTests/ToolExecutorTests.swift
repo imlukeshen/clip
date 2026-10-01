@@ -586,7 +586,14 @@ private struct RepairSequenceProvider: AIProvider {
     var defaultModel: String { "fixture" }
 
     func send(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
-        let sawFailure = request.messages.last?.content.contains("Failed") == true
+        // Both halves of the round have to arrive as tool turns: the call it
+        // made, with its arguments, and the failure that call produced.
+        let replayed = request.messages.dropLast().last?.toolCalls.map(\.callID) == ["wrong"]
+        let sawFailure =
+            replayed
+            && request.messages.last?.toolResults.contains {
+                $0.callID == "wrong" && $0.content.hasPrefix("Failed")
+            } == true
         let invocation =
             sawFailure && corrects
             ? call("setSpeed", ["itemID": .string("one"), "speed": .number(2)], id: "right")

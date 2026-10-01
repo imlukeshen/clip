@@ -217,22 +217,25 @@ public struct AssistantTurnRunner: Sendable {
             let isRepairing = containsWrite && !canContinueTextRepair
             if isRepairing { repairRounds += 1 }
 
-            let called = roundInvocations.map(\.name).joined(separator: ", ")
+            // Sent as real tool turns, not a description of them. Shown "Called
+            // tools: trimClip" as its own earlier reply, a small model answers
+            // the next round by writing that sentence instead of calling a tool.
             messages.append(
-                .init(
-                    role: .assistant,
-                    content: roundText.isEmpty ? "Called tools: \(called)" : roundText
-                )
-            )
-            let feedback = zip(roundInvocations, roundResults).map { invocation, result in
-                "[\(invocation.callID) \(invocation.name)] \(result.message)"
-            }.joined(separator: "\n")
+                .init(role: .assistant, content: roundText, toolCalls: roundInvocations))
             let instruction =
                 isRepairing
                 ? "The failed calls changed nothing. Correct their arguments and call them again."
                 : "Continue the original request. Use another tool when needed; do not repeat a completed search."
             messages.append(
-                .init(role: .user, content: "Tool results:\n\(feedback)\n\n\(instruction)")
+                .init(
+                    role: .user,
+                    content: instruction,
+                    toolResults: zip(roundInvocations, roundResults).map { invocation, result in
+                        ChatToolResult(
+                            callID: invocation.callID, name: invocation.name,
+                            content: result.message)
+                    }
+                )
             )
         }
 

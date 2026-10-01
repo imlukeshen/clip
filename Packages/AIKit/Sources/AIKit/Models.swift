@@ -73,17 +73,42 @@ public struct ChatMessage: Codable, Sendable, Equatable, Identifiable {
     public var content: String
     /// Images sent alongside the text, in the order they should be read.
     public var images: [ChatImage]
+    /// The tool calls an assistant message made, replayed so the model sees
+    /// its own earlier calls and their arguments.
+    public var toolCalls: [ToolInvocation]
+    /// The results a user message reports back, one per earlier call.
+    public var toolResults: [ChatToolResult]
 
     public init(
         id: String = UUID().uuidString,
         role: Role,
         content: String,
-        images: [ChatImage] = []
+        images: [ChatImage] = [],
+        toolCalls: [ToolInvocation] = [],
+        toolResults: [ChatToolResult] = []
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.images = images
+        self.toolCalls = toolCalls
+        self.toolResults = toolResults
+    }
+
+    /// The message with its tool calls and results written out as prose.
+    ///
+    /// For adapters that do not send structured tool turns. A model given this
+    /// sees that tools ran but not the shape of a call, and a small one tends
+    /// to answer by writing the same prose instead of calling a tool.
+    var flattenedContent: String {
+        if !toolResults.isEmpty {
+            let lines = toolResults.map { "[\($0.callID) \($0.name)] \($0.content)" }
+            return "Tool results:\n\(lines.joined(separator: "\n"))\n\n\(content)"
+        }
+        if !toolCalls.isEmpty, content.isEmpty {
+            return "Called tools: \(toolCalls.map(\.name).joined(separator: ", "))"
+        }
+        return content
     }
 }
 

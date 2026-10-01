@@ -131,7 +131,7 @@ public struct OpenAICompatibleProvider: AIProvider {
                 do {
                     try validateMedia(request, supportsVision: configuration.supportsVision)
                     let url = configuration.baseURL.appendingPathComponent("chat/completions")
-                    let body = openAIRequestBody(
+                    let body = try openAIRequestBody(
                         request,
                         supportsTools: configuration.supportsTools,
                         // OpenAI's current models reject `max_tokens`; local
@@ -321,18 +321,20 @@ func jsonRequest(url: URL, body: JSONValue) throws -> URLRequest {
 ///
 /// Anthropic takes image bytes under a `source` object, and a message carrying
 /// any image must send its text as a content block too rather than a bare
-/// string.
+/// string. Tool turns are sent as prose here: the structured form has not been
+/// exercised against the live API.
 private func messages(_ request: ChatRequest) -> JSONValue {
     .array(
         request.messages.map { message in
+            let content = message.flattenedContent
             guard !message.images.isEmpty else {
                 return .object([
-                    "role": .string(message.role.rawValue), "content": .string(message.content),
+                    "role": .string(message.role.rawValue), "content": .string(content),
                 ])
             }
             var blocks: [JSONValue] = []
-            if !message.content.isEmpty {
-                blocks.append(.object(["type": .string("text"), "text": .string(message.content)]))
+            if !content.isEmpty {
+                blocks.append(.object(["type": .string("text"), "text": .string(content)]))
             }
             for image in message.images {
                 blocks.append(
@@ -354,12 +356,37 @@ private func messages(_ request: ChatRequest) -> JSONValue {
 /// Images travel as `image_url` parts holding a `data:` URL. A message without
 /// images keeps its plain string content, because some compatible servers
 /// reject the array form when no image is present.
-private func openAIMessages(_ request: ChatRequest) -> [JSONValue] {
-    request.messages.map { message in
+///
+/// A tool round is sent the way the API defines it: the assistant's calls ride
+/// on its message, and each result is a `tool` message answering one call by
+/// ID. So one ``ChatMessage`` reporting results becomes several messages here.
+private func openAIMessages(_ request: ChatRequest) throws -> [JSONValue] {
+    var output: [JSONValue] = []
+    for message in request.messages {
+        if !message.toolCalls.isEmpty {
+            output.append(
+                .object([
+                    "role": .string("assistant"), "content": .string(message.content),
+                    "tool_calls": .array(try message.toolCalls.map(openAIToolCall)),
+                ]))
+            continue
+        }
+        for result in message.toolResults {
+            output.append(
+                .object([
+                    "role": .string("tool"), "tool_call_id": .string(result.callID),
+                    "content": .string(result.content),
+                ]))
+        }
+        if !message.toolResults.isEmpty && message.content.isEmpty && message.images.isEmpty {
+            continue
+        }
         guard !message.images.isEmpty else {
-            return .object([
-                "role": .string(message.role.rawValue), "content": .string(message.content),
-            ])
+            output.append(
+                .object([
+                    "role": .string(message.role.rawValue), "content": .string(message.content),
+                ]))
+            continue
         }
         var parts: [JSONValue] = []
         if !message.content.isEmpty {
@@ -372,8 +399,22 @@ private func openAIMessages(_ request: ChatRequest) -> [JSONValue] {
                     "image_url": .object(["url": .string(image.dataURL)]),
                 ]))
         }
-        return .object(["role": .string(message.role.rawValue), "content": .array(parts)])
+        output.append(.object(["role": .string(message.role.rawValue), "content": .array(parts)]))
     }
+    return output
+}
+
+/// One replayed call. The API carries arguments as a JSON string, not an object.
+private func openAIToolCall(_ call: ToolInvocation) throws -> JSONValue {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    guard let arguments = String(data: try encoder.encode(call.arguments), encoding: .utf8) else {
+        throw AIKitError.invalidResponse("Tool arguments are not UTF-8")
+    }
+    return .object([
+        "id": .string(call.callID), "type": .string("function"),
+        "function": .object(["name": .string(call.name), "arguments": .string(arguments)]),
+    ])
 }
 
 func openAITools(_ tools: [ToolSchema]) -> JSONValue {
@@ -393,11 +434,11 @@ func openAIRequestBody(
     _ request: ChatRequest,
     supportsTools: Bool,
     tokenLimitKey: String = "max_tokens"
-) -> JSONValue {
+) throws -> JSONValue {
     var allMessages: [JSONValue] = [
         .object(["role": .string("system"), "content": .string(request.system)])
     ]
-    allMessages.append(contentsOf: openAIMessages(request))
+    allMessages.append(contentsOf: try openAIMessages(request))
     var body: [String: JSONValue] = [
         "model": .string(request.model), "stream": .bool(true),
         "messages": .array(allMessages), tokenLimitKey: .number(Double(request.maxTokens)),
@@ -436,8 +477,11 @@ func geminiRequestBody(_ request: ChatRequest) -> JSONValue {
         "contents": .array(
             request.messages.map { message in
                 // Gemini names the field inline_data and wants the bytes bare,
-                // without the data: prefix the compatible servers expect.
-                var parts: [JSONValue] = [.object(["text": .string(message.content)])]
+                // without the data: prefix the compatible servers expect. Tool
+                // turns stay prose: its newer models reject a replayed call
+                // that lacks the thought signature it was issued with, and
+                // that signature is not read from the stream.
+                var parts: [JSONValue] = [.object(["text": .string(message.flattenedContent)])]
                 for image in message.images {
                     parts.append(
                         .object([
@@ -535,8 +579,11 @@ enum OpenAIStreamParser {
         for index in pending.keys.sorted() {
             guard let call = pending[index] else { continue }
             let arguments = try decodeArguments(call.arguments)
+            // Results are sent back by call ID, so a server that sends none
+            // still needs each call to have its own.
+            let id = call.id.isEmpty ? "call-\(index)" : call.id
             output.append(
-                .toolCall(ToolInvocation(callID: call.id, name: call.name, arguments: arguments)))
+                .toolCall(ToolInvocation(callID: id, name: call.name, arguments: arguments)))
         }
         output.append(.done(reason))
         return output

@@ -56,7 +56,7 @@ struct ChatImageEncodingTests {
 
     @Test("OpenAI-compatible servers get a data URL in an image_url part")
     func openAIShape() throws {
-        let body = openAIRequestBody(requestWithImage(), supportsTools: false)
+        let body = try openAIRequestBody(requestWithImage(), supportsTools: false)
         let parts = try #require(array(lastMessage(in: body, key: "messages")?["content"]))
         #expect(parts.count == 2)
         #expect(text(parts.first?["type"]) == "text")
@@ -69,7 +69,7 @@ struct ChatImageEncodingTests {
     func openAIKeepsPlainText() throws {
         let request = ChatRequest(
             model: "m", system: "s", messages: [.init(role: .user, content: "hello")])
-        let body = openAIRequestBody(request, supportsTools: false)
+        let body = try openAIRequestBody(request, supportsTools: false)
         // Some compatible servers reject the array form when no image is
         // present, so the plain form has to survive.
         #expect(text(lastMessage(in: body, key: "messages")?["content"]) == "hello")

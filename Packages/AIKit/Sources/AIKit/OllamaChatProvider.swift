@@ -106,7 +106,8 @@ public struct OllamaChatProvider: AIProvider {
 /// A request in Ollama's native shape.
 ///
 /// Tool schemas match the compatible surface. Images do not: they are bare
-/// base64 strings beside the text rather than `image_url` parts.
+/// base64 strings beside the text rather than `image_url` parts. Replayed tool
+/// calls differ too, carrying their arguments as an object rather than a string.
 func ollamaRequestBody(
     _ request: ChatRequest,
     supportsTools: Bool,
@@ -116,6 +117,33 @@ func ollamaRequestBody(
         .object(["role": .string("system"), "content": .string(request.system)])
     ]
     for message in request.messages {
+        if !message.toolCalls.isEmpty {
+            allMessages.append(
+                .object([
+                    "role": .string("assistant"), "content": .string(message.content),
+                    "tool_calls": .array(
+                        message.toolCalls.map { call in
+                            .object([
+                                "id": .string(call.callID),
+                                "function": .object([
+                                    "name": .string(call.name), "arguments": call.arguments,
+                                ]),
+                            ])
+                        }),
+                ]))
+            continue
+        }
+        // Results are matched to calls by tool name, one message each.
+        for result in message.toolResults {
+            allMessages.append(
+                .object([
+                    "role": .string("tool"), "tool_name": .string(result.name),
+                    "content": .string(result.content),
+                ]))
+        }
+        if !message.toolResults.isEmpty && message.content.isEmpty && message.images.isEmpty {
+            continue
+        }
         var object: [String: JSONValue] = [
             "role": .string(message.role.rawValue), "content": .string(message.content),
         ]
