@@ -34,7 +34,9 @@ public struct MarkdownBackend: ConversionBackend {
             let task = Task {
                 do {
                     continuation.yield(0)
-                    let markdown = try String(contentsOf: input, encoding: .utf8)
+                    // The editor's loader, so any file it opens (UTF-16, Latin-1,
+                    // a BOM) also exports; plain UTF-8 decoding refused those.
+                    let markdown = try TextFileLoader.load(from: input).text
                     let html = MarkdownHTMLRenderer.render(
                         markdown,
                         destination: .export(baseDirectory: input.deletingLastPathComponent())

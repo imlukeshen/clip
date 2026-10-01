@@ -913,7 +913,8 @@ public enum MarkdownBlockDocumentEngine {
         }.flatMap { $0 }
         var mathSpans: [MarkdownInlineSpan] = []
         appendInlineMatches(
-            #"(?<![\\$])\$([^\n$]+)\$(?!\$)"#,
+            // Same rule as export: "$x^2$" is math, "costs $5 and $10" is not.
+            #"(?<![\\$])\$(?=[^\s$])([^\n$]*?[^\s$\\])\$(?![\d$])"#,
             kind: { _ in .math },
             contentGroups: [1],
             in: source,
