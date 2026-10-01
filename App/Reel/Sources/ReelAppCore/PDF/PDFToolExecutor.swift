@@ -104,8 +104,12 @@ public struct PDFToolExecutor: Sendable {
 
         case "pdf.findText":
             let arguments = try invocation.arguments.decode(FindArguments.self)
-            let matches = try await context.locatingText(
-                context.document, arguments.text, Self.searchPage(arguments.pageID, in: context))
+            let matches = Self.withoutRedactedText(
+                try await context.locatingText(
+                    context.document, arguments.text,
+                    Self.searchPage(arguments.pageID, in: context)),
+                in: context.document
+            )
             guard !matches.isEmpty else {
                 return PDFToolResult(
                     message: "No occurrence of \"\(arguments.text)\" in "
@@ -241,6 +245,29 @@ extension PDFToolExecutor {
     /// Rounded to four places: a normalized page coordinate is precise to well
     /// under a pixel there, and full double precision is a page of digits the
     /// model has to carry through its next call.
+    /// Search results the model may see: nothing under a redaction, and no
+    /// surrounding context on a page with redactions, since a snippet's
+    /// neighbouring words can fall inside a redacted area.
+    static func withoutRedactedText(
+        _ matches: [PDFTextMatch],
+        in document: PDFEditDocument
+    ) -> [PDFTextMatch] {
+        matches.compactMap { match in
+            let redactions =
+                document.page(match.pageID)?.layers.flatMap { layer -> [CGRect] in
+                    if case .redaction(let value) = layer { return value.regions }
+                    return []
+                } ?? []
+            guard !redactions.contains(where: { $0.intersects(match.rect) }) else { return nil }
+            guard !redactions.isEmpty else { return match }
+            return PDFTextMatch(
+                pageID: match.pageID,
+                rect: match.rect,
+                snippet: "(context withheld: this page has redactions)"
+            )
+        }
+    }
+
     static func describe(_ matches: [PDFTextMatch]) -> String {
         let lines = matches.map { match in
             let rect = match.rect

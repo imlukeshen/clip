@@ -79,3 +79,8 @@ import Testing
     #expect(!document.blocks.contains { if case .fencedCode = $0.kind { true } else { false } })
     #expect(document.blocks.contains { $0.kind == .heading(level: 1) })
 }
+
+@Test func crlfDiagramsKeepTheirLastCharacter() {
+    let markdown = "```mermaid\r\ngraph TD\r\n  A-->B\r\n```\r\n"
+    #expect(MermaidDiagram.diagrams(in: markdown).map(\.source) == ["graph TD\r\n  A-->B"])
+}

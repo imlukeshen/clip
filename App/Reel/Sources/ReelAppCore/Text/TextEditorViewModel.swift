@@ -153,9 +153,11 @@ public final class TextEditorViewModel {
     private var sourceURLs: [FileID: URL]
     private var projectFileURLs: [String: URL]
     private var textBuffers: [FileID: String]
-    /// What each file held on disk the last few times this editor loaded or
-    /// wrote it. A file watcher that reads one of these back is seeing clipx's
-    /// own earlier state — after a rename, say — not another app's edit.
+    /// For each file: what this editor last confirmed on disk (by loading or
+    /// a finished write), followed by writes still in flight. A watcher that
+    /// reads one of these back is seeing clipx's own state — after a rename,
+    /// or mid-save — not another app's edit. Older versions are dropped once a
+    /// newer write lands, so a deliberate revert to one is still noticed.
     private var knownDiskContents: [FileID: [String]] = [:]
     private var dirtyFileIDs: Set<FileID> = []
 
@@ -1376,7 +1378,7 @@ public final class TextEditorViewModel {
         dirtyFileIDs.remove(fileID)
         // Recorded before the write so a watcher that fires mid-save, while the
         // buffer is already ahead again, still recognises the bytes as ours.
-        recordDiskContents(value, for: fileID)
+        beginDiskWrite(value, for: fileID)
         let hashData = hashData
         let persistContents = persistContents
         Task { [weak self] in
@@ -1401,8 +1403,10 @@ public final class TextEditorViewModel {
             }
             do {
                 try await persistContents(fileID, data, hash)
+                self?.confirmDiskWrite(value, for: fileID)
             } catch {
                 await MainActor.run {
+                    self?.knownDiskContents[fileID]?.removeAll { $0 == value }
                     self?.dirtyFileIDs.insert(fileID)
                     if self?.activeFileID == fileID { self?.isDirty = true }
                     self?.notice = "The file could not be saved."
@@ -1411,13 +1415,25 @@ public final class TextEditorViewModel {
         }
     }
 
-    private func recordDiskContents(_ value: String, for fileID: FileID) {
+    private func beginDiskWrite(_ value: String, for fileID: FileID) {
         var known = knownDiskContents[fileID] ?? []
-        known.removeAll { $0 == value }
-        known.append(value)
-        // A few entries cover a load plus saves still in flight; strings share
-        // storage with the buffer, so this holds no extra copies.
-        knownDiskContents[fileID] = Array(known.suffix(3))
+        if known.last != value { known.append(value) }
+        knownDiskContents[fileID] = known
+    }
+
+    /// A write landed: it is now what the disk holds, and anything recorded
+    /// before it can no longer be clipx's own state.
+    private func confirmDiskWrite(_ value: String, for fileID: FileID) {
+        guard var known = knownDiskContents[fileID],
+            let index = known.firstIndex(of: value)
+        else { return }
+        known.removeFirst(index)
+        knownDiskContents[fileID] = known
+    }
+
+    /// The disk now holds exactly `value`, read or written outside a save.
+    private func resetDiskContents(_ value: String, for fileID: FileID) {
+        knownDiskContents[fileID] = [value]
     }
 
     private func persistStructureNow() {
@@ -1487,7 +1503,7 @@ public final class TextEditorViewModel {
         text = contents.text
         textBuffers[activeFileID] = contents.text
         isApplyingExternalText = false
-        recordDiskContents(contents.text, for: activeFileID)
+        resetDiskContents(contents.text, for: activeFileID)
         isDirty = false
         dirtyFileIDs.remove(activeFileID)
         hasSavedDetachedCopy = false

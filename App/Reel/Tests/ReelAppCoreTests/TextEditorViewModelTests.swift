@@ -289,6 +289,33 @@ struct TextEditorViewModelTests {
         #expect(editor.hasExternalConflict)
     }
 
+    @Test("A deliberate revert to an older saved version is still noticed")
+    func revertToOlderVersionIsNoticed() async throws {
+        let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
+        let saves = SaveCounter()
+        let editor = TextEditorViewModel(
+            document: try TextDocument(files: [file]),
+            text: "v1",
+            sourceURL: nil,
+            hashingWith: { _ in "hash" },
+            persistingStructure: { _ in },
+            persistingContents: { _, _ in await saves.increment() }
+        )
+        editor.text = "v2"
+        editor.saveNow()
+        for _ in 0..<300 where await saves.count == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(30))
+
+        // v2 is confirmed on disk; the user then restores v1 with git.
+        editor.receiveExternalContents(
+            LoadedTextFile(text: "v1", encoding: .utf8, lineEnding: .lf)
+        )
+        #expect(editor.text == "v1")
+        #expect(!editor.hasExternalConflict)
+    }
+
     @Test("Clean external edits reload while dirty edits require a choice")
     func handlesExternalChangesWithoutDiscardingLocalEdits() throws {
         let file = TextFile(id: FileID(rawValue: "main"), relativePath: "Notes.txt")
@@ -1657,4 +1684,9 @@ private final class UndoBackedTextView: NSTextView {
     override var undoManager: UndoManager? {
         providedUndoManager ?? super.undoManager
     }
+}
+
+private actor SaveCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

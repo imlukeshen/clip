@@ -25,11 +25,9 @@ public struct MermaidDiagram: Sendable, Equatable {
                 return nil
             }
             var source = text.substring(with: fence.contentRange)
-            if source.hasSuffix("\r\n") {
-                source.removeLast(2)
-            } else if source.hasSuffix("\n") || source.hasSuffix("\r") {
-                source.removeLast()
-            }
+            // "\r\n" is a single Character, so one removeLast drops a CRLF,
+            // LF, or CR terminator alike.
+            if let last = source.last, last.isNewline { source.removeLast() }
             return MermaidDiagram(range: fence.range, closingFenceRange: closing, source: source)
         }
     }
