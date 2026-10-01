@@ -16,24 +16,21 @@ public struct MermaidDiagram: Sendable, Equatable {
         self.source = source
     }
 
-    /// Every Mermaid block in `markdown`, in document order.
+    /// Every closed Mermaid block in `markdown`, in document order. Backtick
+    /// and tilde fences of any length count, as they do for the block parser.
     public static func diagrams(in markdown: String) -> [MermaidDiagram] {
-        guard let expression else { return [] }
         let text = markdown as NSString
-        return expression.matches(
-            in: markdown,
-            range: NSRange(location: 0, length: text.length)
-        ).map { match in
-            MermaidDiagram(
-                range: match.range,
-                closingFenceRange: match.range(at: 2),
-                source: text.substring(with: match.range(at: 1))
-            )
+        return MarkdownFenceScanner.fences(in: markdown).compactMap { fence in
+            guard fence.label == "mermaid", let closing = fence.closingMarkerRange else {
+                return nil
+            }
+            var source = text.substring(with: fence.contentRange)
+            if source.hasSuffix("\r\n") {
+                source.removeLast(2)
+            } else if source.hasSuffix("\n") || source.hasSuffix("\r") {
+                source.removeLast()
+            }
+            return MermaidDiagram(range: fence.range, closingFenceRange: closing, source: source)
         }
     }
-
-    private static let expression = try? NSRegularExpression(
-        pattern: #"(?ms)^```[ \t]*mermaid[ \t]*\n(.*?)\n?(^```)[ \t]*$"#,
-        options: [.caseInsensitive]
-    )
 }

@@ -1744,6 +1744,13 @@ public enum MarkdownBlockDocumentEngine {
             return nil
         }
         let text = value as NSString
+        // CommonMark: a backtick fence's info string may not contain a
+        // backtick, so a line like ``` `code` ``` is inline code, not a fence.
+        if value.first == "`",
+            text.substring(from: NSMaxRange(match.range(at: 1))).contains("`")
+        {
+            return nil
+        }
         return (
             text.substring(with: match.range(at: 1)),
             match.range(at: 2).location == NSNotFound
