@@ -17,6 +17,9 @@ final class CodeTextView: NSTextView {
     var commentPrefix = "//"
     var commentSuffix = ""
     var tabWidth = 4
+    /// What Return inserts: the file's own line ending, so typing in a CRLF
+    /// file does not turn it into a mixed one.
+    var lineBreak = "\n"
     var showsInvisibleMarkers = false
     var lineIndex = TextLineIndex()
     var onSave: (String) -> Void = { _ in }
@@ -155,7 +158,7 @@ final class CodeTextView: NSTextView {
                 )
                 return
             }
-            super.insertNewline(sender)
+            insertLineBreak()
             super.insertText(list.continuation, replacementRange: selectedRange())
             return
         }
@@ -174,7 +177,9 @@ final class CodeTextView: NSTextView {
                 TextEditResult(
                     text: source.replacingCharacters(
                         in: NSRange(location: caret, length: 0),
-                        with: expansion.text
+                        with: lineBreak == "\n"
+                            ? expansion.text
+                            : expansion.text.replacingOccurrences(of: "\n", with: lineBreak)
                     ),
                     selectedRange: NSRange(location: caret + expansion.caretOffset, length: 0)
                 )
@@ -186,8 +191,16 @@ final class CodeTextView: NSTextView {
             language: snippetLanguage,
             width: tabWidth
         )
-        super.insertNewline(sender)
+        insertLineBreak()
         if !indentation.isEmpty { super.insertText(indentation, replacementRange: selectedRange()) }
+    }
+
+    private func insertLineBreak() {
+        guard lineBreak != "\n" else {
+            super.insertNewline(nil)
+            return
+        }
+        super.insertText(lineBreak, replacementRange: selectedRange())
     }
 
     override func deleteBackward(_ sender: Any?) {
