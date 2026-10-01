@@ -88,6 +88,7 @@ public struct AssistantTurn: Sendable, Equatable {
 public struct AssistantTurnRunner: Sendable {
     private static let maximumToolCalls = 25
     private static let maximumReadRounds = 8
+    private static let maximumRepairRounds = 2
     private let executor: ToolExecutor
 
     public init(executor: ToolExecutor = ToolExecutor()) { self.executor = executor }
@@ -127,6 +128,7 @@ public struct AssistantTurnRunner: Sendable {
         var context = initialContext
         var results: [ToolResult] = []
         var reachedToolLimit = false
+        var repairRounds = 0
 
         for round in 0..<Self.maximumReadRounds {
             let request = ChatRequest(
@@ -162,6 +164,8 @@ public struct AssistantTurnRunner: Sendable {
             invocations.append(contentsOf: roundInvocations)
 
             var roundResults: [ToolResult] = []
+            var appliedEdit = false
+            var failedCall = false
             for invocation in roundInvocations {
                 // One bad call (an invented tool, malformed arguments) used to
                 // abort the whole turn, dropping earlier edits while PDF and
@@ -176,6 +180,9 @@ public struct AssistantTurnRunner: Sendable {
                         _ = try candidate.apply(patch)
                         context.document = candidate
                     }
+                    if ToolCatalog.schema(named: invocation.name)?.kind != .read {
+                        appliedEdit = true
+                    }
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -183,6 +190,7 @@ public struct AssistantTurnRunner: Sendable {
                         callID: invocation.callID,
                         message: "Failed: \(error.localizedDescription)"
                     )
+                    failedCall = true
                 }
                 roundResults.append(result)
                 results.append(result)
@@ -196,9 +204,18 @@ public struct AssistantTurnRunner: Sendable {
                 ToolCatalog.schema(named: invocation.name)?.kind != .read
             }
             let awaitsConfirmation = roundResults.contains(where: \.requiresConfirmation)
-            guard !containsWrite || canContinueTextRepair, !awaitsConfirmation,
+            // An edit normally ends the turn, because a model shown its own
+            // successful edit tends to make it again. A round in which every
+            // edit failed applied nothing, so there is nothing to repeat and
+            // the model can be shown the errors. Bounded, since each attempt
+            // is a full request and a small model may never get it right.
+            let canRepair =
+                failedCall && !appliedEdit && repairRounds < Self.maximumRepairRounds
+            guard !containsWrite || canContinueTextRepair || canRepair, !awaitsConfirmation,
                 round + 1 < Self.maximumReadRounds
             else { break }
+            let isRepairing = containsWrite && !canContinueTextRepair
+            if isRepairing { repairRounds += 1 }
 
             let called = roundInvocations.map(\.name).joined(separator: ", ")
             messages.append(
@@ -210,12 +227,12 @@ public struct AssistantTurnRunner: Sendable {
             let feedback = zip(roundInvocations, roundResults).map { invocation, result in
                 "[\(invocation.callID) \(invocation.name)] \(result.message)"
             }.joined(separator: "\n")
+            let instruction =
+                isRepairing
+                ? "The failed calls changed nothing. Correct their arguments and call them again."
+                : "Continue the original request. Use another tool when needed; do not repeat a completed search."
             messages.append(
-                .init(
-                    role: .user,
-                    content:
-                        "Tool results:\n\(feedback)\n\nContinue the original request. Use another tool when needed; do not repeat a completed search."
-                )
+                .init(role: .user, content: "Tool results:\n\(feedback)\n\n\(instruction)")
             )
         }
 
