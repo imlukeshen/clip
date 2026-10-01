@@ -15,7 +15,7 @@ struct URLSessionTransport: HTTPTransport {
     }
 }
 
-private struct ProviderConfiguration: Sendable {
+struct ProviderConfiguration: Sendable {
     var id: ProviderID
     var displayName: String
     var baseURL: URL
@@ -292,7 +292,7 @@ private func requiredURL(_ value: String) -> URL {
     return url
 }
 
-private func record(_ request: ChatRequest, configuration: ProviderConfiguration) async {
+func record(_ request: ChatRequest, configuration: ProviderConfiguration) async {
     await configuration.ledger.record(
         EgressEntry(
             provider: configuration.id,
@@ -302,13 +302,13 @@ private func record(_ request: ChatRequest, configuration: ProviderConfiguration
         ))
 }
 
-private func validate(_ response: HTTPURLResponse) throws {
+func validate(_ response: HTTPURLResponse) throws {
     guard (200..<300).contains(response.statusCode) else {
         throw AIKitError.requestFailed(response.statusCode)
     }
 }
 
-private func jsonRequest(url: URL, body: JSONValue) throws -> URLRequest {
+func jsonRequest(url: URL, body: JSONValue) throws -> URLRequest {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -376,7 +376,7 @@ private func openAIMessages(_ request: ChatRequest) -> [JSONValue] {
     }
 }
 
-private func openAITools(_ tools: [ToolSchema]) -> JSONValue {
+func openAITools(_ tools: [ToolSchema]) -> JSONValue {
     .array(
         tools.map { tool in
             .object([
@@ -648,7 +648,7 @@ enum GeminiStreamParser {
     }
 }
 
-private func decodeArguments(_ source: String) throws -> JSONValue {
+func decodeArguments(_ source: String) throws -> JSONValue {
     if source.isEmpty { return .object([:]) }
     do { return try JSONDecoder().decode(JSONValue.self, from: Data(source.utf8)) } catch {
         throw AIKitError.invalidResponse("Tool arguments were not JSON")
@@ -656,10 +656,10 @@ private func decodeArguments(_ source: String) throws -> JSONValue {
 }
 
 extension JSONValue {
-    fileprivate var stringValue: String? {
+    var stringValue: String? {
         if case .string(let value) = self { value } else { nil }
     }
-    fileprivate var int: Int? { if case .number(let value) = self { Int(value) } else { nil } }
+    var int: Int? { if case .number(let value) = self { Int(value) } else { nil } }
 }
 
 extension Array where Element == ChatChunk {
