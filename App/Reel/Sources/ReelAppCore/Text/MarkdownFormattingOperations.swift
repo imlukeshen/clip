@@ -245,6 +245,101 @@ public enum MarkdownFormattingOperations {
         )
     }
 
+    /// Inserts a fenced code block labelled `languageLabel` (`"python"`,
+    /// `"mermaid"`, or `""` for plain). Selected text becomes its contents;
+    /// otherwise a placeholder is selected so typing replaces it.
+    public static func insertingCodeBlock(
+        languageLabel: String,
+        into text: String,
+        selectedRange requestedRange: NSRange
+    ) -> TextEditResult {
+        let source = text as NSString
+        let range = clamped(requestedRange, in: source)
+        let placeholder =
+            languageLabel == "mermaid"
+            ? "flowchart TD\n    Idea[Idea] --> Build[Build]\n    Build --> Ship[Ship]" : "code"
+        return insertCodeBlock(
+            in: source,
+            selectedRange: range,
+            contents: range.length == 0 ? placeholder : source.substring(with: range),
+            languageLabel: languageLabel
+        )
+    }
+
+    /// The sections a product requirements document usually needs, ready to
+    /// fill in, with the first placeholder selected.
+    public static func insertingPRDOutline(
+        into text: String,
+        selectedRange requestedRange: NSRange
+    ) -> TextEditResult {
+        let source = text as NSString
+        let range = clamped(requestedRange, in: source)
+        let leadingBreak =
+            range.location > 0 && source.character(at: range.location - 1) != 0x0A ? "\n\n" : ""
+        let title = "Product name"
+        let outline = """
+            # \(title)
+
+            | | |
+            | --- | --- |
+            | **Owner** | Name |
+            | **Status** | Draft |
+            | **Last updated** | Date |
+
+            ## Problem
+
+            What is painful today, for whom, and how do we know?
+
+            ## Goals
+
+            - [ ] Goal one
+            - [ ] Goal two
+
+            ## Non-goals
+
+            - Out of scope for this release
+
+            ## Users and use cases
+
+            1. As a user, I want to…, so that…
+
+            ## Requirements
+
+            | Priority | Requirement | Notes |
+            | --- | --- | --- |
+            | P0 | Must have | |
+            | P1 | Should have | |
+
+            ## User flow
+
+            ```mermaid
+            flowchart LR
+                Start[Open the app] --> Act[Do the thing]
+                Act --> Done[See the result]
+            ```
+
+            ## Success metrics
+
+            - Metric and target
+
+            ## Open questions
+
+            - [ ] Question
+
+            """
+        let replacement = leadingBreak + outline
+        let titleOffset = (leadingBreak + "# " as NSString).length
+        return replacing(
+            range,
+            in: source,
+            with: replacement,
+            selection: NSRange(
+                location: range.location + titleOffset,
+                length: (title as NSString).length
+            )
+        )
+    }
+
     private static func wrap(
         in source: NSString,
         selectedRange: NSRange,

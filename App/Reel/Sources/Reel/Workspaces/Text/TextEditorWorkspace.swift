@@ -684,8 +684,22 @@ struct TextEditorWorkspace: View {
             )
 
             Menu {
-                Button("Code block") {
-                    sendMarkdownAction(#selector(CodeTextView.markdownCodeBlock(_:)))
+                Menu("Code block") {
+                    Button("Mermaid diagram") {
+                        sendMarkdownAction(
+                            #selector(CodeTextView.markdownCodeBlockInLanguage(_:)),
+                            from: "mermaid"
+                        )
+                    }
+                    Divider()
+                    ForEach(Self.codeBlockLanguages, id: \.label) { language in
+                        Button(language.title) {
+                            sendMarkdownAction(
+                                #selector(CodeTextView.markdownCodeBlockInLanguage(_:)),
+                                from: language.label
+                            )
+                        }
+                    }
                 }
                 Button("Table") {
                     sendMarkdownAction(#selector(CodeTextView.markdownTable(_:)))
@@ -703,13 +717,17 @@ struct TextEditorWorkspace: View {
                 Button("Divider") {
                     sendMarkdownAction(#selector(CodeTextView.markdownDivider(_:)))
                 }
+                Divider()
+                Button("PRD outline") {
+                    sendMarkdownAction(#selector(CodeTextView.markdownPRDOutline(_:)))
+                }
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 28, height: 28)
             }
             .menuStyle(ReelMenuStyle())
             .menuIndicator(.hidden)
-            .help("Insert code, a table, image, footnote, math, or divider")
+            .help("Insert code, a diagram, a table, image, footnote, math, or a PRD outline")
             .accessibilityLabel("Insert Markdown block")
             .accessibilityIdentifier("markdown-insert-block")
         }
@@ -759,8 +777,17 @@ struct TextEditorWorkspace: View {
         }
     }
 
-    private func sendMarkdownAction(_ action: Selector) {
-        if !NSApp.sendAction(action, to: nil, from: nil) {
+    /// Fence labels offered when inserting a code block, in menu order.
+    private static let codeBlockLanguages: [(title: String, label: String)] = [
+        ("Plain text", ""), ("Bash", "bash"), ("C", "c"), ("C++", "cpp"), ("CSS", "css"),
+        ("Go", "go"), ("HTML", "html"), ("Java", "java"), ("JavaScript", "javascript"),
+        ("JSON", "json"), ("Python", "python"), ("Rust", "rust"), ("SQL", "sql"),
+        ("Swift", "swift"), ("TOML", "toml"), ("TypeScript", "typescript"), ("XML", "xml"),
+        ("YAML", "yaml"),
+    ]
+
+    private func sendMarkdownAction(_ action: Selector, from sender: Any? = nil) {
+        if !NSApp.sendAction(action, to: nil, from: sender) {
             editor.reportNotice("Click in the writing canvas before formatting text.")
         }
     }

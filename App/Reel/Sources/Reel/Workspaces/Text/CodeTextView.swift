@@ -127,6 +127,13 @@ final class CodeTextView: NSTextView {
         )
         if snippetLanguage == .markdown, let list = markdownContinuation(for: beforeCaret) {
             if list.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let outdented = MarkdownIndentation.outdentingEmptyNestedItem(
+                    in: string,
+                    caret: caret
+                ) {
+                    apply(outdented)
+                    return
+                }
                 let removal = NSRange(
                     location: lineRange.location + list.markerRange.location,
                     length: list.markerRange.length
@@ -340,7 +347,7 @@ final class CodeTextView: NSTextView {
             return
         }
         apply(
-            TextEditingOperations.indent(
+            MarkdownIndentation.tab(
                 in: string,
                 selectedRange: selectedRange(),
                 width: tabWidth
@@ -349,9 +356,17 @@ final class CodeTextView: NSTextView {
     }
 
     override func insertBacktab(_ sender: Any?) {
-        let outdentsLines =
-            snippetLanguage == .markdown || CodeIndentation.usesSoftTabs(for: snippetLanguage)
-        guard outdentsLines, !hasMarkedText() else {
+        if snippetLanguage == .markdown, !hasMarkedText() {
+            apply(
+                MarkdownIndentation.backtab(
+                    in: string,
+                    selectedRange: selectedRange(),
+                    width: tabWidth
+                )
+            )
+            return
+        }
+        guard CodeIndentation.usesSoftTabs(for: snippetLanguage), !hasMarkedText() else {
             super.insertBacktab(sender)
             return
         }
@@ -627,6 +642,8 @@ final class CodeTextView: NSTextView {
             #selector(markdownChecklist(_:)),
             #selector(markdownQuote(_:)),
             #selector(markdownCodeBlock(_:)),
+            #selector(markdownCodeBlockInLanguage(_:)),
+            #selector(markdownPRDOutline(_:)),
             #selector(markdownImage(_:)),
             #selector(markdownTable(_:)),
             #selector(markdownFootnote(_:)),
@@ -724,6 +741,38 @@ final class CodeTextView: NSTextView {
             }
         }
         performMarkdown(.codeBlock, notice: "Code block inserted.")
+    }
+
+    /// Inserts a code block for the fence label the sender carries, such as
+    /// `"python"` or `"mermaid"`.
+    @objc func markdownCodeBlockInLanguage(_ sender: Any?) {
+        guard isEditable, snippetLanguage == .markdown, let label = sender as? String else {
+            return
+        }
+        apply(
+            MarkdownFormattingOperations.insertingCodeBlock(
+                languageLabel: label,
+                into: string,
+                selectedRange: selectedRange()
+            )
+        )
+        onSnippetNotice(
+            label == "mermaid"
+                ? "Mermaid diagram inserted." : "Code block inserted."
+        )
+        window?.makeFirstResponder(self)
+    }
+
+    @objc func markdownPRDOutline(_ sender: Any?) {
+        guard isEditable, snippetLanguage == .markdown else { return }
+        apply(
+            MarkdownFormattingOperations.insertingPRDOutline(
+                into: string,
+                selectedRange: selectedRange()
+            )
+        )
+        onSnippetNotice("PRD outline inserted. Start with the product name.")
+        window?.makeFirstResponder(self)
     }
 
     @objc func markdownImage(_ sender: Any?) {
