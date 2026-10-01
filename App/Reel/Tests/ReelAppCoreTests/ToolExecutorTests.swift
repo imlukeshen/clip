@@ -35,6 +35,69 @@ struct ToolExecutorTests {
         #expect(turn.combinedPatch != nil)
     }
 
+    @Test("A failed edit goes back to the model, which corrects it")
+    func failedEditIsRetried() async throws {
+        let fixture = try Fixture()
+        let ledger = EgressLedger()
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "speed it up",
+            turnID: "repair",
+            provider: RepairSequenceProvider(ledger: ledger, corrects: true),
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: fixture.context
+        )
+        // The first call named a clip that does not exist. Nothing was applied,
+        // so asking again cannot repeat an edit.
+        #expect(turn.invocations.map(\.callID) == ["wrong", "right"])
+        #expect(turn.results.first?.message.hasPrefix("Failed") == true)
+        #expect(turn.results.last?.patch != nil)
+        #expect(turn.combinedPatch?.ops.isEmpty == false)
+        #expect(await ledger.summary().requestCount == 2)
+    }
+
+    @Test("A model that keeps failing is stopped after two corrections")
+    func repairIsBounded() async throws {
+        let fixture = try Fixture()
+        let ledger = EgressLedger()
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "speed it up",
+            turnID: "repair-bounded",
+            provider: RepairSequenceProvider(ledger: ledger, corrects: false),
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: fixture.context
+        )
+        #expect(await ledger.summary().requestCount == 3)
+        #expect(turn.results.allSatisfy { $0.message.hasPrefix("Failed") })
+        #expect(turn.combinedPatch == nil)
+    }
+
+    @Test("A round where one edit applied is not retried, so it cannot apply twice")
+    func partialSuccessIsNotRetried() async throws {
+        let fixture = try Fixture()
+        let ledger = EgressLedger()
+        let provider = FixtureProvider(
+            ledger: ledger,
+            chunks: [
+                .toolCall(
+                    call(
+                        "setSpeed", ["itemID": .string("one"), "speed": .number(1.5)], id: "speed")),
+                .toolCall(call("makeItPop", [:], id: "invented")),
+                .done(.toolUse),
+            ])
+        let turn = try await AssistantTurnRunner(executor: fixture.executor).run(
+            prompt: "speed it up and make it pop",
+            turnID: "partial",
+            provider: provider,
+            policy: .autoApply,
+            digest: fixture.digest,
+            context: fixture.context
+        )
+        #expect(await ledger.summary().requestCount == 1)
+        #expect(turn.results.count == 2)
+    }
+
     @Test("A number too large to be a time is rejected instead of crashing")
     func outOfRangeNumbersAreRejected() async throws {
         let fixture = try Fixture()
@@ -504,6 +567,45 @@ private struct FixtureProvider: AIProvider {
                         provider: id, model: request.model, purpose: request.purpose,
                         mediaAttached: request.mediaAttached))
                 for chunk in chunks { continuation.yield(chunk) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+/// Names a clip that does not exist, then the right one once it has seen the
+/// failure — or never, when `corrects` is false.
+private struct RepairSequenceProvider: AIProvider {
+    let ledger: EgressLedger
+    let corrects: Bool
+    var id: ProviderID { .openAICompatible }
+    var displayName: String { "Repair Fixture" }
+    var supportsTools: Bool { true }
+    var supportsVision: Bool { false }
+    var defaultModel: String { "fixture" }
+
+    func send(_ request: ChatRequest) -> AsyncThrowingStream<ChatChunk, Error> {
+        // Both halves of the round have to arrive as tool turns: the call it
+        // made, with its arguments, and the failure that call produced.
+        let replayed = request.messages.dropLast().last?.toolCalls.map(\.callID) == ["wrong"]
+        let sawFailure =
+            replayed
+            && request.messages.last?.toolResults.contains {
+                $0.callID == "wrong" && $0.content.hasPrefix("Failed")
+            } == true
+        let invocation =
+            sawFailure && corrects
+            ? call("setSpeed", ["itemID": .string("one"), "speed": .number(2)], id: "right")
+            : call("setSpeed", ["itemID": .string("nope"), "speed": .number(2)], id: "wrong")
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                await ledger.record(
+                    EgressEntry(
+                        provider: id, model: request.model, purpose: request.purpose,
+                        mediaAttached: request.mediaAttached))
+                continuation.yield(.toolCall(invocation))
+                continuation.yield(.done(.toolUse))
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }

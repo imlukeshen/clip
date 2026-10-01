@@ -115,9 +115,11 @@ public enum CommandRegistry {
             exposure: .always,
             required: ["text"],
             properties: [
-                "text": string, "kind": string, "after": string, "before": string,
-                "folder": string, "minimumDuration": number, "maximumDuration": number,
-                "hasAudio": boolean, "mode": string, "limit": number,
+                "text": string, "kind": string("video, image, audio, document, or text"),
+                "after": string("YYYY-MM-DD"), "before": string("YYYY-MM-DD"),
+                "folder": string, "minimumDuration": number("Seconds"),
+                "maximumDuration": number("Seconds"), "hasAudio": boolean,
+                "mode": string("auto, keyword, or semantic"), "limit": number,
             ]),
         command(
             "search.withinAsset", "Search Within Asset", .asset,
@@ -134,7 +136,7 @@ public enum CommandRegistry {
             kind: .read,
             exposure: .always,
             required: ["assetID", "time"],
-            properties: ["assetID": string, "time": number]),
+            properties: ["assetID": string, "time": number("Seconds into the source media")]),
         command(
             "search.similar", "Find Similar Assets", .asset,
             description:
@@ -160,8 +162,8 @@ public enum CommandRegistry {
             required: ["assetIDs", "target"],
             properties: [
                 "assetIDs": array(string), "target": string, "preset": string,
-                "quality": number, "longestSide": number, "maximumBytes": number,
-                "stripMetadata": boolean,
+                "quality": number("0 to 1"), "longestSide": number("Pixels; images only"),
+                "maximumBytes": number, "stripMetadata": boolean,
             ]),
         command(
             "convert.presets", "List Conversion Presets", .file,
@@ -178,9 +180,10 @@ public enum CommandRegistry {
             required: ["assetIDs", "target"],
             properties: [
                 "assetIDs": array(string), "target": string, "preset": string,
-                "quality": number, "longestSide": number, "maximumBytes": number,
-                "stripMetadata": boolean, "destination": string,
-                "filenameTemplate": string, "conflictPolicy": string,
+                "quality": number("0 to 1"), "longestSide": number("Pixels; images only"),
+                "maximumBytes": number, "stripMetadata": boolean, "destination": string,
+                "filenameTemplate": string,
+                "conflictPolicy": string("rename, overwrite, or skip"),
             ]),
         command(
             "text.create", "Create Text Buffer", .text,
@@ -246,35 +249,66 @@ public enum CommandRegistry {
             "describeClip", "Describe Clip", .clip, kind: .read, exposure: .onDemand,
             required: ["itemID"], properties: ["itemID": string]),
         command(
-            "trimClip", "Trim Clip", .clip, exposure: .always,
+            "trimClip", "Trim Clip", .clip,
+            description:
+                "Set which part of its source media a clip plays. On the main track, later clips shift to stay adjacent.",
+            exposure: .always,
             required: ["itemID", "start", "end"],
-            properties: ["itemID": string, "start": number, "end": number]),
+            properties: [
+                "itemID": string,
+                "start": number("Seconds into the source media where the clip begins"),
+                "end": number("Seconds into the source media where the clip ends"),
+            ]),
         command(
             "splitClip", "Split Clip", .clip,
-            shortcut: .init("k", modifiers: ["command", "shift"]), exposure: .always,
-            required: ["itemID", "at"], properties: ["itemID": string, "at": number]),
+            shortcut: .init("k", modifiers: ["command", "shift"]),
+            description: "Cut one clip into two at a point on the timeline.",
+            exposure: .always,
+            required: ["itemID", "at"],
+            properties: [
+                "itemID": string,
+                "at": number(
+                    "Seconds from the start of the project, at least 0.4 inside the clip"),
+            ]),
         command(
             "reorderClips", "Reorder Clips", .timeline, exposure: .always,
-            required: ["order"], properties: ["order": array(string)]),
+            required: ["order"],
+            properties: [
+                "order": described(array(string), "Clip IDs from one track, in their new order")
+            ]),
         command(
             "timeline.toggleSnapping", "Toggle Snapping", .timeline,
             shortcut: .init("s", modifiers: []), kind: .confirm, exposure: .onDemand),
         command(
             "timeline.rippleDelete", "Ripple Delete", .timeline,
             shortcut: .init("delete", modifiers: ["shift"]), destructive: true,
+            description: "Delete a clip from the main track and close the gap it leaves.",
             exposure: .onDemand, required: ["itemID"], properties: ["itemID": string]),
         command(
-            "timeline.roll", "Roll Edit", .timeline, exposure: .onDemand,
+            "timeline.roll", "Roll Edit", .timeline,
+            description: "Move the cut between this clip and the next one.",
+            exposure: .onDemand,
             required: ["itemID", "delta"],
-            properties: ["itemID": string, "delta": number]),
+            properties: [
+                "itemID": string, "delta": number("Seconds; positive moves the cut later"),
+            ]),
         command(
-            "timeline.slip", "Slip Clip", .timeline, exposure: .onDemand,
+            "timeline.slip", "Slip Clip", .timeline,
+            description: "Change which part of the source a clip shows without moving it.",
+            exposure: .onDemand,
             required: ["itemID", "delta"],
-            properties: ["itemID": string, "delta": number]),
+            properties: [
+                "itemID": string,
+                "delta": number("Seconds of source; positive shows later material"),
+            ]),
         command(
-            "timeline.slide", "Slide Clip", .timeline, exposure: .onDemand,
+            "timeline.slide", "Slide Clip", .timeline,
+            description: "Move a clip between its two neighbours, which resize to fit.",
+            exposure: .onDemand,
             required: ["itemID", "delta"],
-            properties: ["itemID": string, "delta": number]),
+            properties: [
+                "itemID": string, "delta": number("Seconds; positive moves the clip later"),
+            ]),
         command(
             "timeline.razorTool", "Razor Tool", .timeline,
             shortcut: .init("c", modifiers: []), kind: .confirm, exposure: .onDemand),
@@ -296,7 +330,10 @@ public enum CommandRegistry {
         command(
             "timeline.addMarker", "Add Marker", .timeline,
             shortcut: .init("m", modifiers: []), exposure: .onDemand,
-            properties: ["time": number, "name": string]),
+            properties: [
+                "time": number("Seconds from the start of the project; defaults to the playhead"),
+                "name": string,
+            ]),
         command(
             "timeline.nextMarker", "Go to Next Marker", .timeline,
             shortcut: .init("m", modifiers: ["shift"]), kind: .confirm,
@@ -316,35 +353,70 @@ public enum CommandRegistry {
             exposure: .onDemand),
         command(
             "timeline.crossDissolve", "Apply Cross Dissolve", .timeline,
-            shortcut: .init("d"), exposure: .onDemand,
+            shortcut: .init("d"),
+            description: "Dissolve from this clip into the next one.",
+            exposure: .onDemand,
             required: ["itemID", "duration"],
-            properties: ["itemID": string, "duration": number]),
+            properties: ["itemID": string, "duration": number("Seconds")]),
         command(
             "timeline.audioFade", "Set Audio Fade", .audio, exposure: .onDemand,
             required: ["itemID", "fadeIn", "fadeOut"],
-            properties: ["itemID": string, "fadeIn": number, "fadeOut": number]),
+            properties: [
+                "itemID": string, "fadeIn": number("Seconds"), "fadeOut": number("Seconds"),
+            ]),
         command(
             "timeline.setTrackState", "Set Track State", .timeline, exposure: .onDemand,
             required: ["trackID", "property", "value"],
-            properties: ["trackID": string, "property": string, "value": boolean]),
-        command(
-            "setSpeed", "Set Speed", .clip, exposure: .always,
-            required: ["itemID", "speed"], properties: ["itemID": string, "speed": number]),
-        command(
-            "setKeyframe", "Set Keyframe", .effect, exposure: .always,
-            required: ["property", "time", "value"],
             properties: [
-                "property": string, "time": number, "value": keyframeValue,
-                "itemID": string, "trackID": string, "effectID": string,
-                "easing": string,
+                "trackID": string, "property": string("enabled, locked, muted, or solo"),
+                "value": boolean,
             ]),
         command(
-            "addZoom", "Add Zoom", .effect, exposure: .always,
-            required: ["itemID", "range", "center", "scale"],
-            properties: ["itemID": string, "range": range, "center": point, "scale": number]),
+            "setSpeed", "Set Speed", .clip, exposure: .always,
+            required: ["itemID", "speed"],
+            properties: [
+                "itemID": string, "speed": number("Rate multiplier; 1 is normal, 2 is double"),
+            ]),
         command(
-            "autoZoomFromClicks", "Auto Zoom from Clicks", .effect, exposure: .always,
-            required: ["itemIDs"], properties: ["itemIDs": array(string), "options": object]),
+            "setKeyframe", "Set Keyframe", .effect,
+            description:
+                "Animate a property at a moment. opacity and transform need itemID; gain needs trackID; blurRadius and zoomScale need itemID and effectID.",
+            exposure: .always,
+            required: ["property", "time", "value"],
+            properties: [
+                "property": string("opacity, gain, transform, blurRadius, or zoomScale"),
+                "time": number(
+                    "Seconds from the start of the clip; for gain, from the start of the project"),
+                "value": described(
+                    keyframeValue,
+                    "A number (opacity 0 to 1, gain in decibels), or for transform an object with translationX, translationY, scaleX, scaleY, rotationDegrees"
+                ),
+                "itemID": string, "trackID": string, "effectID": string,
+                "easing": string("linear, smoothstep, or easeInOut"),
+            ]),
+        command(
+            "addZoom", "Add Zoom", .effect,
+            description: "Zoom into part of the frame for part of a clip.",
+            exposure: .always,
+            required: ["itemID", "range", "center", "scale"],
+            properties: [
+                "itemID": string,
+                "range": described(range, "Seconds from the start of the clip"),
+                "center": described(point, "Fractions 0 to 1 of the frame width and height"),
+                "scale": number("Magnification; 2 doubles the size"),
+            ]),
+        command(
+            "autoZoomFromClicks", "Auto Zoom from Clicks", .effect,
+            description: "Add zooms around the mouse clicks recorded with each clip.",
+            exposure: .always,
+            required: ["itemIDs"],
+            properties: [
+                "itemIDs": array(string),
+                "options": described(
+                    object,
+                    "Optional: clusterWindow, leadIn, holdOut, minGap in seconds; scale; maxPerMinute"
+                ),
+            ]),
         command(
             "removeEffect", "Remove Effect", .effect, destructive: true, exposure: .always,
             required: ["itemID", "effectID"],
@@ -353,20 +425,25 @@ public enum CommandRegistry {
             "setBackground", "Set Background", .effect, exposure: .always,
             required: ["itemIDs", "padding", "radius", "style"],
             properties: [
-                "itemIDs": array(string), "padding": number, "radius": number, "style": object,
+                "itemIDs": array(string), "padding": number, "radius": number,
+                "style": described(
+                    object,
+                    "Either {color: {r, g, b, a}} with channels 0 to 1, or {assetID} for an image"),
             ]),
         command(
             "detectSilence", "Detect Silence", .audio, kind: .read, exposure: .onDemand,
             required: ["itemIDs", "thresholdDB"],
-            properties: ["itemIDs": array(string), "thresholdDB": number]),
+            properties: ["itemIDs": array(string), "thresholdDB": silenceThreshold]),
         command(
-            "trimSilence", "Trim Silence", .audio, exposure: .always,
+            "trimSilence", "Trim Silence", .audio,
+            description: "Trim the silence from the start and end of each clip.",
+            exposure: .always,
             required: ["itemIDs", "thresholdDB"],
-            properties: ["itemIDs": array(string), "thresholdDB": number]),
+            properties: ["itemIDs": array(string), "thresholdDB": silenceThreshold]),
         command(
             "generateCaptions", "Generate Captions", .audio, exposure: .always,
             required: ["itemIDs", "engine"],
-            properties: ["itemIDs": array(string), "engine": string]),
+            properties: ["itemIDs": array(string), "engine": string("Must be onDevice")]),
         command(
             "exportProject", "Export Project", .file, kind: .confirm, exposure: .always,
             required: ["preset", "destination"],
@@ -384,12 +461,17 @@ public enum CommandRegistry {
             "view.getFrame", "Get Frame", .view, kind: .confirm, exposure: .onDemand,
             required: ["at"], properties: ["at": number]),
         command(
-            "cropTo", "Crop Image", .image, exposure: .onDemand,
-            properties: ["aspect": string, "rect": rect]),
+            "cropTo", "Crop Image", .image,
+            description: "Crop the image to an aspect ratio or to a rectangle. Give one.",
+            exposure: .onDemand,
+            properties: ["aspect": string("Such as 16:9 or square"), "rect": imageRect]),
         command(
             "addAnnotation", "Add Image Annotation", .image, exposure: .onDemand,
             required: ["type", "rect"],
-            properties: ["type": string, "rect": rect, "text": string]),
+            properties: [
+                "type": string("arrow, box, ellipse, text, highlight, or step"),
+                "rect": imageRect, "text": string,
+            ]),
         command(
             "suggestRedactions", "Suggest Image Redactions", .image,
             kind: .read, exposure: .onDemand),
@@ -398,7 +480,10 @@ public enum CommandRegistry {
             required: ["suggestionIDs"], properties: ["suggestionIDs": array(string)]),
         command(
             "addPadding", "Add Image Padding", .image, exposure: .onDemand,
-            properties: ["amount": number, "color": object]),
+            properties: [
+                "amount": number("Fraction of the image size, such as 0.08"),
+                "color": described(object, "r, g, b, a channels, each 0 to 1"),
+            ]),
         command(
             "generateAltText", "Generate Image Alt Text", .image,
             kind: .read, exposure: .onDemand),
@@ -410,45 +495,61 @@ public enum CommandRegistry {
             "pdf.addText", "Add PDF Text", .pdf, exposure: .onDemand,
             required: ["text", "rect"],
             properties: [
-                "pageID": string, "text": string, "rect": rect, "fontSize": number,
+                "pageID": pageID, "text": string, "rect": pageRect, "fontSize": number,
             ]),
         command(
             "pdf.highlight", "Highlight PDF Region", .pdf, exposure: .onDemand,
-            required: ["rect"], properties: ["pageID": string, "rect": rect]),
+            required: ["rect"], properties: ["pageID": pageID, "rect": pageRect]),
         command(
             "pdf.redact", "Redact PDF Region", .pdf, destructive: true, exposure: .onDemand,
-            required: ["rect"], properties: ["pageID": string, "rect": rect]),
+            required: ["rect"], properties: ["pageID": pageID, "rect": pageRect]),
         command(
             "pdf.findText", "Find PDF Text", .pdf,
             description:
                 "Locate every occurrence of a string and return its page and rectangle. Call this before pdf.redact or pdf.highlight, which need a rectangle.",
             kind: .read, exposure: .onDemand,
-            required: ["text"], properties: ["text": string, "pageID": string]),
+            required: ["text"], properties: ["text": string, "pageID": pageID]),
         command(
             "pdf.redactText", "Redact PDF Text", .pdf, destructive: true,
             description:
                 "Redact every occurrence of a string. Prefer this over pdf.redact when the user names the text to hide rather than a region.",
             exposure: .onDemand,
-            required: ["text"], properties: ["text": string, "pageID": string]),
+            required: ["text"], properties: ["text": string, "pageID": pageID]),
         command(
-            "pdf.rotatePage", "Rotate PDF Page", .pdf, exposure: .onDemand,
-            properties: ["pageID": string]),
+            "pdf.rotatePage", "Rotate PDF Page", .pdf,
+            description: "Rotate a page a quarter turn clockwise.",
+            exposure: .onDemand,
+            properties: ["pageID": pageID]),
         command(
             "pdf.reorderPage", "Reorder PDF Page", .pdf, exposure: .onDemand,
             required: ["destination"],
-            properties: ["pageID": string, "destination": number]),
+            properties: [
+                "pageID": pageID,
+                "destination": number("New position, counting from 0 for the first page"),
+            ]),
         command(
             "pdf.ocrPage", "Recognize PDF Page Text", .pdf, exposure: .onDemand,
-            properties: ["pageID": string]),
+            properties: ["pageID": pageID]),
         command(
             "pdf.toMarkdown", "Convert PDF to Markdown", .pdf,
             kind: .read, exposure: .onDemand),
         command(
-            "listCommands", "List Commands", .app, kind: .read, exposure: .always,
-            properties: ["category": string, "query": string]),
+            "listCommands", "List Commands", .app,
+            description: "List commands that are not offered directly, to run with runCommand.",
+            kind: .read, exposure: .always,
+            properties: [
+                "category": string(
+                    "asset, clip, effect, audio, timeline, image, pdf, text, file, view, or app"),
+                "query": string,
+            ]),
         command(
-            "runCommand", "Run Command", .app, exposure: .always,
-            required: ["id"], properties: ["id": string, "arguments": object]),
+            "runCommand", "Run Command", .app,
+            description: "Run a command found with listCommands.",
+            exposure: .always,
+            required: ["id"],
+            properties: [
+                "id": string("A command ID returned by listCommands"), "arguments": object,
+            ]),
     ]
 
     /// Deliberately non-agent commands require a documented entry here.
@@ -496,6 +597,29 @@ public enum CommandRegistry {
     private static let keyframeValue: JSONValue = .object([
         "anyOf": .array([number, object])
     ])
+    private static let silenceThreshold = number(
+        "Decibels below which audio counts as silence, such as -38")
+    private static let imageRect = described(rect, "Fractions 0 to 1 of the image")
+    private static let pageRect = described(
+        rect, "Fractions 0 to 1 of the page, measured from its top-left corner")
+    private static let pageID = string("Defaults to the selected page")
+
+    // A bare type tells a model that `start` is a number and nothing else. The
+    // unit and the reference point — seconds, and of the source or of the
+    // project — are what it gets wrong, so they are stated where it reads them.
+    private static func string(_ description: String) -> JSONValue {
+        described(string, description)
+    }
+
+    private static func number(_ description: String) -> JSONValue {
+        described(number, description)
+    }
+
+    private static func described(_ schema: JSONValue, _ description: String) -> JSONValue {
+        guard case .object(var fields) = schema else { return schema }
+        fields["description"] = .string(description)
+        return .object(fields)
+    }
 
     private static func array(_ item: JSONValue) -> JSONValue {
         .object(["type": .string("array"), "items": item])

@@ -175,15 +175,29 @@ public final class AISettingsModel {
             // picker between turns, and sending tool schemas to a model without
             // them is a 400 from Ollama, not a degraded answer.
             let capabilities = await localCapabilities(for: configuration)
+            // Both must hold: the person opted in, and the model can read an
+            // image. Claiming vision for a model without it means sending a
+            // picture that is silently dropped, which reads as the assistant
+            // ignoring what is plainly on screen.
+            let supportsVision = sharesWindowWithAssistant && capabilities.vision
+            // A local Ollama is reached through its native endpoint, the only
+            // one that can be told how much context to allocate. Through the
+            // compatible one the prompt was cut to fit the server's default
+            // before the model read it. Other servers have no such endpoint.
+            if OllamaEndpoint.isLocalOllama(configuration.url) {
+                return OllamaChatProvider(
+                    baseURL: OllamaEndpoint.nativeBaseURL(forCompatible: configuration.url),
+                    defaultModel: configuration.model,
+                    supportsTools: capabilities.tools,
+                    supportsVision: supportsVision,
+                    ledger: ledger
+                )
+            }
             return OpenAICompatibleProvider(
                 baseURL: configuration.url,
                 defaultModel: configuration.model,
                 supportsTools: capabilities.tools,
-                // Both must hold: the person opted in, and the model can read an
-                // image. Claiming vision for a model without it means sending a
-                // picture that is silently dropped, which reads as the assistant
-                // ignoring what is plainly on screen.
-                supportsVision: sharesWindowWithAssistant && capabilities.vision,
+                supportsVision: supportsVision,
                 ledger: ledger
             )
         case .openAI:
