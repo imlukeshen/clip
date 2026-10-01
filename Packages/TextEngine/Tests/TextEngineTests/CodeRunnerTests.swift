@@ -122,14 +122,21 @@ private func run(
         source: "import time\nprint('first')\ntime.sleep(1.5)\nprint('second')\n",
         fileName: "slow.py"
     )
-    let start = ContinuousClock.now
+    // Measure the gap between the two lines, not the time from launch: a
+    // loaded CI machine can take over a second just to start Python. A
+    // buffered run delivers both lines together at exit; a streamed one
+    // delivers them about the 1.5-second sleep apart.
+    var firstArrival: ContinuousClock.Instant?
     for try await event in runner.run(request) {
-        if case .output(let text, _) = event, text.contains("first") {
-            #expect(ContinuousClock.now - start < .seconds(1.2))
+        guard case .output(let text, _) = event else { continue }
+        if firstArrival == nil, text.contains("first") { firstArrival = .now }
+        if text.contains("second") {
+            let first = try #require(firstArrival, "The first line never arrived")
+            #expect(ContinuousClock.now - first > .seconds(0.75))
             return
         }
     }
-    Issue.record("The first line never arrived")
+    Issue.record("The second line never arrived")
 }
 
 @Test func aRunThatTakesTooLongIsStopped() async throws {
