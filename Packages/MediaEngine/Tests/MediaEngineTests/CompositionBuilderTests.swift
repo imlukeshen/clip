@@ -464,12 +464,21 @@ struct CompositionBuilderTests {
         #expect(volumes[0] == 0)
         #expect(abs(volumes[1] - 0.501_187) < 0.001)
         #expect(volumes[2] == 0)
-        let gainRamp = volumeRamp(
+        // The gain keyframes run −6 dB → 0 dB. The mix follows that curve in
+        // decibels (−3 dB ≈ 0.708 halfway), not a straight amplitude line
+        // (0.75), and ends at full volume.
+        let first = volumeRamp(built.audioMix.inputParameters[1], at: .zero)
+        let middle = volumeRamp(
             built.audioMix.inputParameters[1],
             at: RationalTime(seconds: 0.1).cmTime
         )
-        #expect(abs(gainRamp.start - 0.501_187) < 0.001)
-        #expect(abs(gainRamp.end - 1) < 0.001)
+        let last = volumeRamp(
+            built.audioMix.inputParameters[1],
+            at: RationalTime(seconds: 0.19).cmTime
+        )
+        #expect(abs(first.start - 0.501_187) < 0.001)
+        #expect(abs(middle.start - 0.707_946) < 0.001)
+        #expect(abs(last.end - 1) < 0.001)
     }
 
     @Test("An empty A lane does not silence embedded video audio")
