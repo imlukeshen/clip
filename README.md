@@ -2,6 +2,8 @@
 
 # clipx
 
+https://youtu.be/m5-lMDYilT4?si=X0fdWsulbCq9VNzn
+
 ### Your own AI-powered creative suite. Running on your Mac.
 
 Video, photos, PDFs, and LaTeX — edited by you, or by an AI that clicks the
