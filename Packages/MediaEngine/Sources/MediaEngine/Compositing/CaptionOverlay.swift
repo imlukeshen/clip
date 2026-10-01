@@ -21,7 +21,8 @@ enum CaptionOverlay {
 
         let fontSize = max(bounds.height * 0.045, 12)
         let padding = (horizontal: fontSize * 0.6, vertical: fontSize * 0.3)
-        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)
+        let font =
+            CTFontCreateUIFontForLanguage(.system, fontSize, nil)
             ?? CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
         let paragraph = centeredParagraphStyle()
         let attributed = NSAttributedString(

@@ -58,8 +58,12 @@ struct AudioGainEnvelopeTests {
             id: TrackID(rawValue: "a1"),
             name: "A1",
             items: [
-                item("a", start: 0, duration: 2, fade: FadeEnvelope(fadeOut: RationalTime(seconds: 0.5))),
-                item("b", start: 2, duration: 2, fade: FadeEnvelope(fadeIn: RationalTime(seconds: 0.5))),
+                item(
+                    "a", start: 0, duration: 2,
+                    fade: FadeEnvelope(fadeOut: RationalTime(seconds: 0.5))),
+                item(
+                    "b", start: 2, duration: 2,
+                    fade: FadeEnvelope(fadeIn: RationalTime(seconds: 0.5))),
             ],
             gain: -6
         )
@@ -75,8 +79,12 @@ struct AudioGainEnvelopeTests {
             id: TrackID(rawValue: "a1"),
             name: "A1",
             items: [
-                item("a", start: 0, duration: 2, fade: FadeEnvelope(fadeOut: RationalTime(seconds: 0.5))),
-                item("b", start: 2, duration: 2, fade: FadeEnvelope(fadeIn: RationalTime(seconds: 0.5))),
+                item(
+                    "a", start: 0, duration: 2,
+                    fade: FadeEnvelope(fadeOut: RationalTime(seconds: 0.5))),
+                item(
+                    "b", start: 2, duration: 2,
+                    fade: FadeEnvelope(fadeIn: RationalTime(seconds: 0.5))),
             ]
         )
         let envelope = AudioGainEnvelope(track: track, audible: true)
@@ -89,7 +97,8 @@ struct AudioGainEnvelopeTests {
 
     @Test("A muted track is silent with no ramps")
     func mutedIsSilent() {
-        let track = Track(id: TrackID(rawValue: "a1"), name: "A1", items: [item("a", start: 0, duration: 2)])
+        let track = Track(
+            id: TrackID(rawValue: "a1"), name: "A1", items: [item("a", start: 0, duration: 2)])
         let envelope = AudioGainEnvelope(track: track, audible: false)
         #expect(envelope.initialVolume == 0)
         #expect(envelope.ramps.isEmpty)

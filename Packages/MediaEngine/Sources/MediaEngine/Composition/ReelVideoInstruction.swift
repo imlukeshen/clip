@@ -32,13 +32,15 @@ final class ReelVideoInstruction: NSObject, AVVideoCompositionInstructionProtoco
         self.layers = layers
         self.background = background
         self.captions = captions
-        containsTweening = !captions.isEmpty || layers.contains { layer in
-            let item = layer.item
-            return !item.effects.isEmpty
-                || item.videoFade.fadeIn > .zero
-                || item.videoFade.fadeOut > .zero
-                || !item.transform.keyframes.isEmpty
-                || !item.opacity.keyframes.isEmpty
-        }
+        containsTweening =
+            !captions.isEmpty
+            || layers.contains { layer in
+                let item = layer.item
+                return !item.effects.isEmpty
+                    || item.videoFade.fadeIn > .zero
+                    || item.videoFade.fadeOut > .zero
+                    || !item.transform.keyframes.isEmpty
+                    || !item.opacity.keyframes.isEmpty
+            }
     }
 }

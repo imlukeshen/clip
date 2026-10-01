@@ -35,7 +35,8 @@ enum MarkdownFenceScanner {
                 if closes(trimmed, opening: current.marker) {
                     let markerStart =
                         body.location
-                        + (value as NSString).range(of: String(current.marker.first ?? "`")).location
+                        + (value as NSString).range(of: String(current.marker.first ?? "`"))
+                        .location
                     let markerLength = trimmed.prefix { $0 == current.marker.first }.utf16.count
                     let marker = NSRange(location: markerStart, length: markerLength)
                     fences.append(
