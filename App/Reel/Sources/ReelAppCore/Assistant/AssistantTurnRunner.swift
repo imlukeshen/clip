@@ -40,7 +40,9 @@ public struct AssistantSessionToken: Sendable, Equatable {
 
 /// A resolved edit waiting for explicit review.
 public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
-    public var id: String { result.callID }
+    /// Unique per action. Providers reuse call IDs across turns (Gemini numbers
+    /// them from 1 each time), so the call ID cannot tell two actions apart.
+    public let id: String
     public var name: String
     public var result: ToolResult
     public var invocation: ToolInvocation?
@@ -52,6 +54,7 @@ public struct PendingAssistantAction: Sendable, Equatable, Identifiable {
         invocation: ToolInvocation? = nil,
         session: AssistantSessionToken
     ) {
+        self.id = UUID().uuidString
         self.name = name
         self.result = result
         self.invocation = invocation

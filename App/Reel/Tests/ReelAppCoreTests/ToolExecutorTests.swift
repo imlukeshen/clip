@@ -9,6 +9,33 @@ import Testing
 
 @Suite("Assistant tool execution")
 struct ToolExecutorTests {
+    @Test("PDF and photo tools honour the confirmation policy before they run")
+    func workspaceToolsWaitForConfirmation() async throws {
+        let fixture = try Fixture()
+        let runs = CommandRecorder()
+        var context = fixture.context
+        context.pdfCommand = { invocation in
+            await runs.record(invocation.name)
+            return "done"
+        }
+        let rotate = call("pdf.rotatePage", ["pageID": .string("page")])
+
+        let held = try await fixture.executor.execute(
+            rotate, turnID: "t", policy: .confirmAll, context: context)
+        #expect(held.requiresConfirmation)
+        #expect(await runs.names.isEmpty)
+
+        let approved = try await fixture.executor.execute(
+            rotate, turnID: "t", policy: .confirmAll, context: context, confirmed: true)
+        #expect(!approved.requiresConfirmation)
+        #expect(await runs.names == ["pdf.rotatePage"])
+
+        // Reads still run straight away under the strictest policy.
+        _ = try await fixture.executor.execute(
+            call("pdf.describe", [:]), turnID: "t", policy: .confirmAll, context: context)
+        #expect(await runs.names == ["pdf.rotatePage", "pdf.describe"])
+    }
+
     @Test("Every write tool resolves to a valid assistant patch")
     func everyWriteToolProducesValidPatch() async throws {
         let fixture = try Fixture()
@@ -622,4 +649,9 @@ private func call(
     id: String = UUID().uuidString
 ) -> ToolInvocation {
     ToolInvocation(callID: id, name: name, arguments: .object(arguments))
+}
+
+private actor CommandRecorder {
+    private(set) var names: [String] = []
+    func record(_ name: String) { names.append(name) }
 }

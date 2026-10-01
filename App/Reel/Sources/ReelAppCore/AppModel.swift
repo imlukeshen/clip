@@ -2393,21 +2393,26 @@ public final class AppModel {
         }
     }
 
+    /// Whether an action held for review can be run later by re-executing its
+    /// invocation: file operations, and PDF and photo tools, which have no
+    /// patch to apply and change their document as they run.
     private func supportsAssistantConfirmation(_ invocation: ToolInvocation) -> Bool {
-        if invocation.name == "convert.run" || invocation.name == "text.export"
-            || invocation.name == "text.create" || invocation.name == "text.setLanguage"
-            || invocation.name == "text.format" || invocation.name == "tex.compile"
-        {
-            return true
+        func isConfirmable(_ name: String) -> Bool {
+            if [
+                "convert.run", "text.export", "text.create", "text.setLanguage", "text.format",
+                "tex.compile",
+            ].contains(name) {
+                return true
+            }
+            let category = CommandRegistry.command(named: name)?.category
+            return category == .pdf || category == .image
         }
+        if isConfirmable(invocation.name) { return true }
         guard invocation.name == "runCommand",
             case .object(let fields) = invocation.arguments,
             let idValue = fields["id"], case .string(let id) = idValue
         else { return false }
-        return [
-            "convert.run", "text.export", "text.create", "text.setLanguage", "text.format",
-            "tex.compile",
-        ].contains(id)
+        return isConfirmable(id)
     }
 
     private func executeTextTool(_ request: TextToolRequest) async throws -> String {

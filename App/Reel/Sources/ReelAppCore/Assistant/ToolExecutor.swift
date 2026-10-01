@@ -171,9 +171,12 @@ public struct ToolExecutor: Sendable {
         let executesTextSideEffect = [
             "text.create", "text.setLanguage", "text.format", "tex.compile", "text.export",
         ].contains(invocation.name)
+        // PDF and photo tools change their document as soon as they run, with
+        // no patch to hold back, so the policy has to be checked before them.
+        let executesWorkspaceSideEffect = command.category == .pdf || command.category == .image
         let needsUpfrontConfirmation =
             schema.kind == .confirm
-            || (executesTextSideEffect
+            || ((executesTextSideEffect || executesWorkspaceSideEffect)
                 && policy.requiresConfirmation(
                     for: schema.kind,
                     isDestructive: command.isDestructive
