@@ -1,6 +1,13 @@
 # Distribution
 
-clipx has two generated macOS release channels:
+clipx ships as a **direct download only**: a notarized DMG on GitHub Releases.
+It is not currently published on the Mac App Store. The App Store scheme below is
+kept building so that door stays open, and the sandbox rules it imposes (no
+spawned toolchains, user-selected file access) are still respected. `make
+release` still uploads an App Store build to App Store Connect, but nothing is
+submitted for review, so no App Store version is published.
+
+The project generates two macOS configurations:
 
 - `clipx` / `Release` is an arm64 Developer ID build with the hardened runtime
   and no App Sandbox. It is exported into a DMG, submitted with `notarytool`,

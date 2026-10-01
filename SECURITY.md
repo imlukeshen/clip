@@ -10,6 +10,6 @@ logs, project files, crash reports, or the egress ledger. The ledger contains
 only provider, model, purpose, time, and whether media was attached. Media egress
 requires explicit per-call consent.
 
-Supported releases receive security fixes on the latest minor version. Direct
-downloads are Developer ID signed, notarized, and stapled; App Store builds use
-the sandboxed channel. Verify downloaded DMGs with the adjacent SHA-256 file.
+Supported releases receive security fixes on the latest minor version. Releases
+are direct downloads, Developer ID signed, notarized, and stapled. Verify
+downloaded DMGs with the adjacent SHA-256 file.

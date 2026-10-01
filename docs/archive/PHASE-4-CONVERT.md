@@ -1,5 +1,10 @@
 # clipx — Phase V: Universal Conversion
 
+> **Historical.** Phase V (conversion), shipped as R6. This is the plan as
+> written before the work; the code and `docs/adr/` are the current truth.
+> References to `DESIGN.md`, `PHASE-2*.md`, and other uncommitted design
+> documents point at files that were never published.
+
 > **Delivery status:** V0–V5 are complete and validated for both distribution
 > channels. LibreOffice remains optional and is exposed only by the direct build
 > when an installation is detected.

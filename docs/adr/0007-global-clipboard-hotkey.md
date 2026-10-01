@@ -14,7 +14,8 @@ Two things stood in the way:
 
 1. The existing Capture-menu shortcut is a SwiftUI `Commands` key equivalent. It
    only fires when clipx is frontmost, and only opens an in-window sheet.
-2. `docs/adr/0006` forbids hardcoded keyboard shortcuts in the UI — shortcuts are
+2. The project rule against hardcoded keyboard shortcuts in the UI (see
+   `CLAUDE.md`; its ADR, 0006, is not yet written) says shortcuts are
    read from `com.apple.symbolichotkeys` or not shown — and CI greps for literal
    modifier glyphs (`⌘⇧⌃⌥`) outside `DesignSystem`. A global clipboard shortcut
    is a deliberate exception to that rule and needs to be recorded as one.
@@ -30,7 +31,7 @@ which is the existence proof this is possible.
 `RegisterEventHotKey`.** Carbon hotkeys are sandbox-safe and need no Accessibility
 permission (unlike the `CGEvent` tap the click-tracking feature already uses). The
 combo is written with integer virtual-key and modifier constants (`kVK_ANSI_C`,
-`cmdKey | shiftKey`), never glyph literals, so the ADR-0006 CI grep stays green.
+`cmdKey | shiftKey`), never glyph literals, so the hardcoded-shortcut CI grep stays green.
 The wrapper (`GlobalHotKey`) mirrors `EventTapRecorder`: an `actor` fronting a
 `final class … @unchecked Sendable` context whose handler is guarded by an
 `OSAllocatedUnfairLock`, with the C callback reconstructing the context through an
@@ -59,7 +60,10 @@ avoids — so auto-paste is out of scope.
 - The clipboard manager works identically on the direct and MAS builds with
   **zero entitlement changes**.
 - The shortcut is fixed. It is not yet remappable and does not participate in the
-  ADR-0006 system-settings model; making it remappable later is a known follow-up.
+  system-settings shortcut model; making it remappable later is a known follow-up.
+  Since 548f0c2 it can be turned off in Settings so another clipboard manager
+  (Maccy, for example) can own Command-Shift-C; the clipboard stays reachable
+  from the sidebar and Capture menu.
 - If another app already holds Command-Shift-C system-wide, registration fails and
   `GlobalHotKey.register` throws `CaptureError.hotKeyUnavailable`; the delegate
   logs it and the in-window menu shortcut still works when clipx is frontmost.
@@ -71,7 +75,7 @@ avoids — so auto-paste is out of scope.
 ## What would make us revisit
 
 - Users needing to remap the shortcut, or a conflict with a common third-party
-  binding — either pushes us toward the ADR-0006 system-settings path.
+  binding — either pushes us toward the system-settings shortcut path.
 - A demand for true auto-paste, which would force the Accessibility question this
   ADR deliberately sidesteps.
 - Apple restricting Carbon `RegisterEventHotKey` (long deprecated in spirit though
