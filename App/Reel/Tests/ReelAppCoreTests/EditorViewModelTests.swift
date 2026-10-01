@@ -863,6 +863,30 @@ struct EditorViewModelTests {
         #expect(!editor.isBuilding)
     }
 
+    @Test("Inserting a copy makes an independent clip sized in source time")
+    func insertedCopyIsIndependent() throws {
+        var original = try document()
+        original.timeline.video[0].speed = 2
+        original.timeline.video[0].nestID = "group"
+        let editor = makeEditor(document: original)
+        editor.seek(to: .zero)
+        editor.setInPoint()
+        editor.seek(to: RationalTime(seconds: 1))
+        editor.setOutPoint()
+        editor.seek(to: RationalTime(seconds: 3))
+        editor.select(ItemID(rawValue: "item"))
+
+        editor.insertSelectedSource(overwrite: false)
+
+        let copy = try #require(
+            editor.document.timeline.video.first { $0.id != ItemID(rawValue: "item") })
+        #expect(copy.nestID == nil)
+        #expect(copy.detachedAudioItemID == nil)
+        // One second marked on the timeline at 2× covers two seconds of source.
+        #expect(copy.sourceRange.duration == RationalTime(seconds: 2))
+        #expect(copy.timelineDuration == RationalTime(seconds: 1))
+    }
+
     private func makeEditor(
         document: ProjectDocument,
         eventTracks: [AssetID: EventTrack] = [:],
