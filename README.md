@@ -2,8 +2,6 @@
 
 # clipx
 
-https://youtu.be/m5-lMDYilT4?si=X0fdWsulbCq9VNzn
-
 ### Your own AI-powered creative suite. Running on your Mac.
 
 Video, photos, PDFs, and LaTeX — edited by you, or by an AI that clicks the
@@ -13,6 +11,8 @@ buttons for you.<br>
 [**Download for macOS**](https://github.com/imlukeshen/clipx/releases) ·
 [Build from source](#build-from-source) ·
 [What it does](#what-it-does)
+
+[![Watch the video](https://youtube.com)](https://youtu.be/m5-lMDYilT4)
 
 </div>
 
