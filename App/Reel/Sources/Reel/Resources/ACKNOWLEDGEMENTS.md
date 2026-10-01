@@ -88,6 +88,23 @@ preview; no CDN or runtime download is used.
 - Package checksum (SHA-256): `252efd48f892d178136fe3ba3530d3718b2b087ea81c3a40a877227bc61d5256`
 - License: [`Vendor/licenses/KATEX-LICENSE`](Vendor/licenses/KATEX-LICENSE)
 
+## Mermaid 12.0.0
+
+Copyright © 2014–2022 Knut Sveidqvist and other contributors. Licensed under
+the MIT License. clipx bundles the minified `mermaid.min.js` to render diagrams
+in Markdown offline; no CDN or runtime download is used.
+
+The bundle includes Mermaid's own dependencies, which are MIT, ISC, BSD, or
+Apache-2.0 licensed, with two exceptions taken under their non-copyleft or
+weak-copyleft option: DOMPurify (MPL-2.0 OR Apache-2.0; used under
+Apache-2.0) and elkjs (EPL-2.0 OR GPL-3.0-or-later; used under EPL-2.0, whose
+source is available at <https://github.com/kieler/elkjs>). No component is
+used under the GPL.
+
+- Source: <https://www.npmjs.com/package/mermaid/v/12.0.0>
+- Package checksum (SHA-256): `7df1e7de572d26ea7aca5eaa7b0e77f5caacb63567006f4077c2753d730ffd9d`
+- License: [`Vendor/licenses/MERMAID-LICENSE`](Vendor/licenses/MERMAID-LICENSE)
+
 ## Tectonic 0.16.9
 
 Copyright © 2016–2026 the Tectonic Project contributors. Licensed under the
